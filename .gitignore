@@ -1,0 +1,27 @@
+node_modules/
+dist/
+build/
+.expo/
+.expo-shared/
+*.tsbuildinfo
+.DS_Store
+
+# env — never commit secrets (ANTHROPIC key, RPC overrides, …). Keep examples.
+.env
+.env.*
+!.env.example
+
+# anchor / solana
+programs/**/target/
+test-ledger/
+.anchor/
+
+# NEVER commit ANY keypair (operator, deployer, program upgrade key, …)
+services/feed/operator-keypair.json
+**/*-keypair.json
+**/deploy-keypair.json
+*.keypair.json
+
+# local editor / tooling
+.claude/settings.local.json
+.vscode/

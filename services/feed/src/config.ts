@@ -1,0 +1,183 @@
+/**
+ * Centralised, env-driven configuration.
+ *
+ * WHY a single module: every other file imports `config` from here, so there is
+ * exactly one place that reads `process.env` and one place that documents the
+ * knobs. Defaults are chosen so that `npm run dev` works with ZERO config —
+ * sim feed + rule-based watcher + bots, no API key, no network. That's the
+ * "it just runs" guarantee the reviewer relies on.
+ */
+
+import { WS_DEFAULT_PORT } from '@golazo/core';
+import { FeedChainOperator } from './chain';
+
+/** How the feed source is selected (see src/feed/index.ts). */
+export type FeedMode = 'auto' | 'sim' | 'espn' | 'replay';
+
+export interface Config {
+  /** WebSocket + HTTP port. Defaults to the protocol's shared default (8787). */
+  port: number;
+
+  /**
+   * Anthropic API key for the AI watcher. When absent, the watcher silently
+   * falls back to the deterministic rule-based watcher from @golazo/core, so
+   * the service is fully functional without it.
+   */
+  anthropicApiKey: string | undefined;
+
+  /** Model id for the AI watcher — a FAST model so opening a market is low-latency. */
+  aiModel: string;
+
+  /** Hard cap on how long we'll wait for the AI before falling back to rules (ms). */
+  aiTimeoutMs: number;
+
+  /**
+   * Confidence gate (0..1): a judged (free-kick / open-play) market only opens when
+   * the AI's confidence it's a REAL, dangerous, timely chance is at least this.
+   * Higher = fewer but higher-quality markets. Default 0.6.
+   */
+  minConfidence: number;
+
+  /**
+   * Feed selection:
+   *   - 'sim'  : always use the deterministic simulator (great for demos/tests).
+   *   - 'espn' : require the real ESPN feed; if none is live, fall back to sim.
+   *   - 'auto' : try ESPN, fall back to sim on any failure / no live game.
+   */
+  feedMode: FeedMode;
+
+  /** ESPN soccer league slug, e.g. 'fifa.world' (World Cup) or 'eng.1'. */
+  espnLeague: string;
+
+  /** For FEED_MODE=replay: the ESPN event id of the real match to replay. */
+  replayEventId: string;
+
+  /** How often to poll the ESPN summary endpoint while a game is live (ms). */
+  espnPollMs: number;
+
+  /** Operator rake (house edge) handed to the MarketEngine. Default 6%. This IS the trade fee. */
+  rake: number;
+
+  /** Treasury wallet that collects the rake/fees (the house's revenue). */
+  feeRecipient: string;
+
+  /** Deterministic seed base for the engine / sim, so runs are reproducible. */
+  baseSeed: number;
+
+  /** How many simulated bots trickle bets into each market. */
+  botCount: number;
+
+  /**
+   * If a market locks but no resolving goal/miss event arrives within this
+   * window after lock, the orchestrator VOIDs it (refunds everyone). Real
+   * money + doubt = never guess.
+   */
+  resolveTimeoutMs: number;
+
+  /**
+   * Bet-delay (anti-latency-arbitrage): a user's bet is HELD this long before it
+   * enters the pool. If the play resolves inside the window, the bet is voided +
+   * refunded — killing "bet after I saw the goal on a faster feed". Must exceed
+   * your feed's lag (free/delayed feed → seconds; a licensed fast feed → ~1s).
+   */
+  betDelayMs: number;
+
+  /**
+   * CHAIN MODE master switch. When on, every off-chain market gets a REAL
+   * on-chain twin (init/lock/resolve) driven by the operator keypair. Off-chain
+   * remains the source of truth; the chain twin is a best-effort settlement mirror.
+   */
+  chainEnabled: boolean;
+
+  /** base58 secret key OR path to a JSON keypair file for the on-chain operator. */
+  operatorKeypair: string | undefined;
+
+  /** Solana RPC endpoint the operator talks to. Defaults to localnet. */
+  solanaRpcUrl: string;
+
+  /** Deployed golazo-parimutuel program id the operator drives. */
+  golazoProgramId: string;
+
+  /** Optional operator seed per side. Default 0 for zero-capital pure parimutuel mode. */
+  chainSeedLamports: number;
+}
+
+/** Parse a number from env with a fallback; ignores blank/garbage values. */
+function num(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/** Read a trimmed string from env with a fallback; blank → fallback. */
+function string(name: string, fallback: string): string {
+  const raw = process.env[name]?.trim();
+  return raw ? raw : fallback;
+}
+
+/** Read a boolean flag from env: "1"/"true"/"yes"/"on" → true, else false. */
+function bool(name: string): boolean {
+  const flag = process.env[name]?.trim().toLowerCase();
+  return flag === '1' || flag === 'true' || flag === 'yes' || flag === 'on';
+}
+
+/** Parse the feed mode, defaulting to 'auto' for anything unexpected. */
+function parseFeedMode(raw: string | undefined): FeedMode {
+  return raw === 'sim' || raw === 'espn' || raw === 'auto' || raw === 'replay' ? raw : 'auto';
+}
+
+export const config: Config = {
+  port: num('PORT', WS_DEFAULT_PORT),
+  anthropicApiKey: process.env.ANTHROPIC_API_KEY?.trim() || undefined,
+  // Haiku 4.5 — fast + cheap, ideal for the "is this bettable?" decision on the
+  // critical path of opening a market. (Sonnet id for reference: claude-sonnet-4-6.)
+  aiModel: process.env.AI_MODEL?.trim() || 'claude-haiku-4-5-20251001',
+  aiTimeoutMs: num('AI_TIMEOUT_MS', 2500),
+  minConfidence: num('MIN_CONFIDENCE', 0.6),
+  feedMode: parseFeedMode(process.env.FEED_MODE?.trim()),
+  espnLeague: process.env.ESPN_LEAGUE?.trim() || 'eng.1',
+  replayEventId: process.env.REPLAY_EVENT_ID?.trim() || '760437', // Croatia at England (WC)
+  espnPollMs: num('ESPN_POLL_MS', 8000),
+  rake: num('RAKE', 0.06),
+  feeRecipient: process.env.FEE_RECIPIENT?.trim() || '5kBBKSV2EUyLsa2sXoK9E1VVzmDXCaHnQiMfz8B8yJtP',
+  baseSeed: num('BASE_SEED', 12345),
+  botCount: num('BOT_COUNT', 24),
+  resolveTimeoutMs: num('RESOLVE_TIMEOUT_MS', 12000),
+  betDelayMs: num('BET_DELAY_MS', 2000),
+  chainEnabled: bool('CHAIN_ENABLED'),
+  operatorKeypair: process.env.OPERATOR_KEYPAIR?.trim() || undefined,
+  solanaRpcUrl: string('SOLANA_RPC_URL', 'http://127.0.0.1:8899'),
+  golazoProgramId: string('GOLAZO_PROGRAM_ID', 'GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu'),
+  chainSeedLamports: num('CHAIN_SEED_LAMPORTS', 0),
+};
+
+/** One-line, secret-free summary for the boot log. */
+export function describeConfig(c: Config): string {
+  return [
+    `port=${c.port}`,
+    `feed=${c.feedMode}`,
+    `league=${c.espnLeague}`,
+    `watcher=${c.anthropicApiKey ? `ai(${c.aiModel})` : 'rules(no ANTHROPIC_API_KEY)'}`,
+    `rake=${c.rake} (fee→${c.feeRecipient.slice(0, 6)}…)`,
+    `bots=${c.botCount}`,
+    describeChain(c),
+  ].join(' ');
+}
+
+/**
+ * Summarise CHAIN MODE for the boot log: `chain=on(<pubkeyPrefix>…)` when the
+ * operator wired up successfully, else `chain=off`. Probing the operator here
+ * means the log reflects whether the keypair actually loaded, not just the flag.
+ */
+function describeChain(c: Config): string {
+  if (!c.chainEnabled) return 'chain=off';
+  const op = new FeedChainOperator({
+    enabled: c.chainEnabled,
+    operatorKeypair: c.operatorKeypair,
+    rpcUrl: c.solanaRpcUrl,
+    programId: c.golazoProgramId,
+  });
+  const pk = op.operatorPubkey?.toBase58();
+  return pk ? `chain=on(${pk.slice(0, 6)}…)` : 'chain=off';
+}

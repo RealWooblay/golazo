@@ -1,0 +1,26 @@
+[package]
+name = "golazo-parimutuel"
+version = "0.1.0"
+description = "GOLAZO on-chain settlement: a pure parimutuel binary market."
+edition = "2021"
+license = "MIT"
+
+[lib]
+# `cdylib` is required to produce the SBF shared object the Solana runtime loads.
+# `lib` lets the program's types be imported by integration tests / other crates.
+crate-type = ["cdylib", "lib"]
+name = "golazo_parimutuel"
+
+[features]
+# Standard Anchor feature flags.
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+# Generates the IDL during build (Anchor 0.30 IDL build).
+idl-build = ["anchor-lang/idl-build"]
+
+[dependencies]
+# Pin a recent stable Anchor. anchor-lang 0.30.x is the current stable line.
+anchor-lang = "0.30.1"

@@ -1,0 +1,30 @@
+{
+  "name": "@golazo/feed",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GOLAZO live-feed + AI watcher service: watches a (real or simulated) match feed, lets Claude decide which moments are bettable, opens short parimutuel markets via @golazo/core, fills them with bots, and broadcasts everything to the app over WebSocket.",
+  "type": "module",
+  "main": "./src/main.ts",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.0",
+    "@golazo/core": "*",
+    "dotenv": "^16.4.5",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.16.0",
+    "typescript": "^5.4.0",
+    "vitest": "^1.6.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

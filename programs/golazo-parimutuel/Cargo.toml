@@ -1,0 +1,21 @@
+# Cargo workspace root for the GOLAZO on-chain settlement layer.
+#
+# Anchor expects each on-chain program to live under `programs/*`. This virtual
+# manifest ties them together so `anchor build` / `cargo build-sbf` resolve a
+# single, shared dependency graph and `Cargo.lock`.
+[workspace]
+members = ["programs/*"]
+resolver = "2"
+
+[profile.release]
+# Recommended profile for Solana programs: strip overflow checks at the source
+# level is NOT relied on — we use explicit checked_* math everywhere — but we
+# still keep these optimizations for smaller, faster SBF binaries.
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
+
+[profile.release.build-override]
+opt-level = 3
+incremental = false
+codegen-units = 1

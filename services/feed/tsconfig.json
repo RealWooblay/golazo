@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    // Match @golazo/core's modern ESM setup so the two typecheck identically.
+    "target": "ES2022",
+    "module": "ESNext",
+    // NodeNext would force explicit .js extensions on relative imports; we use
+    // tsx (esbuild) as the runtime, which resolves extensionless ESM imports the
+    // same way the bundler-style resolver does. Bundler keeps the source clean.
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022"],
+    "types": ["node"],
+
+    // Strictness — the whole point of the quality bar.
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+
+    // Typecheck only — tsx runs the TypeScript directly.
+    "noEmit": true
+  },
+  "include": ["src"]
+}
