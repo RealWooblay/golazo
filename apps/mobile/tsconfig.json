@@ -1,0 +1,23 @@
+{
+  // Extends Expo's base tsconfig (strict, RN libs, JSX). We keep `strict: true`
+  // and add `@/*` path aliases so imports read cleanly (`@/components/...`).
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    // `bundler` resolution lets tsc follow @golazo/core's package "exports" map
+    // (which points straight at its TypeScript source) — Metro resolves it the
+    // same way, so there's no build step for the shared package.
+    "moduleResolution": "bundler",
+    "module": "ESNext",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts"
+  ]
+}

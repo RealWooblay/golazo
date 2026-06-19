@@ -1,0 +1,29 @@
+[toolchain]
+# Pin to a recent stable Anchor. The user's local toolchain decides the actual
+# version used to build; this is just the declared expectation.
+anchor_version = "0.30.1"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+# Program id — synced to target/deploy/golazo_parimutuel-keypair.json and the
+# declare_id! in programs/golazo-parimutuel/src/lib.rs.
+golazo_parimutuel = "GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+# Tests run against a local validator that `anchor test` spins up.
+cluster = "Localnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+# `anchor test` invokes this after deploying to the local validator.
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+
+[test.validator]
+# A fresh local validator per `anchor test` run. No extra accounts to clone.
+url = "http://localhost:8899"

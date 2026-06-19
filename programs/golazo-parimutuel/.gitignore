@@ -1,0 +1,13 @@
+# Anchor / Solana build artifacts
+.anchor
+target
+**/*.rs.bk
+
+# Node
+node_modules
+dist
+.yarn
+
+# Local keypairs (never commit a funded key)
+*.json.key
+test-ledger

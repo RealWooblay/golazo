@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>GOLAZO — bet the play</title>
+<style>
+  :root{
+    --bg:#0a0b0f; --panel:#13151d; --panel2:#1b1e29; --line:#262a38;
+    --txt:#eef1f7; --muted:#8b93a7; --accent:#00e58a; --accent2:#16c6ff;
+    --yes:#00e58a; --no:#ff4d6d; --gold:#ffc73a; --shadow:0 12px 40px rgba(0,0,0,.5);
+    --r:18px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{
+    background:radial-gradient(1200px 600px at 50% -10%, #15212b 0%, var(--bg) 55%);
+    color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    display:flex;justify-content:center;
+  }
+  .app{width:100%;max-width:430px;min-height:100vh;display:flex;flex-direction:column;
+    background:linear-gradient(180deg,#0c0e14 0%, #0a0b0f 100%);
+    border-left:1px solid var(--line);border-right:1px solid var(--line);position:relative;overflow:hidden}
+
+  /* top bar */
+  .top{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 10px}
+  .brand{font-weight:900;letter-spacing:.5px;font-size:20px;
+    background:linear-gradient(90deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .bal{display:flex;flex-direction:column;align-items:flex-end}
+  .bal .v{font-weight:800;font-size:18px}
+  .bal .l{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px}
+
+  /* scoreboard */
+  .score{margin:4px 12px 8px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px 14px;
+    display:flex;align-items:center;justify-content:space-between}
+  .team{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px}
+  .flag{width:22px;height:16px;border-radius:3px;overflow:hidden;display:inline-block;box-shadow:0 0 0 1px rgba(255,255,255,.08)}
+  .scoreline{font-weight:900;font-size:22px;letter-spacing:2px}
+  .clock{font-size:11px;color:var(--accent);font-weight:700;display:flex;align-items:center;gap:5px}
+  .live-dot{width:7px;height:7px;border-radius:50%;background:var(--no);animation:pulse 1.2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+  /* commentary ticker */
+  .ticker{margin:0 12px;height:30px;overflow:hidden;position:relative}
+  .ticker .line{position:absolute;width:100%;font-size:12px;color:var(--muted);
+    padding:7px 4px;transition:transform .35s ease, opacity .35s ease}
+
+  /* market card */
+  .stage{flex:1;display:flex;flex-direction:column;justify-content:center;padding:6px 16px 14px;gap:12px}
+  .market{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);
+    border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden;position:relative}
+  .market.live{border-color:rgba(0,229,138,.45);box-shadow:0 0 0 1px rgba(0,229,138,.25),0 12px 40px rgba(0,0,0,.5)}
+  .mhead{padding:14px 16px 6px}
+  .mtag{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;letter-spacing:.6px;
+    text-transform:uppercase;color:#04110b;background:var(--accent);padding:4px 9px;border-radius:999px}
+  .mtag.locked{background:var(--gold);color:#1a1300}
+  .mtag.idle{background:var(--line);color:var(--muted)}
+  .mq{font-size:21px;font-weight:800;line-height:1.18;margin:10px 0 2px}
+  .msub{font-size:12px;color:var(--muted)}
+
+  /* countdown ring */
+  .ring-wrap{display:flex;align-items:center;gap:14px;padding:6px 16px 2px}
+  .ring{position:relative;width:54px;height:54px;flex:none}
+  .ring svg{transform:rotate(-90deg)}
+  .ring .num{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:18px}
+  .poolinfo{flex:1}
+  .poolinfo .row{display:flex;justify-content:space-between;font-size:12px;margin:2px 0}
+  .poolinfo .row b{font-weight:800}
+  .poolbar{height:8px;border-radius:6px;background:var(--no);overflow:hidden;margin-top:5px;position:relative}
+  .poolbar .y{height:100%;background:var(--yes);width:50%;transition:width .25s}
+
+  /* stake + buttons */
+  .stakes{display:flex;gap:8px;padding:10px 16px 2px}
+  .chip{flex:1;text-align:center;padding:9px 0;border-radius:11px;background:var(--panel);border:1px solid var(--line);
+    font-weight:800;font-size:14px;cursor:pointer;transition:.15s}
+  .chip.active{border-color:var(--accent2);background:rgba(22,198,255,.12);color:var(--accent2)}
+  .btns{display:flex;gap:10px;padding:10px 16px 16px}
+  .btn{flex:1;border:none;border-radius:14px;padding:16px 0;font-size:17px;font-weight:900;cursor:pointer;
+    color:#04110b;transition:transform .08s, filter .15s;position:relative;overflow:hidden}
+  .btn:active{transform:scale(.97)}
+  .btn.yes{background:linear-gradient(180deg,#1fff9f,#00d27e)}
+  .btn.no{background:linear-gradient(180deg,#ff6f88,#ff3358);color:#fff}
+  .btn:disabled{filter:grayscale(.7) brightness(.6);cursor:not-allowed}
+  .btn .od{display:block;font-size:11px;font-weight:700;opacity:.8;margin-top:2px}
+
+  /* reveal card */
+  .reveal{margin:0 16px;border-radius:var(--r);overflow:hidden;border:1px solid var(--line);
+    background:var(--panel);position:relative;min-height:104px;display:flex;align-items:center;justify-content:center;cursor:pointer}
+  .reveal .cover{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+    background:repeating-linear-gradient(45deg,#171a24,#171a24 10px,#1c2030 10px,#1c2030 20px);z-index:2;transition:opacity .4s}
+  .reveal .cover b{font-size:16px;font-weight:900;letter-spacing:1px}
+  .reveal .cover span{font-size:11px;color:var(--muted)}
+  .reveal.open .cover{opacity:0;pointer-events:none}
+  .reveal .res{display:flex;flex-direction:column;align-items:center;gap:2px;padding:16px}
+  .reveal .res .big{font-size:22px;font-weight:900}
+  .reveal.win .res .big{color:var(--yes)} .reveal.lose .res .big{color:var(--no)}
+  .reveal .res .pay{font-size:13px;color:var(--muted)}
+
+  /* history */
+  .hist{padding:6px 16px 18px}
+  .hist h4{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin:8px 4px}
+  .hrow{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border-radius:11px;
+    background:var(--panel);border:1px solid var(--line);margin-bottom:7px;font-size:13px}
+  .hrow .q{color:var(--muted);max-width:62%}
+  .hrow .amt{font-weight:800}
+  .hrow .amt.w{color:var(--yes)} .hrow .amt.l{color:var(--no)} .hrow .amt.v{color:var(--muted)}
+
+  .toast{position:absolute;left:50%;top:14px;transform:translateX(-50%) translateY(-80px);
+    background:var(--gold);color:#1a1300;font-weight:800;font-size:13px;padding:10px 16px;border-radius:12px;
+    box-shadow:var(--shadow);transition:transform .35s cubic-bezier(.2,1.4,.4,1);z-index:30;white-space:nowrap}
+  .toast.show{transform:translateX(-50%) translateY(0)}
+
+  .flash{position:absolute;inset:0;pointer-events:none;z-index:20;opacity:0;transition:opacity .12s}
+  .goalfx{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:900;
+    font-size:64px;letter-spacing:4px;color:var(--gold);text-shadow:0 0 30px rgba(255,199,58,.8);
+    opacity:0;pointer-events:none;z-index:25;transition:opacity .2s, transform .4s}
+  .footnote{text-align:center;font-size:10px;color:#4a5163;padding:0 0 12px}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <div class="top">
+    <div class="brand">⚡ GOLAZO</div>
+    <div class="bal"><div class="v" id="bal">$1,000</div><div class="l">balance</div></div>
+  </div>
+
+  <div class="score">
+    <div class="team"><span class="flag" style="background:linear-gradient(180deg,#6cb4ff,#fff 50%,#6cb4ff)"></span>ARG</div>
+    <div style="text-align:center">
+      <div class="scoreline"><span id="sa">0</span> : <span id="sb">0</span></div>
+      <div class="clock"><span class="live-dot"></span><span id="clk">0'</span> LIVE</div>
+    </div>
+    <div class="team">FRA<span class="flag" style="background:linear-gradient(90deg,#2a4cff 33%,#fff 33% 66%,#ff3344 66%)"></span></div>
+  </div>
+
+  <div class="ticker"><div class="line" id="tick">Kickoff. The match is underway…</div></div>
+
+  <div class="stage">
+    <div class="market" id="market">
+      <div class="mhead">
+        <span class="mtag idle" id="mtag">● waiting for a moment</span>
+        <div class="mq" id="mq">Watch the match…</div>
+        <div class="msub" id="msub">A market opens the second something kicks off.</div>
+      </div>
+      <div class="ring-wrap" id="ringwrap" style="display:none">
+        <div class="ring">
+          <svg width="54" height="54"><circle cx="27" cy="27" r="23" stroke="#262a38" stroke-width="6" fill="none"/>
+          <circle id="ringp" cx="27" cy="27" r="23" stroke="#00e58a" stroke-width="6" fill="none"
+            stroke-linecap="round" stroke-dasharray="144.5" stroke-dashoffset="0"/></svg>
+          <div class="num" id="ringnum">6</div>
+        </div>
+        <div class="poolinfo">
+          <div class="row"><span>Pool</span><b id="pool">$0</b></div>
+          <div class="row"><span style="color:var(--yes)">YES <span id="oy">2.0x</span></span>
+            <span style="color:var(--no)">NO <span id="on">2.0x</span></span></div>
+          <div class="poolbar"><div class="y" id="pbar"></div></div>
+        </div>
+      </div>
+      <div class="stakes" id="stakes" style="display:none">
+        <div class="chip" data-s="10">$10</div>
+        <div class="chip active" data-s="25">$25</div>
+        <div class="chip" data-s="50">$50</div>
+        <div class="chip" data-s="100">$100</div>
+      </div>
+      <div class="btns" id="btns" style="display:none">
+        <button class="btn yes" id="byes">YES<span class="od" id="byo">goal</span></button>
+        <button class="btn no" id="bno">NO<span class="od" id="bno_o">no goal</span></button>
+      </div>
+    </div>
+
+    <div class="reveal" id="reveal" style="display:none">
+      <div class="cover"><b>TAP TO REVEAL</b><span>caught up on your screen? see how it went 👀</span></div>
+      <div class="res"><div class="big" id="rbig">—</div><div class="pay" id="rpay"></div></div>
+    </div>
+  </div>
+
+  <div class="hist">
+    <h4>your bets</h4>
+    <div id="histlist"></div>
+  </div>
+  <div class="footnote">simulated match • no real money • prototype of the live loop</div>
+
+  <div class="toast" id="toast"></div>
+  <div class="flash" id="flash"></div>
+  <div class="goalfx" id="goalfx">GOOOAL</div>
+</div>
+
+<script>
+/* ============================================================
+   GOLAZO — self-contained prototype of the live "bet the play" loop.
+   No servers, no feed, no wallet. A simulated match drives everything.
+   Swap the SimFeed for a real event feed (Sportradar/Opta) later and
+   the entire engine below is unchanged.
+   ============================================================ */
+
+const RAKE = 0.06;          // 6% house rake off the pool
+const WINDOW_MS = 6000;     // betting window per market
+const START_BAL = 1000;
+
+const $ = id => document.getElementById(id);
+const fmt = n => '$' + Math.round(n).toLocaleString();
+
+const state = {
+  bal: START_BAL, clock: 0, sa: 0, sb: 0,
+  market: null, stake: 25, pending: null, history: []
+};
+
+/* ---------- realistic-ish attack phrases ---------- */
+const ATTACKS = [
+  {who:'ARG', txt:'Argentina break forward — Messi slips it through!', p:0.30, kind:'open'},
+  {who:'ARG', txt:'CORNER to Argentina, whipped in…', p:0.16, kind:'corner'},
+  {who:'ARG', txt:'FREE KICK, Argentina, just outside the box 🎯', p:0.18, kind:'fk'},
+  {who:'ARG', txt:'Argentina counter 3-on-2, this looks dangerous!', p:0.38, kind:'open'},
+  {who:'ARG', txt:'PENALTY to Argentina!! Messi steps up…', p:0.78, kind:'pen'},
+  {who:'FRA', txt:'France surge forward through Mbappé!', p:0.32, kind:'open'},
+  {who:'FRA', txt:'CORNER France, big bodies up…', p:0.15, kind:'corner'},
+  {who:'FRA', txt:'France break at pace, Mbappé in behind!!', p:0.42, kind:'open'},
+];
+const MISS = ['Saved!! Huge stop by the keeper.','Blocked! Last-ditch defending.','OFF THE POST! So close.',
+  'Dragged wide. Heads in hands.','Cleared off the line!','Flagged offside.'];
+const CALM = ['Knocking it around at the back.','Midfield battle, nothing on.','Throw-in, recycled.',
+  'Keeper holds, slows it down.','Tidy possession, probing.','Booking for a late challenge.'];
+
+/* ---------- bots make the pool feel alive ---------- */
+function botFlow(market){
+  // bots trickle bets in over the window, leaning toward the true prob (+noise)
+  const n = 3 + Math.floor(Math.random()*5);
+  for(let i=0;i<n;i++){
+    const delay = 200 + Math.random()*(WINDOW_MS-600);
+    setTimeout(()=>{
+      if(!state.market||state.market.id!==market.id||state.market.locked) return;
+      const lean = market.p + (Math.random()-0.5)*0.3;
+      const side = Math.random() < lean ? 'YES' : 'NO';
+      const amt = 10 + Math.floor(Math.random()*9)*10;
+      market.poolY += side==='YES'?amt:0;
+      market.poolN += side==='NO'?amt:0;
+      renderPool();
+    }, delay);
+  }
+}
+
+/* ---------- match simulation (the "feed") ---------- */
+function tickClock(){
+  state.clock += 1;
+  $('clk').textContent = state.clock + "'";
+  if(state.clock>=90){ commentary("FULL TIME. What a match."); clearInterval(clockTimer); }
+}
+let clockTimer = setInterval(tickClock, 900);
+
+function commentary(t){
+  const el=$('tick'); el.style.transform='translateY(-20px)'; el.style.opacity='0';
+  setTimeout(()=>{el.textContent=t; el.style.transform='translateY(0)'; el.style.opacity='1';},180);
+}
+
+function maybeEvent(){
+  if(state.market){ scheduleNext(); return; }
+  const roll=Math.random();
+  if(roll<0.62){ commentary(CALM[Math.floor(Math.random()*CALM.length)]); scheduleNext(); }
+  else { openMarket(ATTACKS[Math.floor(Math.random()*ATTACKS.length)]); }
+}
+function scheduleNext(){ setTimeout(maybeEvent, 2600 + Math.random()*3200); }
+
+/* ---------- market lifecycle ---------- */
+let mid=0;
+function openMarket(ev){
+  mid++;
+  const m={id:mid, ...ev, poolY:60, poolN:140, locked:false, opened:Date.now()};
+  // penalty/open attacks skew the seed so odds feel right
+  if(ev.kind==='pen'){ m.poolY=400; m.poolN=80; }
+  state.market=m;
+  commentary('⚡ '+ev.txt);
+
+  $('market').classList.add('live');
+  $('mtag').className='mtag'; $('mtag').textContent='● LIVE — bet now';
+  $('mq').textContent = ev.who==='ARG' ? 'Argentina on the attack — GOAL?' : 'France on the attack — GOAL?';
+  $('msub').textContent = ev.txt;
+  $('ringwrap').style.display='flex'; $('stakes').style.display='flex'; $('btns').style.display='flex';
+  $('byes').disabled=false; $('bno').disabled=false;
+  renderPool();
+  botFlow(m);
+
+  // countdown ring
+  const C=144.5; const t0=Date.now();
+  m.timer=setInterval(()=>{
+    const el=(Date.now()-t0); const left=Math.max(0,WINDOW_MS-el);
+    const frac=left/WINDOW_MS;
+    $('ringp').style.strokeDashoffset = (C*(1-frac)).toFixed(1);
+    $('ringnum').textContent=Math.ceil(left/1000);
+    $('ringp').setAttribute('stroke', frac<0.34?'#ff4d6d':'#00e58a');
+    if(left<=0){ clearInterval(m.timer); lockMarket(); }
+  },80);
+}
+
+function renderPool(){
+  const m=state.market; if(!m) return;
+  const tot=m.poolY+m.poolN;
+  $('pool').textContent=fmt(tot);
+  $('pbar').style.width=(100*m.poolY/tot).toFixed(0)+'%';
+  const net=tot*(1-RAKE);
+  $('oy').textContent=(net/m.poolY).toFixed(2)+'x';
+  $('on').textContent=(net/m.poolN).toFixed(2)+'x';
+  $('byo').textContent=(net/m.poolY).toFixed(2)+'x';
+  $('bno_o').textContent=(net/m.poolN).toFixed(2)+'x';
+}
+
+function placeBet(side){
+  const m=state.market; if(!m||m.locked) return;
+  if(state.stake>state.bal){ toast('Not enough balance'); return; }
+  // ODDS LOCK: snapshot the implied multiple at the instant of the tap
+  const tot=m.poolY+m.poolN, net=tot*(1-RAKE);
+  const lockedMult = side==='YES' ? net/m.poolY : net/m.poolN;
+  state.bal-=state.stake; $('bal').textContent=fmt(state.bal);
+  if(side==='YES') m.poolY+=state.stake; else m.poolN+=state.stake;
+  state.pending={market:m, side, stake:state.stake, lockedMult};
+  renderPool();
+  $('byes').disabled=true; $('bno').disabled=true;
+  toast('Locked '+side+' @ '+lockedMult.toFixed(2)+'x');
+}
+
+function lockMarket(){
+  const m=state.market; if(!m) return; m.locked=true;
+  $('mtag').className='mtag locked'; $('mtag').textContent='● LOCKED — watch it play out';
+  $('ringnum').textContent='⏳'; $('byes').disabled=true; $('bno').disabled=true;
+  $('msub').textContent='Bets are in. Here it comes…';
+  setTimeout(()=>resolveMarket(m), 1400 + Math.random()*1400);
+}
+
+function resolveMarket(m){
+  const goal = Math.random() < m.p;
+  if(goal){
+    if(m.who==='ARG') state.sa++; else state.sb++;
+    $('sa').textContent=state.sa; $('sb').textContent=state.sb;
+    goalFx(); commentary('⚽ GOAL!!! '+m.who+' score! '+state.sa+'-'+state.sb);
+  } else {
+    commentary(MISS[Math.floor(Math.random()*MISS.length)]);
+  }
+  // settle pending user bet
+  const p=state.pending;
+  if(p && p.market.id===m.id){
+    const win = (p.side==='YES')===goal;
+    const tot=m.poolY+m.poolN, net=tot*(1-RAKE);
+    const winSide = goal?m.poolY:m.poolN;
+    let payout=0;
+    if(win){
+      const pari = net*(p.stake/winSide);           // true parimutuel share
+      payout = Math.min(pari, p.stake*p.lockedMult); // capped at locked odds
+    }
+    showReveal(win,payout,p,m);
+  } else {
+    // no user bet this round — just reset to idle
+    setTimeout(resetMarket, 900);
+  }
+  state.market=null; state.pending=null;
+}
+
+function showReveal(win,payout,p,m){
+  const r=$('reveal'); r.style.display='flex'; r.className='reveal '+(win?'win':'lose');
+  r.querySelector('.cover').style.opacity=''; r.classList.remove('open');
+  r._data={win,payout,p,m};
+  // idle the market card
+  $('market').classList.remove('live');
+  $('mtag').className='mtag idle'; $('mtag').textContent='● next moment loading…';
+  $('mq').textContent='Watch the match…'; $('msub').textContent='Another market any second.';
+  $('ringwrap').style.display='none'; $('stakes').style.display='none'; $('btns').style.display='none';
+}
+
+$('reveal').onclick=function(){
+  if(this.classList.contains('open')) return;
+  const d=this._data; if(!d) return;
+  this.classList.add('open');
+  $('rbig').textContent = d.win?'YOU WON 🎉':'MISSED';
+  if(d.win){ state.bal+=d.payout; $('bal').textContent=fmt(state.bal);
+    $('rpay').textContent='+'+fmt(d.payout)+'  ('+d.p.lockedMult.toFixed(2)+'x on '+fmt(d.p.stake)+')'; }
+  else { $('rpay').textContent='−'+fmt(d.p.stake)+'  ('+d.p.side+' on this play)'; }
+  addHistory(d);
+  setTimeout(()=>{ $('reveal').style.display='none'; resetMarket(); }, 2600);
+};
+
+function resetMarket(){
+  if(state.market) return;
+  $('market').classList.remove('live');
+  $('mtag').className='mtag idle'; $('mtag').textContent='● waiting for a moment';
+  $('mq').textContent='Watch the match…'; $('msub').textContent='A market opens the second something kicks off.';
+  $('ringwrap').style.display='none'; $('stakes').style.display='none'; $('btns').style.display='none';
+}
+
+function addHistory(d){
+  const wrap=$('histlist');
+  const row=document.createElement('div'); row.className='hrow';
+  const q=document.createElement('div'); q.className='q';
+  q.textContent=(d.p.side)+' · '+(d.m.who==='ARG'?'Argentina':'France')+' attack';
+  const a=document.createElement('div'); a.className='amt '+(d.win?'w':'l');
+  a.textContent=d.win?('+'+fmt(d.payout)):('−'+fmt(d.p.stake));
+  row.appendChild(q); row.appendChild(a); wrap.prepend(row);
+  while(wrap.children.length>6) wrap.removeChild(wrap.lastChild);
+}
+
+/* ---------- ui glue ---------- */
+document.querySelectorAll('.chip').forEach(c=>c.onclick=()=>{
+  document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));
+  c.classList.add('active'); state.stake=+c.dataset.s;
+});
+$('byes').onclick=()=>placeBet('YES');
+$('bno').onclick=()=>placeBet('NO');
+
+let toastT;
+function toast(t){ const el=$('toast'); el.textContent=t; el.classList.add('show');
+  clearTimeout(toastT); toastT=setTimeout(()=>el.classList.remove('show'),1600); }
+
+function goalFx(){
+  const fx=$('goalfx'); fx.style.opacity='1'; fx.style.transform='scale(1.15)';
+  setTimeout(()=>{fx.style.opacity='0'; fx.style.transform='scale(1)';},900);
+}
+
+/* go */
+setTimeout(maybeEvent, 1800);
+</script>
+</body>
+</html>
