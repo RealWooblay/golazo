@@ -29,7 +29,8 @@ export interface GameState {
   scoreHome: number;
   scoreAway: number;
   clock: string; // display clock, e.g. "28'"
-  status: 'pre' | 'live' | 'final';
+  /** 'halftime' is a brief mid-match pause (betting closed) between the halves. */
+  status: 'pre' | 'live' | 'halftime' | 'final';
 }
 
 /**
@@ -51,6 +52,7 @@ export type FeedEventType =
   | 'card'
   | 'snap'
   | 'play_end'
+  | 'halftime'
   | 'final';
 
 export interface FeedEvent {
