@@ -9,7 +9,7 @@ import React, { useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useStore } from "@/state/store";
-import { Chip, Screen } from "@/ui";
+import { Chip, Screen, Toast } from "@/ui";
 import { spacing } from "@/theme";
 import {
   ActivityList,
@@ -25,6 +25,7 @@ export default function WalletTab() {
   const { balance, transactions, mode } = useStore();
   const chain = useChain();
   const [funding, setFunding] = useState(false);
+  const [fundMsg, setFundMsg] = useState<string | null>(null);
   // Real wallet only in live mode; a demo game keeps the play-money wallet.
   const realWallet = chain.ready && mode === "live";
 
@@ -45,10 +46,19 @@ export default function WalletTab() {
   const fund = async () => {
     if (!chain.ready) return;
     setFunding(true);
+    setFundMsg("Requesting test SOL…");
     try {
       await chain.airdrop(2);
+      await chain.refreshBalance();
+      setFundMsg("Funded ✓ — balance updating");
     } catch {
-      /* surfaced as no balance change; faucet may be rate-limited */
+      // The most common cause is the cluster: on localnet there's no validator;
+      // on devnet the public faucet is rate-limited.
+      setFundMsg(
+        chain.cluster === "localnet"
+          ? "No validator on localnet — this build needs devnet."
+          : "Faucet didn't respond (devnet is rate-limited) — try again shortly.",
+      );
     } finally {
       setFunding(false);
     }
@@ -100,6 +110,8 @@ export default function WalletTab() {
           <ActivityList rows={transactions} limit={8} onAddCash={openDeposit} />
         </View>
       ) : null}
+
+      <Toast message={fundMsg} tone="info" onHide={() => setFundMsg(null)} />
     </Screen>
   );
 }

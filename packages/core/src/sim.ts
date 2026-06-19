@@ -67,13 +67,28 @@ const GOAL_SCALE = 0.65;
 
 /** Display minutes in a full match. Real-time mapping is ~1 game-min / 900ms. */
 const FULL_TIME_MIN = 90;
+const HALF_TIME_MIN = 45;
 const MS_PER_GAME_MIN = 900;
 /** Wall-clock duration of one match, in ms (kickoff → 90'). */
 const MATCH_MS = FULL_TIME_MIN * MS_PER_GAME_MIN;
+/** When the clock reaches 45' — the half-time whistle. */
+const HALF_AT_MS = HALF_TIME_MIN * MS_PER_GAME_MIN;
+/** A SHORT half-time pause: betting closes, then the second half kicks off. Kept
+ *  deliberately quick (and INSIDE the existing match window, so full-time timing
+ *  is unchanged) — the clock keeps ticking under the HT badge. */
+const HALFTIME_BEAT_MS = 3000;
 /** Quiet beat between full time and the next kickoff, so the reset reads clean. */
 const RESET_BEAT_MS = 6000;
 /** Total length of one match CYCLE (play + final whistle beat). */
 const CYCLE_MS = MATCH_MS + RESET_BEAT_MS;
+
+/** Lifecycle status for a point `intoCycle` ms into the current match cycle. */
+function statusFor(intoCycle: number): GameState['status'] {
+  if (intoCycle >= MATCH_MS) return 'final';
+  if (intoCycle >= HALF_AT_MS && intoCycle < HALF_AT_MS + HALFTIME_BEAT_MS)
+    return 'halftime';
+  return 'live';
+}
 
 let seq = 0;
 
