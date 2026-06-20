@@ -184,6 +184,10 @@ export function ChainProvider({
   // The wallet "key" we're currently connected with — to detect sign-in / out /
   // wallet-switch and reconnect (or disconnect) accordingly.
   const connectedKeyRef = useRef<string | null>(null);
+  // Monotonic connect generation. Bumped on every connect attempt AND on
+  // disconnect, so an in-flight connect that gets superseded (sign-out mid-
+  // connect, or a wallet switch) bails instead of resurrecting a dead context.
+  const connectEpochRef = useRef(0);
 
   const [status, setStatus] = useState<ChainStatus>("idle");
   const [reason, setReason] = useState<string | undefined>(
@@ -235,6 +239,9 @@ export function ChainProvider({
         return false;
       }
 
+      const epoch = (connectEpochRef.current += 1);
+      const superseded = () => connectEpochRef.current !== epoch;
+
       const run = (async (): Promise<boolean> => {
         setStatus("connecting");
         setReason(undefined);
@@ -243,6 +250,10 @@ export function ChainProvider({
           const provider = await import("./provider");
           const client = await import("./client");
           const built = await provider.buildChainContext(privySigner);
+          // A disconnect (sign-out) or a newer connect (wallet switch) raced us
+          // while the context was building — drop this result rather than commit
+          // a wallet the user already left (would resurrect a dead connection).
+          if (superseded()) return false;
           if (!built.ok) {
             setStatus("error");
             setReason(built.reason);
@@ -290,6 +301,7 @@ export function ChainProvider({
   }, [runConnect]);
 
   const disconnect = useCallback(() => {
+    connectEpochRef.current += 1; // invalidate any in-flight connect
     ctxRef.current = null;
     clientRef.current = null;
     connectedKeyRef.current = null;
@@ -353,9 +365,13 @@ export function ChainProvider({
       const shouldAuto =
         autoConnect || (wallet.connected && wallet.walletKind === "embedded");
       if (!shouldAuto) return;
-      autoConnected.current = true;
       connectedKeyRef.current = "legacy";
-      void runConnect();
+      // Latch only on SUCCESS — a transient boot-time RPC failure must not
+      // permanently block auto-reconnect. (`status !== "idle"` already guards
+      // against re-entry while this attempt is in flight.)
+      void runConnect().then((ok) => {
+        if (ok) autoConnected.current = true;
+      });
       return;
     }
 

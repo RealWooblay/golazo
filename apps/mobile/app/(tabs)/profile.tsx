@@ -42,18 +42,6 @@ export default function ProfileTab() {
   const store = useStore();
   const hx = store.session.hapticsOn;
 
-  const needsSignIn =
-    account.enabled && account.ready && !account.authenticated;
-
-  if (needsSignIn) {
-    return (
-      <Screen vignette="gold">
-        <UnifiedHeader variant="screen" title="Profile" />
-        <AccountCard noTopMargin />
-      </Screen>
-    );
-  }
-
   const bal = useDisplayBalance(); // real SOL in chain mode, play $ otherwise
   const stats = useMemo(() => lifetimeStats(store.bets), [store.bets]);
 
@@ -104,6 +92,20 @@ export default function ProfileTab() {
     if (hx) haptics.tap();
     router.push("/match/sim-arg-fra");
   }, [store, hx, router]);
+
+  // Signed-out (web, Privy on): show ONLY the sign-in card. This gate lives
+  // AFTER every hook above — an early return before any hook would change the
+  // hook count between renders when auth state flips, crashing the screen.
+  const needsSignIn =
+    account.enabled && account.ready && !account.authenticated;
+  if (needsSignIn) {
+    return (
+      <Screen vignette="gold">
+        <UnifiedHeader variant="screen" title="Profile" />
+        <AccountCard noTopMargin />
+      </Screen>
+    );
+  }
 
   return (
     <Screen vignette="gold">

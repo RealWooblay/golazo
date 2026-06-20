@@ -109,9 +109,16 @@ function buildPrivySigner(privy: PrivyRawSigner): ChainSigner {
           verifySignatures: false,
         });
     const signed = await privy.signSerialized(Uint8Array.from(bytes));
-    return versioned
-      ? VersionedTransaction.deserialize(signed)
-      : Transaction.from(Buffer.from(signed));
+    if (versioned) return VersionedTransaction.deserialize(signed);
+    const rebuilt = Transaction.from(Buffer.from(signed));
+    // The signer is REMOTE (Privy) — assert it actually returned our signature,
+    // so a missing/empty sig fails here with a clear message instead of as an
+    // opaque "Signature verification failed" deep inside anchor's serialize().
+    const mine = rebuilt.signatures.find((s) => s.publicKey.equals(publicKey));
+    if (!mine?.signature) {
+      throw new Error("Privy returned an unsigned transaction.");
+    }
+    return rebuilt;
   };
   return {
     publicKey,
