@@ -8,6 +8,7 @@ import * as SplashScreen from "expo-splash-screen";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StoreProvider, useStore } from "@/state/store";
 import { ChainProvider } from "@/features/chain/useChain";
+import { PrivyAuthProvider } from "@/features/auth/PrivyAuthProvider";
 import { FriendsRoomProvider } from "@/features/friends";
 import { GestureHandlerRootViewSafe } from "@/ui/GestureRoot";
 import { BottomSheetProviderSafe } from "@/ui/BottomSheetProvider";
@@ -44,6 +45,7 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootViewSafe>
       <SafeAreaProvider>
+        <PrivyAuthProvider>
         <StoreProvider>
           {/* On-chain layer. Cheap to mount (lazy-loads web3 only on connect);
               autoConnect brings up the embedded wallet when chain mode is
@@ -54,6 +56,7 @@ export default function RootLayout() {
             </BottomSheetProviderSafe>
           </ChainProvider>
         </StoreProvider>
+        </PrivyAuthProvider>
       </SafeAreaProvider>
     </GestureHandlerRootViewSafe>
   );
