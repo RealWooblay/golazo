@@ -43,4 +43,7 @@ pub enum GolazoError {
 
     #[msg("The provided bet does not belong to the resolved market.")]
     BetMarketMismatch,
+
+    #[msg("Vault has insufficient lamports to cover this payout/refund.")]
+    InsufficientVaultFunds,
 }

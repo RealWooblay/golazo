@@ -20,6 +20,7 @@ export {
   useFriendsRoomContext,
 } from "./FriendsRoomProvider";
 
+export { useRoomChainBets } from "./useRoomChainBets";
 export { buildInviteLink } from "./invite";
 
 // Re-export the core room types for convenience (UI imports them from here).

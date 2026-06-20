@@ -26,6 +26,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import {
   triggerFromEvent,
+  requiresTeam,
   type FeedEvent,
   type GameState,
   type MarketTrigger,
@@ -35,9 +36,15 @@ import { config } from '../config';
 import {
   tierOf as tuningTierOf,
   knobFor,
+  isStructuredSetPiece,
+  isAwardedFreeKick,
+  isDefensiveSetPiece,
+  isPostShotCommentary,
+  isMomentumBuildUp,
   parseGameContext,
-  windowMultiplier,
+  confidenceWindowMs,
 } from './marketTuning';
+import { seqKey } from './batchJudge';
 
 /**
  * QUALITY OVER QUANTITY: we do NOT open a market on every event — only when we're
@@ -87,6 +94,8 @@ export interface MarketJudge {
 export interface WatcherOptions {
   /** Inject a judge (tests) or null to force rules-only. Defaults to the Claude judge if a key exists. */
   judge?: MarketJudge | null;
+  /** Pre-computed batch decision for this event (from batch judge). */
+  batchDecision?: MarketDecision | null;
 }
 
 /**
@@ -108,37 +117,98 @@ export async function aiTriggerFromEvents(
   // CONTEXT-AWARE betting window: stretch it in the tense, late, extra-time moments.
   // BET_WINDOW_MS_OVERRIDE (ops/demo knob, 0/unset = off) forces a fixed base
   // window — handy to hold markets open longer for slow demos / manual testing.
-  const gameCtx = parseGameContext(game);
   const baseWindow = Number(process.env.BET_WINDOW_MS_OVERRIDE) || knob.betWindowMs;
-  const windowMs = Math.round(baseWindow * windowMultiplier(gameCtx));
+  const windowMs = (conf: number) => confidenceWindowMs(baseWindow, conf, game);
 
   // Deterministic fallback, computed once so every degraded path is a plain return.
   const ruleTrigger = triggerFromEvent(latest, {
     ...(ctx.homeName !== undefined ? { homeName: ctx.homeName } : {}),
     ...(ctx.awayName !== undefined ? { awayName: ctx.awayName } : {}),
   });
-  const withWindow = (t: MarketTrigger | null): MarketTrigger | null =>
-    t ? { ...t, windowMs } : t;
+  const withWindow = (t: MarketTrigger | null, conf = 0.55): MarketTrigger | null =>
+    t ? { ...t, windowMs: windowMs(conf) } : t;
 
-  // SET-PIECE (penalty/corner): inherently an attacking chance → open via rules.
-  if (knob.tier === 'set_piece') return withWindow(ruleTrigger);
+  // Post-shot ESPN lines ("Attempt saved…") must never open — play is over.
+  if (isPostShotCommentary(latest.text)) {
+    console.log(
+      `[golazo/feed] watcher_skip_post_shot type=${latest.type} text="${latest.text.slice(0, 60)}"`,
+    );
+    return null;
+  }
 
-  // FUZZY (free-kick / open-play): danger depends on context, so the JUDGE decides.
-  // With NO judge (no key) we SKIP — better to show nothing than a junk market.
+  // Defensive / own-half free kicks are never a goal chance — skip BEFORE any AI
+  // cost (a FK in their own keeper's box is not a market).
+  if (latest.type === 'free_kick' && isDefensiveSetPiece(latest.text)) {
+    console.log(
+      `[golazo/feed] watcher_skip_defensive_fk text="${latest.text.slice(0, 60)}"`,
+    );
+    return null;
+  }
+
+  // When the AI gives an explicit "not bettable" verdict we respect it (quality).
+  // When the AI is UNAVAILABLE (timeout / error / no key), we don't go dark — a
+  // `dangerous_attack` already matched the dangerous-chance commentary pattern, so
+  // it's safe to open via rules. Otherwise the product silently produces no markets
+  // whenever the model is slow.
+  const rulesFallback = (aiUnavailable = false): MarketTrigger | null => {
+    // When the model is slow/absent we DON'T go dark — forward-play commentary
+    // already matched the attack patterns, so open the "on this play" market via
+    // rules. These resolve fast (shot = YES, fizzle = NO), so a few extra are fine.
+    if (aiUnavailable && (latest.type === 'dangerous_attack' || latest.type === 'attack')) {
+      return withWindow(ruleTrigger, latest.type === 'dangerous_attack' ? 0.6 : 0.45);
+    }
+    if (latest.type === 'attack' && isMomentumBuildUp(latest.text)) return withWindow(ruleTrigger);
+    return null;
+  };
+
+  // Awarded FK (keyEvent or "wins a free kick" commentary) + corners/penalties: instant.
+  if (knob.tier === 'set_piece' || isStructuredSetPiece(latest) || isAwardedFreeKick(latest)) {
+    console.log(
+      `[golazo/feed] watcher_open_rules type=${latest.type} source=${String(latest.meta?.source)}`,
+    );
+    return withWindow(ruleTrigger, 0.9);
+  }
+
+  // Batch decision already computed for this candidate.
+  if (opts.batchDecision) {
+    const d = opts.batchDecision;
+    if (!d.bettable || d.confidence < knob.minConfidence) {
+      return rulesFallback();
+    }
+    return decisionToTrigger(d, latest, ruleTrigger, windowMs(d.confidence));
+  }
+
+  // FUZZY (commentary FK, open-play): AI judges when a key is configured.
   const judge = opts.judge !== undefined ? opts.judge : defaultJudge;
-  if (!judge) return null;
+  if (!judge) {
+    return rulesFallback(true);
+  }
 
   try {
     const decision = await withTimeout(
       judge.judge(recentEvents, latest, game, ctx),
       config.aiTimeoutMs,
     );
-    if (!decision) return null; // timeout / unparseable → no market (don't guess)
-    // CONFIDENCE GATE: open only when the judge clears the per-type bar.
-    if (!decision.bettable || decision.confidence < knob.minConfidence) return null;
-    return decisionToTrigger(decision, latest, ruleTrigger, windowMs);
-  } catch {
-    return null; // never throw on the hot path; never open on a failed judgement
+    if (!decision) {
+      console.log(`[golazo/feed] watcher_timeout type=${latest.type} text="${latest.text.slice(0, 60)}"`);
+      return rulesFallback(true);
+    }
+    if (!decision.bettable || decision.confidence < knob.minConfidence) {
+      console.log(
+        `[golazo/feed] watcher_skip type=${latest.type} bettable=${decision.bettable} ` +
+          `conf=${decision.confidence.toFixed(2)} min=${knob.minConfidence} ` +
+          `text="${latest.text.slice(0, 60)}"`,
+      );
+      return rulesFallback();
+    }
+    console.log(
+      `[golazo/feed] watcher_open_ai type=${latest.type} conf=${decision.confidence.toFixed(2)} ` +
+        `q="${decision.question.slice(0, 50)}"`,
+    );
+    return decisionToTrigger(decision, latest, ruleTrigger, windowMs(decision.confidence));
+  } catch (err) {
+    console.log(`[golazo/feed] watcher_error type=${latest.type} ${String(err)}`);
+    return rulesFallback(true);
   }
 }
 
@@ -149,26 +219,32 @@ export async function aiTriggerFromEvents(
 const DECISION_TOOL: Anthropic.Tool = {
   name: 'emit_market_decision',
   description:
-    'Report whether the latest open-play moment is a bettable, not-yet-decided chance, and if so the YES/NO market to open.',
+    'Decide if the attacking team is going forward RIGHT NOW such that we can open a fast ' +
+    '"will this MOVE produce a shot?" market. We WANT lots of these — bet on the play/possession.',
   input_schema: {
     type: 'object',
     properties: {
       bettable: {
         type: 'boolean',
         description:
-          'True ONLY if this is a genuine, not-yet-decided GOAL-SCORING chance for the attacking team in a DANGEROUS area ' +
-          '(attacking third / in or around the box) RIGHT NOW. False for: defensive or own-half free-kicks, midfield ' +
-          'possession, harmless/half-chances, anything already decided, or anything you are unsure about.',
+          'The market is "Will this MOVE produce a shot (or goal)?" — it resolves YES on a shot/goal ' +
+          'and NO if the move fizzles, possession is lost, or a short timer runs out. ' +
+          'True whenever a team has the ball and is genuinely GOING FORWARD with intent: building an ' +
+          'attack, counter, pressing high, driving through midfield, in the final third, a promising ' +
+          'restart in the attacking half. Lean towards TRUE for live forward play — these are meant to be frequent. ' +
+          'False only for: the ball in their OWN defensive half / going backwards, play clearly dead with no ' +
+          'imminent restart, post-shot lines ("attempt saved/blocked", "remate parado"), or already-decided plays.',
       },
       confidence: {
         type: 'number',
         description:
-          '0..1: how sure you are this is a REAL, dangerous, timely scoring chance worth a 6-second market. ' +
-          'Be strict — a defensive free-kick or vague "attack" is LOW (<0.4); a clear chance in the box is HIGH (>0.7).',
+          '0..1: how live and forward this move is. Final-third attack / clear break = HIGH (>0.7); ' +
+          'a team driving forward in midfield or a promising attacking-half possession = MEDIUM (0.4–0.6); ' +
+          'tepid own-half or backwards play = LOW (<0.3). The bar to open is LOW — only filter out non-forward play.',
       },
-      question: { type: 'string', description: 'Punchy YES/NO question, <60 chars. Empty if not bettable.' },
-      kind: { type: 'string', description: "Machine kind, e.g. 'goal_from_open_play'. Empty if not bettable." },
-      trueProb: { type: 'number', description: 'Estimated P(YES) 0..1, to seed odds. Never shown. 0 if not bettable.' },
+      question: { type: 'string', description: 'Punchy YES/NO question, <60 chars, e.g. "Türkiye on the ball — SHOT this move?". Empty if not bettable.' },
+      kind: { type: 'string', description: "Always 'chance_from_play' for open-play moves. Empty if not bettable." },
+      trueProb: { type: 'number', description: 'Estimated P(a shot results) 0..1, to seed odds. Never shown. 0 if not bettable.' },
     },
     required: ['bettable', 'confidence', 'question', 'kind', 'trueProb'],
     additionalProperties: false,
@@ -187,8 +263,11 @@ export class ClaudeJudge implements MarketJudge {
     const home = ctx.homeName ?? game.home.name;
     const away = ctx.awayName ?? game.away.name;
     const recentText = recentEvents
-      .slice(-6)
-      .map((e) => `- [${e.type}${e.team ? `/${e.team}` : ''}] ${e.text}`)
+      .slice(-8)
+      .map((e) => {
+        const lang = typeof e.meta?.lang === 'string' ? `[${e.meta.lang}] ` : '';
+        return `- ${lang}[${e.type}${e.team ? `/${e.team}` : ''}] ${e.text}`;
+      })
       .join('\n');
 
     // Game-state context so the judge can weigh URGENCY (a clear chance in the
@@ -207,22 +286,26 @@ export class ClaudeJudge implements MarketJudge {
     const userPrompt =
       `Live soccer. ${home} ${game.scoreHome}–${game.scoreAway} ${away}, clock ${game.clock}.\n` +
       `Game state: ${phase}; ${lead}.\n` +
-      `Recent commentary (oldest→newest):\n${recentText}\n\n` +
+      `Recent commentary (oldest→newest; [es]/[en] = ESPN language feed):\n${recentText}\n\n` +
       `THE MOMENT (latest): [${latest.type}${latest.team ? `/${latest.team}` : ''}] ${latest.text}\n\n` +
-      `Decide if THIS is a genuine GOAL chance worth a short "will it be a goal?" market. ` +
-      `Use the commentary for LOCATION/DANGER: a free-kick or attack in the attacking third / in the box = bettable; ` +
-      `a free-kick in their OWN half or near their OWN goal, or midfield possession, is NOT (it won't be a goal). ` +
-      `Weigh URGENCY: in the dying minutes or extra time of a close game, a real chance is more bettable. ` +
-      `Name the ATTACKING team. Be strict and set confidence accordingly — when unsure, bettable=false.`;
+      `Open a fast "will this MOVE produce a SHOT?" market if the attacking team is GOING FORWARD now. ` +
+      `Commentary may be Spanish or English — read both. Spanish names zones/fouls earlier ` +
+      `("ha recibido una falta en campo contrario" = attacking-half play; "en ataque", "campo contrario" = going forward). ` +
+      `Use commentary for LOCATION/DIRECTION: ball in the attacking half / final third / a counter or press = bettable; ` +
+      `ball in their OWN defensive half or going backwards is NOT. ` +
+      `We WANT frequent markets — lean towards bettable=true for any genuine forward play, not just clear-cut chances. ` +
+      `Reject only post-shot lines ("remate parado", "attempt saved"), dead/backwards play, and already-decided plays. ` +
+      `Name the ATTACKING team. kind='chance_from_play'. Set confidence by how live/forward the move is.`;
 
     const res = await this.anthropic.messages.create({
       model: config.aiModel,
       max_tokens: 256,
       system:
         'You are the GOLAZO in-play betting watcher. You read the live commentary stream (not video) and decide if ' +
-        'the latest moment is a REAL, dangerous, timely goal chance worth a market. QUALITY OVER QUANTITY: most ' +
-        'moments are NOT bettable. Reject defensive/own-half set-pieces, midfield play, half-chances, and anything ' +
-        'already decided or ambiguous. Better to open nothing than a junk market.',
+        'the attacking team is going forward enough to open a fast "will this move produce a shot?" market. ' +
+        'These are meant to be FREQUENT — the fun is betting on each possession/play. Open readily on real forward ' +
+        'play (attacks, counters, high pressing, final-third possession); the only things to filter out are ' +
+        'own-half/backwards play, dead balls with no imminent restart, and already-decided or post-shot moments.',
       tools: [DECISION_TOOL],
       tool_choice: { type: 'tool', name: DECISION_TOOL.name },
       messages: [{ role: 'user', content: userPrompt }],
@@ -291,8 +374,14 @@ export function decisionToTrigger(
 ): MarketTrigger | null {
   if (!decision.bettable) return null;
   const question = decision.question.trim() || ruleTrigger?.question;
-  const kind = decision.kind.trim() || ruleTrigger?.kind;
+  let kind = decision.kind.trim() || ruleTrigger?.kind;
+  // Safety: open-play moments ALWAYS use the fast "on this play" kind, whatever
+  // the model labelled it — that's what gives shot=YES / fizzle=NO resolution.
+  if (latest.type === 'attack' || latest.type === 'dangerous_attack') kind = 'chance_from_play';
   if (!question || !kind) return ruleTrigger ? { ...ruleTrigger, windowMs } : null;
+  // No team → no market: a team-bound question with no side renders as "They …"
+  // and can't be resolved by team correlation.
+  if (!latest.team && requiresTeam(kind)) return null;
   return {
     gameId: latest.gameId,
     question,

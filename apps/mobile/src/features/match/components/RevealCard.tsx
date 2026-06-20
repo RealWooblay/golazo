@@ -133,7 +133,7 @@ export function RevealCard({
           </View>
         ) : isVoid ? (
           <Text style={styles.payMeta}>
-            No goal moment — {money(reveal.stake)} refunded.
+            Unfair timing — {money(reveal.stake)} refunded in full.
           </Text>
         ) : (
           <Text style={styles.payMeta}>

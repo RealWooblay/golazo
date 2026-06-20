@@ -42,6 +42,9 @@ const DEFAULT_RPC_URL = 'http://127.0.0.1:8899';
 /** Confirmed is the demo's level: fast enough yet durable for a settlement mirror. */
 const COMMITMENT: Commitment = 'confirmed';
 
+/** System-account rent-exempt minimum (0-byte data). Claims must leave this in the vault. */
+const VAULT_RENT_MIN_LAMPORTS = 890_880;
+
 /** PDA seed prefixes — mirror `instructions::seeds` in the program. */
 const SEED_MARKET = Buffer.from('market');
 const SEED_VAULT = Buffer.from('vault');
@@ -372,6 +375,83 @@ export class FeedChainOperator {
     }
   }
 
+  /**
+   * Void a market (Open|Locked -> Void). Mirrors `void_market` — everyone refunds.
+   * Used when the play resolves before the betting window closes (timing fault).
+   */
+  async voidMarket(marketSeed: number | bigint): Promise<TxResult | null> {
+    if (!this.active || !this.operator || !this.programId || !this.connection) return null;
+
+    try {
+      const authority = this.operator.publicKey;
+      const { marketPda, vaultPda } = this.derive(marketSeed, authority, this.programId);
+
+      const ix = new TransactionInstruction({
+        programId: this.programId,
+        keys: [
+          { pubkey: authority, isSigner: true, isWritable: false },
+          { pubkey: marketPda, isSigner: false, isWritable: true },
+        ],
+        data: disc('void_market'),
+      });
+
+      const signature = await this.send(ix);
+      return { marketPda, vaultPda, signature };
+    } catch (err) {
+      this.warn('voidMarket', err);
+      return null;
+    }
+  }
+
+  /** Settle on-chain: YES/NO via resolve_market, VOID via void_market. */
+  async settleMarket(
+    marketSeed: number | bigint,
+    outcome: 'YES' | 'NO' | 'VOID',
+  ): Promise<TxResult | null> {
+    await this.ensureVaultSolvency(marketSeed);
+    if (outcome === 'VOID') return this.voidMarket(marketSeed);
+    return this.resolveMarket(marketSeed, outcome);
+  }
+
+  /**
+   * Top up the market vault from the operator when on-chain pool accounting exceeds
+   * actual lamports (deployed program rejects claims with InsufficientVaultFunds).
+   * Also keeps rent-exempt minimum in the vault PDA after payouts.
+   */
+  async ensureVaultSolvency(marketSeed: number | bigint): Promise<void> {
+    if (!this.active || !this.operator || !this.programId || !this.connection) return;
+
+    try {
+      const authority = this.operator.publicKey;
+      const { marketPda, vaultPda } = this.derive(marketSeed, authority, this.programId);
+      const [marketInfo, vaultBal] = await Promise.all([
+        this.connection.getAccountInfo(marketPda, COMMITMENT),
+        this.connection.getBalance(vaultPda, COMMITMENT),
+      ]);
+      if (!marketInfo?.data || marketInfo.data.length < 100) return;
+
+      const d = marketInfo.data;
+      const poolYes = d.readBigUInt64LE(84);
+      const poolNo = d.readBigUInt64LE(92);
+      const gross = poolYes + poolNo;
+      const needed = gross + BigInt(VAULT_RENT_MIN_LAMPORTS);
+      if (BigInt(vaultBal) >= needed) return;
+
+      const deficit = Number(needed - BigInt(vaultBal));
+      if (deficit <= 0 || deficit > 500_000_000) return; // sanity cap 0.5 SOL
+
+      const ix = SystemProgram.transfer({
+        fromPubkey: authority,
+        toPubkey: vaultPda,
+        lamports: deficit,
+      });
+      const sig = await this.send(ix);
+      console.log(`[chain] vault top-up seed=${marketSeed} +${deficit} lamports sig=${sig}`);
+    } catch (err) {
+      this.warn('ensureVaultSolvency', err);
+    }
+  }
+
   // --- internals ------------------------------------------------------------
 
   /** Pure PDA derivation; no `this` state so it's safe to call before `active`. */
@@ -388,13 +468,24 @@ export class FeedChainOperator {
   }
 
   /** Build, sign (operator) and confirm a single-instruction transaction. */
-  private async send(ix: TransactionInstruction): Promise<string> {
-    // Guarded by callers, but assert for the type-narrower.
+  private async send(ix: TransactionInstruction, op = 'tx'): Promise<string> {
     if (!this.connection || !this.operator) throw new Error('chain operator inactive');
     const tx = new Transaction().add(ix);
-    return sendAndConfirmTransaction(this.connection, tx, [this.operator], {
-      commitment: COMMITMENT,
-    });
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await sendAndConfirmTransaction(this.connection, tx, [this.operator], {
+          commitment: COMMITMENT,
+        });
+      } catch (err) {
+        lastErr = err;
+        if (attempt < 2) {
+          await new Promise((r) => setTimeout(r, 1200 * (attempt + 1)));
+          console.warn(`[chain] ${op} retry ${attempt + 2}/3`);
+        }
+      }
+    }
+    throw lastErr;
   }
 
   /** Consistent, non-fatal warning. The off-chain market remains source of truth. */

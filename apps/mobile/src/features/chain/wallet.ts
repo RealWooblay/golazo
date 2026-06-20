@@ -27,6 +27,7 @@ import { Keypair, PublicKey } from "@solana/web3.js";
 
 /** Versioned storage key so we can rotate the on-disk format later. */
 const SECRET_STORAGE_KEY = "golazo.chain.wallet.secret.v1";
+const ADDRESS_STORAGE_KEY = "golazo.chain.wallet.address.v1";
 
 /** True on Expo Web, where SecureStore isn't available. */
 function isWeb(): boolean {
@@ -169,12 +170,24 @@ export class EmbeddedWallet {
     const existing = await storageGet(SECRET_STORAGE_KEY);
     if (existing) {
       const kp = decodeSecret(existing);
-      if (kp) return new EmbeddedWallet(kp);
-      // Corrupt entry — fall through and regenerate (play-money safe).
+      if (kp) {
+        await storageSet(ADDRESS_STORAGE_KEY, kp.publicKey.toBase58());
+        return new EmbeddedWallet(kp);
+      }
+      // Corrupt entry — never silently mint a new key (that would orphan funds).
+      throw new Error(
+        "Saved wallet is corrupted. Clear site data or contact support.",
+      );
     }
     const kp = Keypair.generate();
     await storageSet(SECRET_STORAGE_KEY, encodeSecret(kp));
+    await storageSet(ADDRESS_STORAGE_KEY, kp.publicKey.toBase58());
     return new EmbeddedWallet(kp);
+  }
+
+  /** Read the persisted address without loading web3 signing state. */
+  static async peekAddress(): Promise<string | null> {
+    return storageGet(ADDRESS_STORAGE_KEY);
   }
 
   /**
@@ -183,5 +196,6 @@ export class EmbeddedWallet {
    */
   static async destroy(): Promise<void> {
     await storageDelete(SECRET_STORAGE_KEY);
+    await storageDelete(ADDRESS_STORAGE_KEY);
   }
 }

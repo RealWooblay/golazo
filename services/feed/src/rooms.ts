@@ -5,9 +5,8 @@
  * live match the feed is running. This is REAL-$ PARIMUTUEL among the friends —
  * the same mechanic as the main game, just private: each market's pool forms
  * from the friends' OWN bets, winners split the pool, and there is NO house and
- * NO rake (ROOM_RAKE = 0). Every player carries a running session $ balance (a
- * "tab"); markets settle into that tab live (the leaderboard) and the single
- * real payout happens once at full time.
+ * a small ROOM_RAKE (2%). Every player carries session net PnL on the leaderboard
+ * (starts at 0); real SOL stakes come from the wallet and settle on-chain per market.
  *
  *   • AI markets: the orchestrator MIRRORS each global live-match market into
  *     every active room (source 'ai', EMPTY pool the friends bet into) and
@@ -36,6 +35,7 @@ import {
   makeRoomCode,
   settleRoomMarket,
   type Market,
+  type OnChainRef,
   type Outcome,
   type RoomBet,
   type RoomMarket,
@@ -45,6 +45,9 @@ import {
   type Side,
   type Team,
 } from '@golazo/core';
+
+/** Rooms with no connected players are purged after this idle window. */
+const ROOM_TTL_MS = 30 * 60_000;
 
 /** Max markets included in a broadcast RoomState (newest last). */
 const ROOM_MARKET_HISTORY = 12;
@@ -74,33 +77,58 @@ interface Room {
   createdAt: number;
   /** Whether the feed currently has a live match (drives 'lobby' vs 'live'). */
   liveAtCreate: boolean;
+  /** Last client activity — used to expire idle rooms. */
+  lastActivityAt: number;
 }
 
 export interface RoomManagerDeps {
-  /**
-   * Push a ServerMessage to every socket in a room. Injected by the server so
-   * the manager stays socket-free. Used for relay-driven (AI) updates that
-   * happen outside a client request, and is also how all room broadcasts flow.
-   */
   emit: (code: string, msg: ServerMessage) => void;
-  /** Current feed match id (for RoomState.matchId / display only). */
   matchId: () => string;
-  /** Whether the feed currently has a live game (else a created room is 'lobby'). */
   isLive: () => boolean;
-  /** Injectable clock + RNG for deterministic tests. */
+  isFinal: () => boolean;
   now?: () => number;
   rand?: () => number;
+  /** When set, room markets get on-chain twins and balances track session PnL. */
+  chain?: RoomChainBridge | null;
+}
+
+/** Injected chain operator hooks — keeps RoomManager socket-free. */
+export interface RoomChainBridge {
+  active: boolean;
+  authority: string | null;
+  nextSeed: () => number;
+  rakeBps: number;
+  seedLamports: number;
+  initMarket: (args: {
+    marketSeed: number;
+    questionText: string;
+  }) => Promise<unknown>;
+  lockMarket: (seed: number) => void;
+  resolveMarket: (seed: number, outcome: Outcome) => void;
 }
 
 export class RoomManager {
   private readonly rooms = new Map<string, Room>();
   private readonly now: () => number;
   private readonly rand: () => number;
+  private chain: RoomChainBridge | null;
   private marketSeq = 0;
+  /** Per-room on-chain seed tracking for lock/resolve. */
+  private readonly roomSeeds = new Map<string, number>();
 
   constructor(private readonly deps: RoomManagerDeps) {
     this.now = deps.now ?? (() => Date.now());
     this.rand = deps.rand ?? Math.random;
+    this.chain = deps.chain ?? null;
+  }
+
+  /** Late-bind chain bridge (orchestrator wires this at start). */
+  configureChain(chain: RoomChainBridge | null): void {
+    this.chain = chain;
+  }
+
+  roomCount(): number {
+    return this.rooms.size;
   }
 
   // -------------------------------------------------------------------------
@@ -126,8 +154,10 @@ export class RoomManager {
       markets: [],
       createdAt: this.now(),
       liveAtCreate: this.deps.isLive(),
+      lastActivityAt: this.now(),
     };
     this.rooms.set(code, room);
+    this.backfillGlobalMarket(room);
     return this.broadcastState(room);
   }
 
@@ -160,21 +190,21 @@ export class RoomManager {
       joinedAt: this.now(),
     };
     room.players.set(userId, player);
+    room.lastActivityAt = this.now();
+    this.backfillGlobalMarket(room);
     return this.broadcastState(room);
   }
 
-  /** Mark a player disconnected; drop the room once everyone has left/disconnected. */
+  /** Mark a player disconnected. Rooms stay alive so friends can still join after a
+   *  brief socket drop (mobile browsers kill WS on background). Cleanup happens on
+   *  explicit leave or when the room sits empty for ROOM_TTL_MS. */
   disconnect(code: string, userId: string): RoomEffects {
     const room = this.rooms.get(normalizeCode(code));
     if (!room) return { markets: [] };
     const player = room.players.get(userId);
     if (!player) return { markets: [] };
     player.connected = false;
-
-    if (this.isAbandoned(room)) {
-      this.rooms.delete(room.code);
-      return { markets: [] }; // nobody left to receive a state
-    }
+    room.lastActivityAt = this.now();
     return this.broadcastState(room);
   }
 
@@ -188,6 +218,7 @@ export class RoomManager {
       this.rooms.delete(room.code);
       return { markets: [] };
     }
+    room.lastActivityAt = this.now();
     // If the host left, hand the host badge to whoever remains (host resolves
     // friend markets, so the room must always have one).
     if (room.hostId === userId) {
@@ -225,18 +256,17 @@ export class RoomManager {
       return errorEffect('You already bet on this market', room.code);
     }
     if (!Number.isFinite(stake) || stake <= 0) return errorEffect('Stake must be positive', room.code);
-    if (stake > player.balance) return errorEffect('Not enough balance', room.code);
 
-    // Add the stake to the pool, push the bet, and debit the player. The pool
-    // grows so the opponent sees the action; settlement splits it parimutuel.
+    if (!this.chain?.active) {
+      if (stake > player.balance) return errorEffect('Not enough balance', room.code);
+      player.balance -= stake;
+    }
+
     if (side === 'YES') market.pool.yes += stake;
     else market.pool.no += stake;
     const bet: RoomBet = { userId, side, stake };
     market.bets.push(bet);
-    player.balance -= stake; // debit now; refunded on VOID/one-sided, paid out on a win
 
-    // A bet landed: update both the market (so the opponent sees the action)
-    // and the roster (balance changed).
     const effects = this.broadcastState(room);
     return this.withMarketMessage(room, effects, 'room_market_update', market);
   }
@@ -257,6 +287,9 @@ export class RoomManager {
     if (!room.players.has(userId)) return errorEffect('You are not in this room', room.code);
     const q = cleanQuestion(question);
     if (!q) return errorEffect('Question cannot be empty', room.code);
+    if (this.hasActiveMarket(room)) {
+      return errorEffect('Finish the current market first', room.code);
+    }
 
     const openedAt = this.now();
     const window = sanitizeWindow(windowMs);
@@ -274,6 +307,7 @@ export class RoomManager {
       bets: [],
     };
     room.markets.push(market);
+    this.stampOnChain(market);
 
     const effects = this.broadcastState(room);
     return this.withMarketMessage(room, effects, 'room_market_open', market);
@@ -322,24 +356,7 @@ export class RoomManager {
    */
   onGlobalMarketOpen(global: Market): void {
     for (const room of this.rooms.values()) {
-      // Idempotent: never mirror the same global market twice into a room.
-      if (room.markets.some((m) => m.sourceMarketId === global.id)) continue;
-      const market: RoomMarket = {
-        id: this.nextMarketId(),
-        source: 'ai',
-        question: global.question,
-        ...(global.team ? { team: global.team } : {}),
-        status: 'open',
-        pool: { yes: 0, no: 0 },
-        openedAt: global.openedAt,
-        lockAt: global.lockAt,
-        windowMs: global.windowMs,
-        bets: [],
-        sourceMarketId: global.id,
-      };
-      room.markets.push(market);
-      this.emitState(room);
-      this.deps.emit(room.code, { t: 'room_market_open', code: room.code, market });
+      this.mirrorGlobalMarket(room, global);
     }
   }
 
@@ -349,6 +366,7 @@ export class RoomManager {
       const market = room.markets.find((m) => m.sourceMarketId === globalId);
       if (!market || market.status !== 'open') continue;
       market.status = 'locked';
+      this.lockOnChain(market);
       this.emitState(room);
       this.deps.emit(room.code, { t: 'room_market_update', code: room.code, market });
     }
@@ -388,12 +406,83 @@ export class RoomManager {
 
   /** Active room codes — handy for tests/telemetry. */
   codes(): string[] {
+    this.purgeIdleRooms();
     return [...this.rooms.keys()];
+  }
+
+  /** Drop rooms that have had no connected players for ROOM_TTL_MS. */
+  purgeIdleRooms(): void {
+    const cutoff = this.now() - ROOM_TTL_MS;
+    for (const [code, room] of this.rooms) {
+      const anyoneConnected = [...room.players.values()].some((p) => p.connected);
+      if (!anyoneConnected && room.lastActivityAt < cutoff) {
+        this.rooms.delete(code);
+      }
+    }
+  }
+
+  /** Lock friend-authored markets whose betting window has elapsed. */
+  lockExpiredMarkets(): void {
+    const now = this.now();
+    for (const room of this.rooms.values()) {
+      let changed = false;
+      for (const market of room.markets) {
+        if (market.source !== 'friend' || market.status !== 'open' || now <= market.lockAt) continue;
+        market.status = 'locked';
+        this.lockOnChain(market);
+        this.deps.emit(room.code, { t: 'room_market_update', code: room.code, market });
+        changed = true;
+      }
+      if (changed) this.emitState(room);
+    }
   }
 
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
+
+  /** True when the room already has an open or locked market (one at a time). */
+  private hasActiveMarket(room: Room): boolean {
+    return room.markets.some((m) => m.status === 'open' || m.status === 'locked');
+  }
+
+  /** Late join / create: copy the current global AI market if the room is idle. */
+  private backfillGlobalMarket(room: Room): void {
+    const global = this.deps.getOpenGlobalMarket?.();
+    if (!global) return;
+    this.mirrorGlobalMarket(room, global);
+  }
+
+  /**
+   * Mirror a global market into one room. Skips when the room is busy or already
+   * has this global id — friend markets are never overwritten.
+   */
+  private mirrorGlobalMarket(room: Room, global: Market): void {
+    if (this.hasActiveMarket(room)) return;
+    if (room.markets.some((m) => m.sourceMarketId === global.id)) return;
+    const market: RoomMarket = {
+      id: this.nextMarketId(),
+      source: 'ai',
+      question: global.question,
+      ...(global.team ? { team: global.team } : {}),
+      status: global.status === 'locked' ? 'locked' : 'open',
+      pool: { yes: 0, no: 0 },
+      openedAt: global.openedAt,
+      lockAt: global.lockAt,
+      windowMs: global.windowMs,
+      bets: [],
+      sourceMarketId: global.id,
+    };
+    room.markets.push(market);
+    this.stampOnChain(market);
+    if (market.status === 'locked') this.lockOnChain(market);
+    this.emitState(room);
+    this.deps.emit(room.code, {
+      t: market.status === 'open' ? 'room_market_open' : 'room_market_update',
+      code: room.code,
+      market,
+    });
+  }
 
   /**
    * Settle a market parimutuel for `outcome` and credit each payout to that
@@ -405,13 +494,36 @@ export class RoomManager {
     const settlement = settleRoomMarket(market, outcome);
     for (const p of settlement.payouts) {
       const player = room.players.get(p.userId);
-      if (!player) continue; // a player who left forfeits — their stake is gone
-      player.balance += p.payout;
+      if (!player) continue;
+      const bet = market.bets.find((b) => b.userId === p.userId && b.side === p.side);
+      const stake = bet?.stake ?? 0;
+      player.balance += this.chain?.active ? p.payout - stake : p.payout;
     }
-    // settleRoomMarket may downgrade a one-sided YES/NO to a refund; reflect the
-    // effective outcome so the market reads 'void' when nobody could win.
     market.outcome = settlement.outcome;
     market.status = settlement.outcome === 'VOID' ? 'void' : 'resolved';
+    this.resolveOnChain(market, settlement.outcome);
+  }
+
+  private stampOnChain(market: RoomMarket): void {
+    if (!this.chain?.active || !this.chain.authority) return;
+    const marketSeed = this.chain.nextSeed();
+    const onChain: OnChainRef = { marketSeed, authority: this.chain.authority };
+    market.onChain = onChain;
+    this.roomSeeds.set(market.id, marketSeed);
+    void this.chain.initMarket({ marketSeed, questionText: market.question });
+  }
+
+  private lockOnChain(market: RoomMarket): void {
+    const seed = this.roomSeeds.get(market.id);
+    if (seed !== undefined) this.chain?.lockMarket(seed);
+  }
+
+  private resolveOnChain(market: RoomMarket, outcome: Outcome): void {
+    const seed = this.roomSeeds.get(market.id);
+    if (seed === undefined) return;
+    if (outcome === 'VOID') this.chain?.resolveMarket(seed, 'VOID');
+    else this.chain?.resolveMarket(seed, outcome);
+    this.roomSeeds.delete(market.id);
   }
 
   /** Build a public RoomState (phase derived from feed liveness, markets capped). */
@@ -424,7 +536,11 @@ export class RoomManager {
     return {
       code: room.code,
       matchId: room.matchId,
-      phase: room.liveAtCreate || this.deps.isLive() ? 'live' : 'lobby',
+      phase: this.deps.isFinal()
+        ? 'fulltime'
+        : room.liveAtCreate || this.deps.isLive()
+          ? 'live'
+          : 'lobby',
       hostId: room.hostId,
       players,
       markets,
@@ -457,7 +573,7 @@ export class RoomManager {
     return `room_mkt_${++this.marketSeq}`;
   }
 
-  /** A room is abandoned once no seated player is still connected. */
+  /** A room has no connected sockets — used only for TTL cleanup, not instant delete. */
   private isAbandoned(room: Room): boolean {
     for (const p of room.players.values()) if (p.connected) return false;
     return true;

@@ -3,7 +3,8 @@
 import React from "react";
 import { StyleSheet, View } from "react-native";
 import { useRouter } from "expo-router";
-import { Screen, Text, Card, Banner, IconButton, IconClose } from "@/ui";
+import { Screen, Text, Card, Banner } from "@/ui";
+import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { colors, spacing } from "@/theme";
 
 const STEPS: { n: string; title: string; body: string }[] = [
@@ -28,18 +29,11 @@ export default function HowItWorks() {
   const router = useRouter();
   return (
     <Screen>
-      <View style={styles.head}>
-        <Text preset="title" style={styles.title}>
-          How it works
-        </Text>
-        <IconButton
-          accessibilityLabel="Close"
-          onPress={() => router.back()}
-          haptic="tap"
-        >
-          <IconClose size={20} color={colors.textMuted} />
-        </IconButton>
-      </View>
+      <UnifiedHeader
+        variant="slim"
+        title="How it works"
+        onClose={() => router.back()}
+      />
 
       <View style={{ gap: spacing.md }}>
         {STEPS.map((s) => (
@@ -70,13 +64,6 @@ export default function HowItWorks() {
 }
 
 const styles = StyleSheet.create({
-  head: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: spacing.lg,
-  },
-  title: { color: colors.textPrimary },
   step: { flexDirection: "row", gap: spacing.md, alignItems: "flex-start" },
   badge: {
     width: 30,

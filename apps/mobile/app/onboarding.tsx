@@ -18,11 +18,12 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useStore } from "@/state/store";
-import { START_BALANCE } from "@/lib/config";
-import { colors, fontFamily, MAX_WIDTH, spacing } from "@/theme";
+import { POINTS_START_BALANCE } from "@golazo/core";
+import { colors, MAX_WIDTH, spacing } from "@/theme";
 import { Button, GrainOverlay, Text, Vignette } from "@/ui";
 import { haptics } from "@/ui/haptics";
 import { PressableScale } from "@/features/_shared/primitives";
+import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import {
   Carousel,
   SceneInstantPay,
@@ -89,6 +90,7 @@ export default function Onboarding() {
     if (hx) haptics.win();
     const trimmed = name.trim();
     if (trimmed) store.setName(trimmed);
+    store.setMoneyMode("points");
     store.completeFirstRun();
     router.replace("/(tabs)");
   };
@@ -115,27 +117,27 @@ export default function Onboarding() {
         style={styles.flex}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        {/* top bar: wordmark + skip */}
+        {/* top bar: GOLAZO wordmark + Skip — unified 'tab' header (caller owns the
+            safe-area top inset). */}
         <View style={[styles.topBar, { paddingTop: insets.top + spacing.sm }]}>
           <View style={styles.column}>
-            <View style={styles.topRow}>
-              <View style={styles.brandRow}>
-                <Text style={styles.bolt}></Text>
-                <Text style={styles.brand}>GOLAZO</Text>
-              </View>
-              {!isLast ? (
-                <PressableScale
-                  haptic="tap"
-                  hapticsEnabled={hx}
-                  onPress={skip}
-                  hitSlop={10}
-                >
-                  <Text preset="bodyStrong" muted>
-                    Skip
-                  </Text>
-                </PressableScale>
-              ) : null}
-            </View>
+            <UnifiedHeader
+              variant="tab"
+              right={
+                !isLast ? (
+                  <PressableScale
+                    haptic="tap"
+                    hapticsEnabled={hx}
+                    onPress={skip}
+                    hitSlop={10}
+                  >
+                    <Text preset="bodyStrong" muted>
+                      Skip
+                    </Text>
+                  </PressableScale>
+                ) : undefined
+              }
+            />
           </View>
         </View>
 
@@ -159,7 +161,6 @@ export default function Onboarding() {
                 <StartPanel
                   name={name}
                   onChangeName={setName}
-                  startBalance={START_BALANCE}
                   onStart={finish}
                 />
               ) : (
@@ -200,20 +201,6 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   column: { width: "100%", maxWidth: MAX_WIDTH, alignSelf: "center" },
   topBar: { paddingHorizontal: spacing.lg },
-  topRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  brandRow: { flexDirection: "row", alignItems: "center", gap: 5 },
-  bolt: { fontSize: 18 },
-  brand: {
-    fontFamily: fontFamily.display,
-    color: colors.yes,
-    fontWeight: "900",
-    fontSize: 22,
-    letterSpacing: 0.5,
-  },
   footer: { paddingHorizontal: spacing.lg, paddingTop: spacing.md },
   footerInner: {},
   advance: { gap: spacing.md },

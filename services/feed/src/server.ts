@@ -17,17 +17,33 @@
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { WebSocketServer, WebSocket } from 'ws';
-import type { ClientMessage, ServerMessage, GameState, Market, MarketEngine } from '@golazo/core';
+import type { ClientMessage, ServerMessage, GameState, Market, MarketEngine, Side } from '@golazo/core';
 import { RoomManager, type RoomEffects } from './rooms';
+import { PointsManager, type PointsEffects } from './points';
+import { canAcceptBetNow } from './betDelay';
 
 /** Callback the orchestrator supplies to handle an authenticated user bet. */
 export type BetHandler = (msg: Extract<ClientMessage, { t: 'bet' }>) => void;
+
+/** Callback the orchestrator supplies to handle a points-mode bet. */
+export type PointsBetHandler = (msg: Extract<ClientMessage, { t: 'points_bet' }>) => void;
 
 export interface FeeSnapshot {
   recipient: string;
   rakeBps: number;
   collected: number;
   marketsSettled: number;
+}
+
+import type { AuditEntry } from './observability/auditLog';
+import type { MetricsSnapshot } from './observability/metrics';
+
+export interface OpsSnapshot {
+  feedKind: string;
+  watcher: string;
+  metrics: MetricsSnapshot;
+  audit: readonly AuditEntry[];
+  playPhase: string;
 }
 
 export interface ServerDeps {
@@ -37,14 +53,35 @@ export interface ServerDeps {
   getGame: () => GameState;
   /** Called when a client sends a valid `bet` message. */
   onBet: BetHandler;
+  /** Called when a client sends a valid `points_bet` message. */
+  onPointsBet: PointsBetHandler;
   /** Current treasury fee snapshot (for /state + /fees). */
   getFees: () => FeeSnapshot;
+  /** Ops / observability snapshot for /health and /metrics. */
+  getOps?: () => OpsSnapshot;
+  /** Open/locked global AI market for late room join backfill. */
+  getOpenGlobalMarket?: () => Market | undefined;
+  /** Anti-latency hold before room pool bets land (mirrors orchestrator bet delay). */
+  betDelayMs?: number;
 }
 
 /** What socket belongs to which room/player (cleaned up on close). */
 interface SocketRoom {
   code: string;
   userId: string;
+}
+
+interface SocketPoints {
+  userId: string;
+}
+
+interface HeldRoomBet {
+  code: string;
+  userId: string;
+  marketId: string;
+  side: Side;
+  stake: number;
+  timer: ReturnType<typeof setTimeout>;
 }
 
 export class FeedServer {
@@ -64,12 +101,22 @@ export class FeedServer {
    * `server.roomManager` to fire the AI relay hooks.
    */
   readonly roomManager: RoomManager;
+  /** Authoritative play-mode points + leaderboard. */
+  readonly pointsManager = new PointsManager();
+
+  /** Reverse index: points player on this socket (for targeted state on hello). */
+  private readonly socketPoints = new WeakMap<WebSocket, SocketPoints>();
+
+  /** Pending room bets held for bet-delay (key: code:userId:marketId). */
+  private readonly roomBetHeld = new Map<string, HeldRoomBet>();
 
   constructor(private readonly deps: ServerDeps) {
     this.roomManager = new RoomManager({
       emit: (code, msg) => this.broadcastRoom(code, msg),
       matchId: () => this.deps.getGame().gameId,
       isLive: () => this.deps.getGame().status === 'live',
+      isFinal: () => this.deps.getGame().status === 'final',
+      getOpenGlobalMarket: deps.getOpenGlobalMarket,
     });
     this.wss.on('connection', (ws) => this.handleConnection(ws));
   }
@@ -81,6 +128,10 @@ export class FeedServer {
     });
   }
 
+  clientCount(): number {
+    return this.clients.size;
+  }
+
   /**
    * Broadcast a `ServerMessage` to every connected client. JSON is serialized
    * once and reused for all sockets.
@@ -89,6 +140,61 @@ export class FeedServer {
     const data = JSON.stringify(msg);
     for (const ws of this.clients) {
       if (ws.readyState === WebSocket.OPEN) ws.send(data);
+    }
+  }
+
+  /** Fan out play-mode side effects from the PointsManager. */
+  emitPoints(effects: PointsEffects): void {
+    if (effects.leaderboard) {
+      this.broadcast({ t: 'points_leaderboard', players: effects.leaderboard });
+    }
+    if (effects.marketUpdate) {
+      this.broadcast({ t: 'points_market_update', snapshot: effects.marketUpdate });
+    }
+    if (effects.rejected) {
+      const r = effects.rejected;
+      this.broadcast({
+        t: 'points_bet_rejected',
+        marketId: r.marketId,
+        userId: r.userId,
+        stake: r.stake,
+        reason: r.reason,
+      });
+    }
+    if (effects.refillRejected) {
+      const r = effects.refillRejected;
+      this.broadcast({
+        t: 'points_refill_rejected',
+        userId: r.userId,
+        reason: r.reason,
+      });
+    }
+    if (effects.settled) {
+      for (const s of effects.settled) {
+        this.broadcast({
+          t: 'points_settle',
+          marketId: s.marketId,
+          userId: s.userId,
+          payout: s.payout,
+          outcome: s.outcome,
+          balance: s.balance,
+        });
+      }
+    }
+    if (effects.state) {
+      for (const ws of this.clients) {
+        const reg = this.socketPoints.get(ws);
+        if (reg?.userId === effects.state!.userId && ws.readyState === WebSocket.OPEN) {
+          ws.send(
+            JSON.stringify({
+              t: 'points_state',
+              userId: effects.state.userId,
+              balance: effects.state.balance,
+              rank: effects.state.rank,
+            } satisfies ServerMessage),
+          );
+        }
+      }
     }
   }
 
@@ -119,13 +225,7 @@ export class FeedServer {
 
     // Send the current game state immediately so a freshly-connected app has
     // something to render before the next feed tick.
-    ws.send(JSON.stringify({ t: 'game', game: this.deps.getGame() } satisfies ServerMessage));
-    // Replay currently-open markets so a late joiner can bet right away.
-    for (const m of this.deps.engine.list()) {
-      if (m.status === 'open') {
-        ws.send(JSON.stringify({ t: 'market_open', market: m } satisfies ServerMessage));
-      }
-    }
+    this.replaySession(ws);
 
     ws.on('message', (raw) => this.handleClientMessage(ws, raw.toString()));
     ws.on('close', () => this.handleClose(ws));
@@ -136,6 +236,12 @@ export class FeedServer {
   /** Socket gone: drop it everywhere and mark its room player disconnected. */
   private handleClose(ws: WebSocket): void {
     this.clients.delete(ws);
+    const pts = this.socketPoints.get(ws);
+    if (pts) {
+      this.socketPoints.delete(ws);
+      const effects = this.pointsManager.disconnect(pts.userId);
+      this.emitPoints(effects);
+    }
     const reg = this.socketRoom.get(ws);
     if (!reg) return;
     this.socketRoom.delete(ws);
@@ -147,6 +253,29 @@ export class FeedServer {
     // Tell the manager; broadcast the resulting state to whoever's left.
     const effects = this.roomManager.disconnect(reg.code, reg.userId);
     if (effects.state) this.broadcastRoom(reg.code, { t: 'room_state', state: effects.state });
+  }
+
+  /** Push current game + all markets for this fixture so reconnects get full history. */
+  private replaySession(ws: WebSocket): void {
+    const game = this.deps.getGame();
+    ws.send(JSON.stringify({ t: 'game', game } satisfies ServerMessage));
+
+    const gameId = game.gameId;
+    const markets = this.deps.engine
+      .list()
+      .filter((m) => m.gameId === gameId)
+      .sort((a, b) => a.openedAt - b.openedAt);
+
+    for (const m of markets) {
+      if (m.status === 'open') {
+        ws.send(JSON.stringify({ t: 'market_open', market: m } satisfies ServerMessage));
+      } else if (m.status === 'locked') {
+        ws.send(JSON.stringify({ t: 'market_open', market: m } satisfies ServerMessage));
+        ws.send(JSON.stringify({ t: 'market_lock', market: m } satisfies ServerMessage));
+      } else if (m.status === 'resolved' || m.status === 'void') {
+        ws.send(JSON.stringify({ t: 'market_resolve', market: m } satisfies ServerMessage));
+      }
+    }
   }
 
   /** Parse + dispatch a single client message. Malformed input is ignored. */
@@ -161,8 +290,7 @@ export class FeedServer {
 
     switch (msg.t) {
       case 'hello':
-        // Nothing stateful to track for the demo; ack with a fresh game frame.
-        ws.send(JSON.stringify({ t: 'game', game: this.deps.getGame() } satisfies ServerMessage));
+        this.replaySession(ws);
         return;
       case 'bet':
         if (!isValidBet(msg)) return;
@@ -172,6 +300,39 @@ export class FeedServer {
           // placeBet may throw (market locked, bad stake); the broadcast simply
           // won't include this bet. Don't crash on user input.
         }
+        return;
+      case 'points_hello':
+        if (!isValidPointsHello(msg)) return;
+        this.socketPoints.set(ws, { userId: msg.userId });
+        {
+          const effects = this.pointsManager.register(msg.userId, msg.name);
+          const gameId = this.deps.getGame().gameId;
+          for (const m of this.deps.engine.list()) {
+            if (m.gameId !== gameId) continue;
+            const snap = this.pointsManager.syncMarket(m);
+            if (snap) {
+              ws.send(
+                JSON.stringify({
+                  t: 'points_market_update',
+                  snapshot: snap,
+                } satisfies ServerMessage),
+              );
+            }
+          }
+          this.emitPoints(effects);
+        }
+        return;
+      case 'points_bet':
+        if (!isValidPointsBet(msg)) return;
+        try {
+          this.deps.onPointsBet(msg);
+        } catch {
+          /* ignore bad input */
+        }
+        return;
+      case 'points_refill':
+        if (!isValidPointsRefill(msg)) return;
+        this.emitPoints(this.pointsManager.refill(msg.userId));
         return;
       case 'room_create':
       case 'room_join':
@@ -206,8 +367,8 @@ export class FeedServer {
         break;
       case 'room_bet':
         if (!isValidRoomBet(msg)) return;
-        effects = this.roomManager.placeBet(msg.code, msg.userId, msg.marketId, msg.side, msg.stake);
-        break;
+        this.handleRoomBet(ws, msg);
+        return;
       case 'room_make_market':
         if (!isNonEmptyStr(msg.code) || !isNonEmptyStr(msg.userId)) return;
         effects = this.roomManager.makeMarket(
@@ -229,6 +390,69 @@ export class FeedServer {
         break;
     }
     this.dispatchRoomEffects(ws, effects);
+  }
+
+  /**
+   * Room pool bet with the same anti-latency hold as public/points bets. Chain
+   * stakes land on Solana first; this records the parimutuel pool after the hold.
+   */
+  private handleRoomBet(
+    ws: WebSocket,
+    msg: Extract<ClientMessage, { t: 'room_bet' }>,
+  ): void {
+    const code = msg.code.trim().toUpperCase();
+    const state = this.roomManager.getRoomState(code);
+    const market = state?.markets.find((m) => m.id === msg.marketId);
+    if (!canAcceptBetNow(market, Date.now())) {
+      this.sendRoomError(ws, code, 'market not open');
+      return;
+    }
+
+    const key = this.heldRoomKey(code, msg.userId, msg.marketId);
+    if (this.roomBetHeld.has(key)) return;
+
+    const accept = () => {
+      this.roomBetHeld.delete(key);
+      const fresh = this.roomManager.getRoomState(code);
+      const m = fresh?.markets.find((x) => x.id === msg.marketId);
+      if (!canAcceptBetNow(m, Date.now())) {
+        this.sendRoomError(ws, code, 'play resolved before your bet cleared');
+        return;
+      }
+      const effects = this.roomManager.placeBet(
+        code,
+        msg.userId,
+        msg.marketId,
+        msg.side,
+        msg.stake,
+      );
+      this.dispatchRoomEffects(ws, effects);
+    };
+
+    const delay = this.deps.betDelayMs ?? 0;
+    if (delay <= 0) {
+      accept();
+      return;
+    }
+    const timer = setTimeout(accept, delay);
+    this.roomBetHeld.set(key, {
+      code,
+      userId: msg.userId,
+      marketId: msg.marketId,
+      side: msg.side,
+      stake: msg.stake,
+      timer,
+    });
+  }
+
+  private heldRoomKey(code: string, userId: string, marketId: string): string {
+    return `${code}:${userId}:${marketId}`;
+  }
+
+  private sendRoomError(ws: WebSocket, code: string, message: string): void {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ t: 'room_error', code, message } satisfies ServerMessage));
+    }
   }
 
   /** Register a socket into the room it just created/joined (if it succeeded). */
@@ -288,9 +512,32 @@ export class FeedServer {
       return;
     }
     const url = req.url ?? '/';
-    if (url === '/health') {
+    if (url === '/health' || url.startsWith('/health?')) {
+      const ops = this.deps.getOps?.();
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, clients: this.clients.size }));
+      res.end(
+        JSON.stringify({
+          ok: true,
+          clients: this.clients.size,
+          feed: ops?.feedKind ?? 'unknown',
+          watcher: ops?.watcher ?? 'unknown',
+          playPhase: ops?.playPhase ?? 'unknown',
+          lastPollAgeMs: ops?.metrics.lastPollAgeMs ?? null,
+          marketsOpen: this.deps.engine.list().filter((m) => m.status === 'open').length,
+        }),
+      );
+      return;
+    }
+    if (url === '/metrics') {
+      const ops = this.deps.getOps?.();
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(ops?.metrics ?? { ok: false }));
+      return;
+    }
+    if (url === '/audit' || url.startsWith('/audit?')) {
+      const ops = this.deps.getOps?.();
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ entries: ops?.audit ?? [] }));
       return;
     }
     if (url === '/state') {
@@ -320,6 +567,25 @@ function isValidBet(msg: Extract<ClientMessage, { t: 'bet' }>): boolean {
     typeof msg.userId === 'string' &&
     msg.userId.length > 0
   );
+}
+
+function isValidPointsHello(msg: Extract<ClientMessage, { t: 'points_hello' }>): boolean {
+  return isNonEmptyStr(msg.userId);
+}
+
+function isValidPointsBet(msg: Extract<ClientMessage, { t: 'points_bet' }>): boolean {
+  return (
+    typeof msg.marketId === 'string' &&
+    (msg.side === 'YES' || msg.side === 'NO') &&
+    typeof msg.stake === 'number' &&
+    Number.isFinite(msg.stake) &&
+    msg.stake > 0 &&
+    isNonEmptyStr(msg.userId)
+  );
+}
+
+function isValidPointsRefill(msg: Extract<ClientMessage, { t: 'points_refill' }>): boolean {
+  return isNonEmptyStr(msg.userId);
 }
 
 /** Every room_* ClientMessage variant (what handleRoomMessage dispatches). */

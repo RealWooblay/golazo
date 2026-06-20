@@ -53,6 +53,73 @@ const SUMMARY = {
 const OPENERS = new Set<FeedEvent['type']>(['penalty', 'corner', 'free_kick', 'dangerous_attack', 'attack']);
 const RESOLVERS = new Set<FeedEvent['type']>(['goal', 'miss']);
 
+describe('EspnReplayFeed — regression: Spanish FK + post-shot guard', () => {
+  const esSummary = {
+    commentary: [
+      {
+        sequence: 1,
+        time: { displayValue: "4'" },
+        text: 'Gabriel Magalhães (Brasil) ha recibido una falta en campo contrario.',
+      },
+      {
+        sequence: 2,
+        time: { displayValue: "29'" },
+        text: 'Remate parado por bajo. Raphinha (Brasil) remate con la izquierda.',
+      },
+    ],
+    keyEvents: [
+      {
+        sequence: 10,
+        clock: { displayValue: "23'" },
+        scoringPlay: true,
+        type: { text: 'Gol' },
+        text: 'Goal! Brazil 1, Haiti 0.',
+        team: { id: 'bra' },
+      },
+    ],
+  };
+  const braHaiBoard = {
+    events: [
+      {
+        id: '760444',
+        status: { type: { state: 'post' } },
+        competitions: [
+          {
+            competitors: [
+              { homeAway: 'home', score: '3', team: { id: 'bra', displayName: 'Brazil', abbreviation: 'BRA' } },
+              { homeAway: 'away', score: '0', team: { id: 'hai', displayName: 'Haiti', abbreviation: 'HAI' } },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  it('classifies Spanish FK as opener and rejects post-shot line', async () => {
+    const { classifyCommentary } = await import('./espn');
+    expect(
+      classifyCommentary('Gabriel Magalhães (Brasil) ha recibido una falta en campo contrario.'),
+    ).toBe('free_kick');
+    expect(classifyCommentary('Remate parado por bajo. Raphinha (Brasil) remate.')).toBeUndefined();
+  });
+
+  it('replay emits FK before goal', async () => {
+    const feed = new EspnReplayFeed({
+      league: 'fifa.world',
+      eventId: '760444',
+      fetchImpl: fakeFetch(braHaiBoard, esSummary),
+    });
+    await feed.start();
+    const all = feed.poll(Date.now() + 10_000_000);
+    const types = all.map((e) => e.type);
+    const fk = types.indexOf('free_kick');
+    const goal = types.indexOf('goal');
+    expect(fk).toBeGreaterThanOrEqual(0);
+    expect(goal).toBeGreaterThanOrEqual(0);
+    expect(fk).toBeLessThan(goal);
+  });
+});
+
 describe('EspnReplayFeed — no-lookahead chronological replay', () => {
   it('emits the opportunity (penalty awarded) BEFORE the outcome (goal)', async () => {
     const feed = new EspnReplayFeed({

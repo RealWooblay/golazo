@@ -1,15 +1,9 @@
 // OWNED BY: wallet agent.
-//
-// The Wallet tab — a premium, normie-friendly home for money. A glowing balance
-// hero (animated count) with Add cash / Cash out CTAs, a streak/promo flair, and
-// the recent-activity ledger from the store. Pure play-money + web-safe: no chain
-// or native lib is imported at module load (the deposit-address resolver reads the
-// store contract; ramp shims lazy-require behind fallbacks).
-import React, { useState } from "react";
+import React from "react";
 import { StyleSheet, View } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useStore } from "@/state/store";
-import { Chip, Screen, Toast } from "@/ui";
+import { Screen, Toast } from "@/ui";
 import { spacing } from "@/theme";
 import {
   ActivityList,
@@ -17,22 +11,25 @@ import {
   SectionHeader,
   WalletHero,
 } from "@/features/wallet";
-import { ScreenHeader } from "@/features/_shared/ScreenHeader";
+import { useWalletFund } from "@/features/wallet/useWalletFund";
 import { useChain } from "@/features/chain/useChain";
+import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 
 export default function WalletTab() {
   const router = useRouter();
-  const { balance, transactions, mode } = useStore();
+  const { balance, transactions } = useStore();
   const chain = useChain();
-  const [funding, setFunding] = useState(false);
-  const [fundMsg, setFundMsg] = useState<string | null>(null);
-  // Real wallet only in live mode; a demo game keeps the play-money wallet.
-  const realWallet = chain.ready && mode === "live";
+  const {
+    realWallet,
+    fund,
+    funding,
+    fundMsg,
+    clearFundMsg,
+    faucetEnabled,
+    faucetWaitSec,
+    canFund,
+  } = useWalletFund();
 
-  // Pull a fresh on-chain balance whenever the tab comes into focus. The wallet
-  // can be funded externally (SOL sent to the deposit address) with no in-app
-  // action to trigger a read, so without this the hero can sit at a stale $0.
-  // `refreshBalance` is stable (and a no-op until ready), so this can't loop.
   const { ready: chainReady, refreshBalance } = chain;
   useFocusEffect(
     React.useCallback(() => {
@@ -43,53 +40,22 @@ export default function WalletTab() {
   const openDeposit = () => router.push("/(modals)/deposit");
   const openWithdraw = () => router.push("/(modals)/withdraw");
 
-  const fund = async () => {
-    if (!chain.ready) return;
-    setFunding(true);
-    setFundMsg("Requesting test SOL…");
-    try {
-      await chain.airdrop(2);
-      await chain.refreshBalance();
-      setFundMsg("Funded ✓ — balance updating");
-    } catch {
-      // The most common cause is the cluster: on localnet there's no validator;
-      // on devnet the public faucet is rate-limited.
-      setFundMsg(
-        chain.cluster === "localnet"
-          ? "No validator on localnet — this build needs devnet."
-          : "Faucet didn't respond (devnet is rate-limited) — try again shortly.",
-      );
-    } finally {
-      setFunding(false);
-    }
-  };
-
   return (
     <Screen vignette="yes">
-      <ScreenHeader
-        title="Wallet"
-        accessory={
-          <Chip
-            label={realWallet ? "ON-CHAIN" : "SANDBOX"}
-            tone={realWallet ? "live" : "neutral"}
-            dot={realWallet}
-          />
-        }
-      />
+      <UnifiedHeader variant="screen" title="Wallet" />
 
       {realWallet ? (
-        // LIVE / on-chain mode → the REAL embedded wallet (actual SOL).
         <ChainWalletHero
           address={chain.address}
           balanceSol={chain.balanceSol}
-          cluster={chain.cluster}
-          airdropEnabled={chain.airdropEnabled}
+          airdropEnabled={faucetEnabled}
           onFund={fund}
           onWithdraw={openWithdraw}
           funding={funding}
+          fundDisabled={!canFund}
+          fundWaitSec={faucetWaitSec}
         />
       ) : (
-        // Sandbox mode → play-money practice balance.
         <WalletHero
           balance={balance}
           flair="Play money · practice freely"
@@ -99,7 +65,6 @@ export default function WalletTab() {
         />
       )}
 
-      {/* The play-money activity ledger only applies in demo/sandbox mode. */}
       {!realWallet ? (
         <View style={styles.section}>
           <SectionHeader
@@ -111,7 +76,7 @@ export default function WalletTab() {
         </View>
       ) : null}
 
-      <Toast message={fundMsg} tone="info" onHide={() => setFundMsg(null)} />
+      <Toast message={fundMsg} tone="info" onHide={clearFundMsg} />
     </Screen>
   );
 }

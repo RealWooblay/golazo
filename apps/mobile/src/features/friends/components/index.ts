@@ -15,3 +15,4 @@
 export { Leaderboard } from "./Leaderboard";
 export { RoomInviteCard } from "./RoomInviteCard";
 export { MakeMarketSheet } from "./MakeMarketSheet";
+export { FriendsChainPanel } from "./FriendsChainPanel";

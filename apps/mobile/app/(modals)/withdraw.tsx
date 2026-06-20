@@ -2,12 +2,13 @@
 //
 // Presented modally. Cash out, crypto-first and honest:
 // • amount (capped at balance, with presets + Max), shown in $
-// • destination — a Solana wallet: your saved embedded wallet OR any pasted
-//   address (dynamic). No fake "demo bank" rail.
+// • destination — a single pasted Solana address (base58-validated). There's no
+//   "my wallet" option: withdrawing to your own deposit address is a no-op. No
+//   fake "demo bank" rail either.
 // • review → confirm → success animation; debits via the off-ramp adapter.
 //
-// Validates against balance with friendly inline errors. Web-safe: address comes
-// via the store contract; ramp/browser shims lazy-require behind fallbacks.
+// Validates against balance with friendly inline errors. Web-safe: ramp/browser
+// shims lazy-require behind fallbacks.
 import React, { useMemo, useState } from "react";
 import { StyleSheet, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
@@ -17,13 +18,11 @@ import { colors, radius, spacing, type } from "@/theme";
 import {
   AmountInput,
   FlowStatus,
-  ModalHeader,
   openExternal,
-  shortenAddress,
-  useDepositAddress,
   useWallet,
 } from "@/features/wallet";
 import type { FlowStatusKind } from "@/features/wallet";
+import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useChain } from "@/features/chain";
 import {
   useDisplayBalance,
@@ -54,11 +53,9 @@ export default function WithdrawModal() {
   const balance = bal.amount;
   const wallet = useWallet();
   const chain = useChain();
-  const saved = useDepositAddress();
 
   const [amount, setAmount] = useState("");
   const [pasteAddr, setPasteAddr] = useState("");
-  const [useSaved, setUseSaved] = useState(true);
 
   // LIVE on-chain send state. `bal.chain` (chain.ready && live mode) selects the
   // real-transfer path; otherwise we keep the existing sandbox runOfframp flow.
@@ -75,14 +72,15 @@ export default function WithdrawModal() {
     : wallet.flow.kind === "withdraw" && wallet.flow.status !== "idle";
 
   const overBalance = numeric > balance;
-  // Crypto is the only rail now. Destination is dynamic: your saved wallet or any
-  // pasted Solana address.
-  const cryptoAddr = useSaved ? saved.address : pasteAddr.trim();
+  // Crypto is the only rail, and the destination is a single pasted Solana
+  // address — withdrawing to your own deposit wallet is pointless, so there's no
+  // "my wallet" shortcut.
+  const cryptoAddr = pasteAddr.trim();
   // The pasted address must be a plausible base58 Solana key (32–44, charset).
-  // The saved embedded-wallet address is trusted. Empty/short → just "needs more".
-  const pasteTouched = !useSaved && cryptoAddr.length > 0;
+  // Empty/short → just "needs more"; non-empty but malformed → "doesn't look right".
+  const pasteTouched = cryptoAddr.length > 0;
   const pasteInvalid = pasteTouched && !isPlausibleSolanaAddress(cryptoAddr);
-  const needsAddr = !useSaved && !isPlausibleSolanaAddress(cryptoAddr);
+  const needsAddr = !isPlausibleSolanaAddress(cryptoAddr);
   const canSubmit = numeric > 0 && !overBalance && !needsAddr;
 
   const caption = useMemo(() => {
@@ -153,9 +151,9 @@ export default function WithdrawModal() {
     const txUrl = onChain ? liveFlow.txUrl : undefined;
     return (
       <Screen scroll={false} topInset>
-        <ModalHeader
-          chip="Cash out"
-          chipTone="win"
+        <UnifiedHeader
+          variant="modal"
+          chip={{ label: "Cash out", tone: "win" }}
           title="Withdraw"
           onClose={close}
         />
@@ -192,9 +190,9 @@ export default function WithdrawModal() {
   if (balance <= 0) {
     return (
       <Screen scroll={false} topInset>
-        <ModalHeader
-          chip="Cash out"
-          chipTone="win"
+        <UnifiedHeader
+          variant="modal"
+          chip={{ label: "Cash out", tone: "win" }}
           title="Withdraw"
           onClose={close}
         />
@@ -226,9 +224,9 @@ export default function WithdrawModal() {
 
   return (
     <Screen topInset footerSpace={spacing.xl}>
-      <ModalHeader
-        chip="Cash out"
-        chipTone="win"
+      <UnifiedHeader
+        variant="modal"
+        chip={{ label: "Cash out", tone: "win" }}
         title="Withdraw"
         onClose={close}
       />
@@ -249,33 +247,15 @@ export default function WithdrawModal() {
         <Text style={[type.overline, styles.methodsLabel]}>
           Send to a Solana wallet
         </Text>
-        <View style={styles.addrTabs}>
-          <AddrToggle
-            label="My wallet"
-            active={useSaved}
-            onPress={() => setUseSaved(true)}
-          />
-          <AddrToggle
-            label="Paste address"
-            active={!useSaved}
-            onPress={() => setUseSaved(false)}
-          />
-        </View>
-        {useSaved ? (
-          <Text style={[type.mono, styles.savedAddr]} numberOfLines={1}>
-            {shortenAddress(saved.address, 8, 8)}
-          </Text>
-        ) : (
-          <TextInput
-            value={pasteAddr}
-            onChangeText={setPasteAddr}
-            placeholder="Paste a Solana address"
-            placeholderTextColor={colors.textFaint}
-            autoCapitalize="none"
-            autoCorrect={false}
-            style={[type.mono, styles.input]}
-          />
-        )}
+        <TextInput
+          value={pasteAddr}
+          onChangeText={setPasteAddr}
+          placeholder="Paste a Solana address"
+          placeholderTextColor={colors.textFaint}
+          autoCapitalize="none"
+          autoCorrect={false}
+          style={[type.mono, styles.input]}
+        />
         {pasteInvalid ? (
           <Text style={[type.caption, styles.addrHint]}>
             That doesn't look like a Solana address. Check it and try again.
@@ -322,29 +302,6 @@ export default function WithdrawModal() {
         </Text>
       </View>
     </Screen>
-  );
-}
-
-function AddrToggle({
-  label,
-  active,
-  onPress,
-}: {
-  label: string;
-  active: boolean;
-  onPress: () => void;
-}) {
-  return (
-    <Text
-      onPress={onPress}
-      style={[
-        type.caption,
-        styles.addrToggle,
-        active ? styles.addrToggleActive : null,
-      ]}
-    >
-      {label}
-    </Text>
   );
 }
 
@@ -402,10 +359,6 @@ const styles = StyleSheet.create({
     borderColor: colors.hairline,
     backgroundColor: colors.surface0,
   },
-  addrTabs: { flexDirection: "row", gap: spacing.lg },
-  addrToggle: { color: colors.textMuted, paddingVertical: spacing.xs },
-  addrToggleActive: { color: colors.cyan, fontWeight: "700" },
-  savedAddr: { color: colors.textPrimary, fontSize: 16 },
   input: {
     color: colors.textPrimary,
     fontSize: 15,

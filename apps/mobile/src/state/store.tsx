@@ -15,9 +15,12 @@ import type {
   FeedMode,
   HistoryItem,
   HistoryRow,
+  MoneyMode,
   TransactionRow,
   WithdrawDestination,
 } from "./types";
+import type { PointsPlayer } from "@golazo/core";
+import { POINTS_START_BALANCE } from "@golazo/core";
 
 /**
  * GLOBAL STORE — the canonical, persisted source of truth for GOLAZO.
@@ -41,8 +44,8 @@ import type {
  *   • balance can never go negative (guards clamp at 0).
  */
 
-// v2: bumped so previously-persisted "offline" state is discarded → live default applies.
-const STORAGE_KEY = "golazo:store:v2";
+// v3: reset stale liveUrl (localhost / wrong port) → always use defaultLiveUrl().
+const STORAGE_KEY = "golazo:store:v3";
 const HISTORY_CAP = 200; // bound the persisted ledger
 
 // ── State shape ──────────────────────────────────────────────────────────────
@@ -51,6 +54,10 @@ export interface Session {
   firstRun: boolean;
   displayName?: string;
   mode: FeedMode;
+  /** Real SOL/play-$ vs live-feed play points (separate pool + leaderboard). */
+  moneyMode: MoneyMode;
+  /** Stable id for points mode — one tab per device. */
+  pointsUserId?: string;
   soundOn: boolean;
   hapticsOn: boolean;
 }
@@ -68,6 +75,10 @@ export interface StoreState {
   wallet: Wallet;
   history: HistoryItem[];
   liveUrl: string;
+  /** Server-authoritative play-mode balance (live feed only). */
+  pointsBalance: number;
+  pointsRank: number;
+  pointsLeaderboard: PointsPlayer[];
   /** Internal: true once AsyncStorage has been read. UI can show a splash until. */
   hydrated: boolean;
 }
@@ -84,6 +95,9 @@ type Action =
   | { type: "addBet"; row: BetRow }
   | { type: "addTransaction"; row: TransactionRow }
   | { type: "setMode"; mode: FeedMode }
+  | { type: "setMoneyMode"; moneyMode: MoneyMode }
+  | { type: "setPointsState"; balance: number; rank: number }
+  | { type: "setPointsLeaderboard"; players: PointsPlayer[] }
   | { type: "setName"; name: string }
   | { type: "setWallet"; wallet: Partial<Wallet> }
   | { type: "setSession"; session: Partial<Session> }
@@ -123,6 +137,19 @@ function reducer(state: StoreState, action: Action): StoreState {
       return { ...state, history: pushHistory(state.history, action.row) };
     case "setMode":
       return { ...state, session: { ...state.session, mode: action.mode } };
+    case "setMoneyMode":
+      return {
+        ...state,
+        session: { ...state.session, moneyMode: action.moneyMode },
+      };
+    case "setPointsState":
+      return {
+        ...state,
+        pointsBalance: action.balance,
+        pointsRank: action.rank,
+      };
+    case "setPointsLeaderboard":
+      return { ...state, pointsLeaderboard: action.players };
     case "setName":
       return {
         ...state,
@@ -137,23 +164,41 @@ function reducer(state: StoreState, action: Action): StoreState {
     case "completeFirstRun":
       return { ...state, session: { ...state.session, firstRun: false } };
     case "reset":
-      return { ...initialState(), hydrated: true };
+      return {
+        ...initialState(),
+        hydrated: true,
+        session: {
+          ...initialState().session,
+          firstRun: false,
+          displayName: state.session.displayName,
+          pointsUserId: state.session.pointsUserId,
+          moneyMode: state.session.moneyMode,
+        },
+        wallet: state.wallet,
+      };
     default:
       return state;
   }
+}
+
+function ensurePointsUserId(session: Session): Session {
+  if (session.pointsUserId) return session;
+  const id = `pts_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  return { ...session, pointsUserId: id };
 }
 
 function initialState(): StoreState {
   return {
     balance: START_BALANCE,
     stake: DEFAULT_STAKE,
-    session: {
+    session: ensurePointsUserId({
       firstRun: true,
       displayName: undefined,
-      mode: "live", // LIVE by default — show the real game from the feed service; falls back to sim offline only if the feed is unreachable
+      mode: "live",
+      moneyMode: "points",
       soundOn: true,
       hapticsOn: true,
-    },
+    }),
     wallet: {
       connected: false,
       walletKind: "sandbox",
@@ -161,6 +206,9 @@ function initialState(): StoreState {
     },
     history: [],
     liveUrl: defaultLiveUrl(),
+    pointsBalance: POINTS_START_BALANCE,
+    pointsRank: 0,
+    pointsLeaderboard: [],
     hydrated: false,
   };
 }
@@ -173,6 +221,8 @@ const PERSIST_KEYS: (keyof StoreState)[] = [
   "wallet",
   "history",
   "liveUrl",
+  "pointsBalance",
+  "pointsRank",
 ];
 
 function pickPersistable(state: StoreState): Partial<StoreState> {
@@ -210,6 +260,9 @@ export interface Store extends StoreState {
   // session / wallet
   setStake: (stake: number) => void;
   setMode: (mode: FeedMode) => void;
+  setMoneyMode: (moneyMode: MoneyMode) => void;
+  setPointsState: (balance: number, rank: number) => void;
+  setPointsLeaderboard: (players: PointsPlayer[]) => void;
   setName: (name: string) => void;
   setSession: (session: Partial<Session>) => void;
   setWallet: (wallet: Partial<Wallet>) => void;
@@ -243,6 +296,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         const raw = await AsyncStorage.getItem(STORAGE_KEY);
         if (alive && raw) {
           const parsed = JSON.parse(raw) as Partial<StoreState>;
+          // Always prefer the runtime-configured feed URL over a persisted one —
+          // stale localhost URLs from local dev break hosted deploys.
+          parsed.liveUrl = defaultLiveUrl();
+          if (parsed.session) {
+            parsed.session.mode = "live";
+            parsed.session = ensurePointsUserId({
+              ...parsed.session,
+              moneyMode: parsed.session.moneyMode ?? "points",
+            });
+          }
           dispatch({ type: "hydrate", state: parsed });
         } else if (alive) {
           dispatch({ type: "hydrate", state: {} });
@@ -351,6 +414,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     (mode: FeedMode) => dispatch({ type: "setMode", mode }),
     [],
   );
+  const setMoneyMode = useCallback(
+    (moneyMode: MoneyMode) => dispatch({ type: "setMoneyMode", moneyMode }),
+    [],
+  );
+  const setPointsState = useCallback(
+    (balance: number, rank: number) =>
+      dispatch({ type: "setPointsState", balance, rank }),
+    [],
+  );
+  const setPointsLeaderboard = useCallback(
+    (players: PointsPlayer[]) =>
+      dispatch({ type: "setPointsLeaderboard", players }),
+    [],
+  );
   const setName = useCallback(
     (name: string) => dispatch({ type: "setName", name }),
     [],
@@ -398,6 +475,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       addHistory,
       setStake,
       setMode,
+      setMoneyMode,
+      setPointsState,
+      setPointsLeaderboard,
       setName,
       setSession,
       setWallet,
@@ -419,6 +499,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       addHistory,
       setStake,
       setMode,
+      setMoneyMode,
+      setPointsState,
+      setPointsLeaderboard,
       setName,
       setSession,
       setWallet,

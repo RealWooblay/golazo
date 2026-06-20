@@ -14,6 +14,7 @@
  */
 
 import type { MarketEngine, Market, Side } from '@golazo/core';
+import { bettingSafetyBufferMs } from './ai/marketTuning';
 
 export interface BotConfig {
   /** Number of bots that will bet on each market. */
@@ -40,8 +41,8 @@ export class BotSwarm {
 
   /** Schedule `count` bot bets, jittered across the market's betting window. */
   start(market: Market): void {
-    // Leave a small guard before lock so a bet never races the lock and throws.
-    const window = Math.max(500, market.windowMs - 400);
+    // Bots only bet before the safety cutoff (same as human bettors).
+    const window = Math.max(1000, market.windowMs - bettingSafetyBufferMs(market.windowMs) - 500);
 
     for (let i = 0; i < this.cfg.count; i++) {
       const delay = Math.floor(this.cfg.rng() * window);
