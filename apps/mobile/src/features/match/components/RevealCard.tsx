@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { StyleSheet, View, type ViewStyle } from "react-native";
 import Animated, {
   Easing,
   interpolate,
@@ -168,8 +168,16 @@ function RevealCover({
     opacity: interpolate(breathe.value, [0, 1], [0.7, 1]),
   }));
 
+  // reanimated 3.16 (SDK 52) tightened AnimatedStyle so mixing static styles with
+  // a useAnimatedStyle result in one array no longer unifies at the type level;
+  // the runtime composition is unchanged, so cast the array.
+  const coverWrapStyle = [
+    StyleSheet.absoluteFill,
+    styles.coverWrap,
+    style,
+  ] as unknown as ViewStyle;
   return (
-    <Animated.View style={[StyleSheet.absoluteFill, styles.coverWrap, style]}>
+    <Animated.View style={coverWrapStyle}>
       <Pressable
         onPress={onPress}
         haptic={null}

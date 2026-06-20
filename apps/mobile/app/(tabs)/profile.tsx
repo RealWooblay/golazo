@@ -27,6 +27,7 @@ import {
 import { Entrance } from "@/features/_shared/primitives";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
+import { AccountCard } from "@/features/auth/AccountCard";
 
 const FILTERS: { value: LedgerFilter; label: string }[] = [
   { value: "all", label: "All" },
@@ -101,6 +102,9 @@ export default function ProfileTab() {
         stats={stats}
         onEditName={openEdit}
       />
+
+      {/* Account — Privy sign-in (recoverable, cross-device wallet) */}
+      <AccountCard />
 
       {/* History ledger */}
       <View style={styles.section}>
