@@ -32,7 +32,12 @@ const PRIVY_EVM_STUBS = [
   "x402",
   "permissionless",
   "@coinbase/wallet-sdk",
-  "@walletconnect/ethereum-provider",
+  // The whole WalletConnect / Reown (AppKit) stack — external-wallet connectors
+  // we never use (GOLAZO uses Privy's *embedded* Solana wallet). Stubbing the
+  // family also dodges a tslib `__extends` ESM-interop crash that @walletconnect/
+  // time + heartbeat hit under Metro package-exports.
+  "@walletconnect",
+  "@reown",
   "@abstract-foundation/agw-client",
   "@base-org/account",
   "@stripe/crypto",
