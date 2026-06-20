@@ -14,9 +14,12 @@ import {
 import { useWalletFund } from "@/features/wallet/useWalletFund";
 import { useChain } from "@/features/chain/useChain";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
+import { AccountCard } from "@/features/auth/AccountCard";
+import { useAccount } from "@/features/auth/useAccount";
 
 export default function WalletTab() {
   const router = useRouter();
+  const account = useAccount();
   const { balance, transactions } = useStore();
   const chain = useChain();
   const {
@@ -39,6 +42,18 @@ export default function WalletTab() {
 
   const openDeposit = () => router.push("/(modals)/deposit");
   const openWithdraw = () => router.push("/(modals)/withdraw");
+
+  const needsSignIn =
+    account.enabled && account.ready && !account.authenticated;
+
+  if (needsSignIn) {
+    return (
+      <Screen vignette="yes">
+        <UnifiedHeader variant="screen" title="Wallet" />
+        <AccountCard noTopMargin />
+      </Screen>
+    );
+  }
 
   return (
     <Screen vignette="yes">

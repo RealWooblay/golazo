@@ -59,8 +59,16 @@ import type {
 // Type-only imports of the lazily-loaded modules. `import type` is erased at
 // compile time, so these add NOTHING to the bundle — the runtime values come
 // exclusively from the dynamic `import()`s inside `connect()`.
-import type { ChainContext } from "./provider";
+import type {
+  ChainContext,
+  PrivyRawSigner,
+  PrivySignerState,
+} from "./provider";
 import type * as ClientModule from "./client";
+// Platform-split hook: web → the Privy embedded wallet; native → 'legacy'.
+// `import type` above stays erased; this is the only runtime import, and it
+// pulls NO web3 (the heavy code remains behind the lazy import in connect()).
+import { usePrivyChainSigner } from "./usePrivyChainSigner";
 
 type Client = typeof ClientModule;
 
@@ -167,6 +175,16 @@ export function ChainProvider({
 }) {
   const { setWallet, wallet, hydrated } = useStore();
 
+  // The Privy auth state decides the wallet source: on web, the signed-in user's
+  // Privy embedded wallet; on native / Privy-off, the legacy local keypair. Held
+  // in a ref so connect() always reads the latest without being recreated.
+  const privyState = usePrivyChainSigner();
+  const privyStateRef = useRef<PrivySignerState>(privyState);
+  privyStateRef.current = privyState;
+  // The wallet "key" we're currently connected with — to detect sign-in / out /
+  // wallet-switch and reconnect (or disconnect) accordingly.
+  const connectedKeyRef = useRef<string | null>(null);
+
   const [status, setStatus] = useState<ChainStatus>("idle");
   const [reason, setReason] = useState<string | undefined>(
     chainConfig.ok ? undefined : chainConfig.reason,
@@ -205,61 +223,76 @@ export function ChainProvider({
     }
   }, []);
 
-  const connect = useCallback(async (): Promise<boolean> => {
-    if (status === "ready") return true;
-    if (connectingRef.current) return connectingRef.current;
-    if (!chainConfig.ok) {
-      setStatus("error");
-      setReason(chainConfig.reason);
-      return false;
-    }
-
-    const run = (async (): Promise<boolean> => {
-      setStatus("connecting");
-      setReason(undefined);
-      try {
-        // ── THE LAZY GATE ── nothing heavy loads until this point.
-        const provider = await import("./provider");
-        const client = await import("./client");
-        const built = await provider.buildChainContext();
-        if (!built.ok) {
-          setStatus("error");
-          setReason(built.reason);
-          return false;
-        }
-        ctxRef.current = built.context;
-        clientRef.current = client;
-
-        const addr = built.context.wallet.address;
-        setAddress(addr);
-        setStatus("ready");
-
-        // Publish the embedded wallet to the global store so the wallet feature
-        // (useDepositAddress) shows the real pubkey. Done through the store
-        // contract — the wallet screen never imports this feature.
-        setWallet({ connected: true, walletKind: "embedded", address: addr });
-
-        // Kick off an initial balance read (non-blocking for readiness).
-        void refreshBalance();
-        return true;
-      } catch (e) {
+  // Connect with an EXPLICIT wallet source. `privySigner` present → the Privy
+  // embedded wallet (web); absent → the legacy local keypair (native). The
+  // public `connect` below resolves the source from the current Privy state.
+  const runConnect = useCallback(
+    async (privySigner?: PrivyRawSigner): Promise<boolean> => {
+      if (connectingRef.current) return connectingRef.current;
+      if (!chainConfig.ok) {
         setStatus("error");
-        setReason(
-          e instanceof Error ? e.message : "Failed to connect to the chain.",
-        );
+        setReason(chainConfig.reason);
         return false;
-      } finally {
-        connectingRef.current = null;
       }
-    })();
 
-    connectingRef.current = run;
-    return run;
-  }, [status, setWallet, refreshBalance]);
+      const run = (async (): Promise<boolean> => {
+        setStatus("connecting");
+        setReason(undefined);
+        try {
+          // ── THE LAZY GATE ── nothing heavy loads until this point.
+          const provider = await import("./provider");
+          const client = await import("./client");
+          const built = await provider.buildChainContext(privySigner);
+          if (!built.ok) {
+            setStatus("error");
+            setReason(built.reason);
+            return false;
+          }
+          ctxRef.current = built.context;
+          clientRef.current = client;
+
+          const addr = built.context.wallet.address;
+          setAddress(addr);
+          setStatus("ready");
+
+          // Publish the wallet to the global store so the wallet feature
+          // (useDepositAddress) shows the real pubkey. Done through the store
+          // contract — the wallet screen never imports this feature.
+          setWallet({ connected: true, walletKind: "embedded", address: addr });
+
+          // Kick off an initial balance read (non-blocking for readiness).
+          void refreshBalance();
+          return true;
+        } catch (e) {
+          setStatus("error");
+          setReason(
+            e instanceof Error ? e.message : "Failed to connect to the chain.",
+          );
+          return false;
+        } finally {
+          connectingRef.current = null;
+        }
+      })();
+
+      connectingRef.current = run;
+      return run;
+    },
+    [setWallet, refreshBalance],
+  );
+
+  // Public connect: use whatever the current Privy state dictates. In 'pending'
+  // mode (Privy on, not signed in) it's a no-op — the UI routes the user to sign
+  // in rather than mint a throwaway local wallet on web.
+  const connect = useCallback(async (): Promise<boolean> => {
+    const st = privyStateRef.current;
+    if (st.mode === "pending") return false;
+    return runConnect(st.mode === "privy" ? st.signer : undefined);
+  }, [runConnect]);
 
   const disconnect = useCallback(() => {
     ctxRef.current = null;
     clientRef.current = null;
+    connectedKeyRef.current = null;
     setStatus("idle");
     setAddress(undefined);
     setBalanceLamports(0n);
@@ -273,6 +306,9 @@ export function ChainProvider({
   // new pubkey on refresh while connect() loads the secret from storage.
   useEffect(() => {
     if (!hydrated) return;
+    // On web with Privy, the Privy wallet address is authoritative — never flash
+    // a stale local-keypair address. Only restore for the legacy (native) path.
+    if (privyState.mode !== "legacy") return;
     let alive = true;
     (async () => {
       try {
@@ -292,19 +328,53 @@ export function ChainProvider({
     return () => {
       alive = false;
     };
-  }, [hydrated, setWallet, wallet.address, wallet.walletKind]);
+  }, [hydrated, privyState.mode, setWallet, wallet.address, wallet.walletKind]);
 
-  // Auto-connect once the store is hydrated (one shot).
+  // Sync the chain connection to the wallet source. This is the heart of the
+  // "seamless, no web3" account flow:
+  //   • privy   — signed in (web): connect with the Privy wallet; reconnect if
+  //               the wallet address changes (account switch).
+  //   • pending — Privy on, not signed in (web): stay disconnected (real mode
+  //               gates on login), and tear down any prior connection.
+  //   • legacy  — native / Privy-off: the original opt-in autoConnect (one shot),
+  //               using the local keypair.
   const autoConnected = useRef(false);
   useEffect(() => {
-    if (!hydrated || !chainConfig.ok || autoConnected.current) return;
-    if (status !== "idle") return;
-    const shouldAuto =
-      autoConnect || (wallet.connected && wallet.walletKind === "embedded");
-    if (!shouldAuto) return;
-    autoConnected.current = true;
-    void connect();
-  }, [hydrated, autoConnect, wallet.connected, wallet.walletKind, status, connect]);
+    if (!hydrated || !chainConfig.ok) return;
+    const st = privyState;
+
+    if (st.mode === "pending") {
+      if (status === "ready" || status === "connecting") disconnect();
+      return;
+    }
+
+    if (st.mode === "legacy") {
+      if (autoConnected.current || status !== "idle") return;
+      const shouldAuto =
+        autoConnect || (wallet.connected && wallet.walletKind === "embedded");
+      if (!shouldAuto) return;
+      autoConnected.current = true;
+      connectedKeyRef.current = "legacy";
+      void runConnect();
+      return;
+    }
+
+    // privy: connect (or reconnect on wallet switch).
+    if (status === "connecting") return;
+    const key = `privy:${st.signer.address}`;
+    if (status === "ready" && connectedKeyRef.current === key) return;
+    connectedKeyRef.current = key;
+    void runConnect(st.signer);
+  }, [
+    hydrated,
+    privyState,
+    status,
+    autoConnect,
+    wallet.connected,
+    wallet.walletKind,
+    runConnect,
+    disconnect,
+  ]);
 
   // Keep the on-chain balance fresh while connected. The wallet can be funded
   // externally (SOL sent to the deposit address) with no in-app action to
