@@ -15,15 +15,17 @@ import { money } from "@/lib/format";
 export function MatchHeader({
   balance,
   format = money,
+  balanceLabel = "balance",
   live,
+  playMode = false,
   onBack,
   onHelp,
 }: {
   balance: number;
-  /** Formatter for the balance — SOL in chain mode, $ in sandbox. */
   format?: (n: number) => string;
-  /** true = real live feed; false = offline/sandbox sim. */
+  balanceLabel?: string;
   live: boolean;
+  playMode?: boolean;
   onBack?: () => void;
   onHelp?: () => void;
 }) {
@@ -38,8 +40,8 @@ export function MatchHeader({
           GOLAZO
         </Text>
         <Chip
-          label={live ? "LIVE FEED" : "SANDBOX"}
-          tone={live ? "live" : "info"}
+          label={playMode ? "PAPER TRADE" : live ? "LIVE FEED" : "SANDBOX"}
+          tone={playMode ? "win" : live ? "live" : "info"}
           dot
           onPress={onHelp}
           style={styles.modeChip}
@@ -52,7 +54,7 @@ export function MatchHeader({
           format={format}
           style={styles.balValue}
         />
-        <Text style={styles.balLabel}>balance</Text>
+        <Text style={styles.balLabel}>{balanceLabel}</Text>
       </View>
     </View>
   );

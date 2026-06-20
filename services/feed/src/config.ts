@@ -30,6 +30,8 @@ export interface Config {
 
   /** Hard cap on how long we'll wait for the AI before falling back to rules (ms). */
   aiTimeoutMs: number;
+  /** Separate (longer) cap for goal settlement AI — worth the extra latency. */
+  aiResolveTimeoutMs: number;
 
   /**
    * Confidence gate (0..1): a judged (free-kick / open-play) market only opens when
@@ -48,6 +50,12 @@ export interface Config {
 
   /** ESPN soccer league slug, e.g. 'fifa.world' (World Cup) or 'eng.1'. */
   espnLeague: string;
+
+  /**
+   * ESPN summary language for commentary. `dual` fetches EN keyEvents + ES commentary
+   * (Spanish is richer on build-up for FIFA). `en` / `es` use a single feed.
+   */
+  espnCommentaryLang: 'en' | 'es' | 'dual';
 
   /** For FEED_MODE=replay: the ESPN event id of the real match to replay. */
   replayEventId: string;
@@ -81,6 +89,9 @@ export interface Config {
    * your feed's lag (free/delayed feed → seconds; a licensed fast feed → ~1s).
    */
   betDelayMs: number;
+
+  /** Ms before lockAt when the server stops accepting new bets (ESPN lag cushion). */
+  betSafetyBufferMs: number;
 
   /**
    * CHAIN MODE master switch. When on, every off-chain market gets a REAL
@@ -127,24 +138,39 @@ function parseFeedMode(raw: string | undefined): FeedMode {
   return raw === 'sim' || raw === 'espn' || raw === 'auto' || raw === 'replay' ? raw : 'auto';
 }
 
+/** Default dual-lang for FIFA (Spanish commentary is denser); single EN elsewhere. */
+function parseEspnCommentaryLang(
+  raw: string | undefined,
+  league: string,
+): 'en' | 'es' | 'dual' {
+  if (raw === 'en' || raw === 'es' || raw === 'dual') return raw;
+  return league === 'fifa.world' ? 'dual' : 'en';
+}
+
 export const config: Config = {
   port: num('PORT', WS_DEFAULT_PORT),
   anthropicApiKey: process.env.ANTHROPIC_API_KEY?.trim() || undefined,
   // Haiku 4.5 — fast + cheap, ideal for the "is this bettable?" decision on the
   // critical path of opening a market. (Sonnet id for reference: claude-sonnet-4-6.)
   aiModel: process.env.AI_MODEL?.trim() || 'claude-haiku-4-5-20251001',
-  aiTimeoutMs: num('AI_TIMEOUT_MS', 2500),
+  aiTimeoutMs: num('AI_TIMEOUT_MS', 4000),
+  aiResolveTimeoutMs: num('AI_RESOLVE_TIMEOUT_MS', 6000),
   minConfidence: num('MIN_CONFIDENCE', 0.6),
   feedMode: parseFeedMode(process.env.FEED_MODE?.trim()),
   espnLeague: process.env.ESPN_LEAGUE?.trim() || 'eng.1',
+  espnCommentaryLang: parseEspnCommentaryLang(
+    process.env.ESPN_COMMENTARY_LANG?.trim(),
+    process.env.ESPN_LEAGUE?.trim() || 'eng.1',
+  ),
   replayEventId: process.env.REPLAY_EVENT_ID?.trim() || '760437', // Croatia at England (WC)
-  espnPollMs: num('ESPN_POLL_MS', 8000),
+  espnPollMs: num('ESPN_POLL_MS', 2500),
   rake: num('RAKE', 0.06),
   feeRecipient: process.env.FEE_RECIPIENT?.trim() || '5kBBKSV2EUyLsa2sXoK9E1VVzmDXCaHnQiMfz8B8yJtP',
   baseSeed: num('BASE_SEED', 12345),
   botCount: num('BOT_COUNT', 24),
   resolveTimeoutMs: num('RESOLVE_TIMEOUT_MS', 12000),
-  betDelayMs: num('BET_DELAY_MS', 2000),
+  betDelayMs: num('BET_DELAY_MS', 5000),
+  betSafetyBufferMs: num('BET_SAFETY_BUFFER_MS', 2000),
   chainEnabled: bool('CHAIN_ENABLED'),
   operatorKeypair: process.env.OPERATOR_KEYPAIR?.trim() || undefined,
   solanaRpcUrl: string('SOLANA_RPC_URL', 'http://127.0.0.1:8899'),
@@ -158,6 +184,7 @@ export function describeConfig(c: Config): string {
     `port=${c.port}`,
     `feed=${c.feedMode}`,
     `league=${c.espnLeague}`,
+    `espnLang=${c.espnCommentaryLang}`,
     `watcher=${c.anthropicApiKey ? `ai(${c.aiModel})` : 'rules(no ANTHROPIC_API_KEY)'}`,
     `rake=${c.rake} (fee→${c.feeRecipient.slice(0, 6)}…)`,
     `bots=${c.botCount}`,

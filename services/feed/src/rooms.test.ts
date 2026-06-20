@@ -4,10 +4,24 @@ import { ROOM_RAKE, ROOM_START_BALANCE, type Market, type ServerMessage } from '
 /** Parimutuel net for the SOLE winner of a pool (takes the whole pool minus the room fee). */
 const soleWinnerNet = (stake: number, poolTotal: number) =>
   -stake + poolTotal * (1 - ROOM_RAKE);
-import { RoomManager } from './rooms';
+import { RoomManager, type RoomChainBridge } from './rooms';
+
+function mockChain(): RoomChainBridge {
+  let seed = 0;
+  return {
+    active: true,
+    authority: 'test-auth',
+    nextSeed: () => ++seed,
+    rakeBps: 200,
+    seedLamports: 0,
+    initMarket: async () => null,
+    lockMarket: () => {},
+    resolveMarket: () => {},
+  };
+}
 
 /** Capture everything the manager emits via its broadcastRoom sink. */
-function makeManager(opts: { live?: boolean } = {}) {
+function makeManager(opts: { live?: boolean; chain?: boolean; global?: Market } = {}) {
   const emitted: Array<{ code: string; msg: ServerMessage }> = [];
   let t = 1_000;
   // Deterministic RNG: a steadily-increasing fraction → distinct room codes.
@@ -16,11 +30,14 @@ function makeManager(opts: { live?: boolean } = {}) {
     emit: (code, msg) => emitted.push({ code, msg }),
     matchId: () => 'sim-arg-fra',
     isLive: () => opts.live ?? true,
+    isFinal: () => false,
     now: () => t,
     rand: () => {
       r = (r + 0.137) % 1;
       return r;
     },
+    chain: (opts.chain ?? true) ? mockChain() : null,
+    getOpenGlobalMarket: () => opts.global,
   });
   return {
     mgr,
@@ -68,11 +85,11 @@ describe('RoomManager — lifecycle', () => {
     h = makeManager();
   });
 
-  it('creates a room with a host starting at ROOM_START_BALANCE, phase live', () => {
+  it('creates a room with a host starting at session net 0, phase live', () => {
     const fx = h.mgr.createRoom('u1', 'Alice');
     expect(fx.state).toBeDefined();
     const s = fx.state!;
-    expect(s.code).toMatch(/^[A-Z2-9]{4}$/);
+    expect(s.code).toMatch(/^[A-Z2-9]{7}$/);
     expect(s.hostId).toBe('u1');
     expect(s.phase).toBe('live');
     expect(s.players).toHaveLength(1);
@@ -119,10 +136,13 @@ describe('RoomManager — lifecycle', () => {
     expect(h.mgr.joinRoom(`  ${code.toLowerCase()} `, 'u2', 'Bob').state!.players).toHaveLength(2);
   });
 
-  it('drops the room when the last connected socket disconnects', () => {
+  it('keeps the room after the last socket disconnects (friends can still join)', () => {
     const code = h.mgr.createRoom('u1', 'Alice').state!.code;
     h.mgr.disconnect(code, 'u1');
-    expect(h.mgr.has(code)).toBe(false);
+    expect(h.mgr.has(code)).toBe(true);
+    expect(h.mgr.getRoomState(code)!.players[0].connected).toBe(false);
+    const re = h.mgr.joinRoom(code, 'u1', 'Alice');
+    expect(re.state!.players[0].connected).toBe(true);
   });
 
   it('reassigns host when the host leaves', () => {
@@ -162,59 +182,56 @@ describe('RoomManager — friend markets + parimutuel betting', () => {
     expect(mkt.bets).toHaveLength(0);
   });
 
-  it('debits balance and grows the pool on a bet; one bet per market per player', () => {
+  it('without chain, rejects bets when session balance is empty', () => {
+    const noChain = makeManager({ chain: false });
+    const code = noChain.mgr.createRoom('u1', 'Alice').state!.code;
+    noChain.mgr.joinRoom(code, 'u2', 'Bob');
+    const fx = noChain.mgr.makeMarket(code, 'u1', 'GOAL?');
+    const marketId = (fx.markets.find((m) => m.t === 'room_market_open') as Extract<
+      ServerMessage,
+      { t: 'room_market_open' }
+    >).market.id;
+    expect(
+      noChain.mgr.placeBet(code, 'u2', marketId, 'YES', 100).error?.message,
+    ).toMatch(/balance/i);
+  });
+
+  it('with chain active, pool records without debiting session balance', () => {
     const marketId = openFriendMarket('u1');
 
     const fx = h.mgr.placeBet(code, 'u2', marketId, 'YES', 100);
     const bob = fx.state!.players.find((p) => p.userId === 'u2')!;
-    expect(bob.balance).toBe(ROOM_START_BALANCE - 100);
-
-    const mkt = fx.state!.markets.at(-1)!;
-    expect(mkt.pool).toEqual({ yes: 100, no: 0 });
-    expect(mkt.bets).toEqual([{ userId: 'u2', side: 'YES', stake: 100 }]);
-    expect(fx.markets.some((x) => x.t === 'room_market_update')).toBe(true);
-
-    // Second bet by the same player is rejected (pool unchanged).
-    expect(h.mgr.placeBet(code, 'u2', marketId, 'NO', 50).error?.message).toMatch(/already bet/i);
-    expect(h.mgr.getRoomState(code)!.markets.at(-1)!.pool).toEqual({ yes: 100, no: 0 });
+    expect(bob.balance).toBe(0);
+    expect(fx.state!.markets.at(-1)!.pool).toEqual({ yes: 100, no: 0 });
   });
 
-  it('rejects an over-stake and a stake after the window closes', () => {
+  it('rejects a stake after the window closes', () => {
     const marketId = openFriendMarket('u1');
-    expect(
-      h.mgr.placeBet(code, 'u2', marketId, 'YES', ROOM_START_BALANCE + 1).error?.message,
-    ).toMatch(/balance/i);
     h.advance(FRIEND_MARKET_WINDOW_PAST);
     expect(h.mgr.placeBet(code, 'u2', marketId, 'YES', 10).error?.message).toMatch(/window/i);
   });
 
-  it('head-to-head resolve: Alice YES 100 + Bob NO 100, resolve YES → Alice +100 net, Bob −100', () => {
+  it('head-to-head resolve: Alice YES 100 + Bob NO 100, resolve YES → Alice +96 net, Bob −100', () => {
     const marketId = openFriendMarket('u1');
     h.mgr.placeBet(code, 'u1', marketId, 'YES', 100);
     h.mgr.placeBet(code, 'u2', marketId, 'NO', 100);
 
-    // Mid-market: both debited, pool holds the whole stack.
     const mid = h.mgr.getRoomState(code)!;
-    expect(mid.players.find((p) => p.userId === 'u1')!.balance).toBe(ROOM_START_BALANCE - 100);
-    expect(mid.players.find((p) => p.userId === 'u2')!.balance).toBe(ROOM_START_BALANCE - 100);
+    expect(mid.players.find((p) => p.userId === 'u1')!.balance).toBe(0);
+    expect(mid.players.find((p) => p.userId === 'u2')!.balance).toBe(0);
     expect(mid.markets.at(-1)!.pool).toEqual({ yes: 100, no: 100 });
 
     const fx = h.mgr.resolveMarket(code, 'u1', marketId, 'YES');
     const alice = fx.state!.players.find((p) => p.userId === 'u1')!;
     const bob = fx.state!.players.find((p) => p.userId === 'u2')!;
-    // Alice wins the $200 pool minus the small room fee: −100 staked + payout.
-    expect(alice.balance).toBeCloseTo(ROOM_START_BALANCE + soleWinnerNet(100, 200), 6);
-    // Bob's $100 stake funded her: net −100.
-    expect(bob.balance).toBe(ROOM_START_BALANCE - 100);
+    expect(alice.balance).toBeCloseTo(soleWinnerNet(100, 200), 6);
+    expect(bob.balance).toBe(-100);
     expect(fx.state!.markets.at(-1)!.status).toBe('resolved');
     expect(fx.state!.markets.at(-1)!.outcome).toBe('YES');
     expect(fx.markets.some((x) => x.t === 'room_market_resolve')).toBe(true);
   });
 
-  it('uneven parimutuel split: two YES backers share the losing NO stake by share', () => {
-    // Alice YES 100, Bob YES 300 (pool yes=400), and a friend-market NO side
-    // funded by author re-using... use AI relay for a 3-bettor scenario instead.
-    // Here keep it 2-player: Alice YES 100, Bob NO 300 → resolve YES.
+  it('uneven parimutuel split: Alice YES 100, Bob NO 300 → resolve YES', () => {
     const marketId = openFriendMarket('u1');
     h.mgr.placeBet(code, 'u1', marketId, 'YES', 100);
     h.mgr.placeBet(code, 'u2', marketId, 'NO', 300);
@@ -222,9 +239,8 @@ describe('RoomManager — friend markets + parimutuel betting', () => {
     const fx = h.mgr.resolveMarket(code, 'u1', marketId, 'YES');
     const alice = fx.state!.players.find((p) => p.userId === 'u1')!;
     const bob = fx.state!.players.find((p) => p.userId === 'u2')!;
-    // Alice is the only YES → she takes the $400 pool minus the room fee.
-    expect(alice.balance).toBeCloseTo(ROOM_START_BALANCE + soleWinnerNet(100, 400), 6);
-    expect(bob.balance).toBe(ROOM_START_BALANCE - 300);
+    expect(alice.balance).toBeCloseTo(soleWinnerNet(100, 400), 6);
+    expect(bob.balance).toBe(-300);
   });
 
   it('one-sided market refunds: both bet YES, resolve NO → both refunded (void)', () => {
@@ -233,9 +249,8 @@ describe('RoomManager — friend markets + parimutuel betting', () => {
     h.mgr.placeBet(code, 'u2', marketId, 'YES', 50);
 
     const fx = h.mgr.resolveMarket(code, 'u1', marketId, 'NO');
-    // NO side had no stake → settleRoomMarket downgrades to a refund.
-    expect(fx.state!.players.find((p) => p.userId === 'u1')!.balance).toBe(ROOM_START_BALANCE);
-    expect(fx.state!.players.find((p) => p.userId === 'u2')!.balance).toBe(ROOM_START_BALANCE);
+    expect(fx.state!.players.find((p) => p.userId === 'u1')!.balance).toBe(0);
+    expect(fx.state!.players.find((p) => p.userId === 'u2')!.balance).toBe(0);
     expect(fx.state!.markets.at(-1)!.status).toBe('void');
     expect(fx.state!.markets.at(-1)!.outcome).toBe('VOID');
   });
@@ -245,16 +260,19 @@ describe('RoomManager — friend markets + parimutuel betting', () => {
     h.mgr.placeBet(code, 'u1', marketId, 'YES', 200);
     h.mgr.placeBet(code, 'u2', marketId, 'NO', 75);
     const fx = h.mgr.resolveMarket(code, 'u1', marketId, 'VOID');
-    expect(fx.state!.players.find((p) => p.userId === 'u1')!.balance).toBe(ROOM_START_BALANCE);
-    expect(fx.state!.players.find((p) => p.userId === 'u2')!.balance).toBe(ROOM_START_BALANCE);
+    expect(fx.state!.players.find((p) => p.userId === 'u1')!.balance).toBe(0);
+    expect(fx.state!.players.find((p) => p.userId === 'u2')!.balance).toBe(0);
     expect(fx.state!.markets.at(-1)!.status).toBe('void');
   });
 
+  it('rejects makeMarket while another market is active', () => {
+    openFriendMarket('u1');
+    expect(h.mgr.makeMarket(code, 'u2', 'Second?').error?.message).toMatch(/current market/i);
+  });
+
   it('only the host or author may resolve a friend market', () => {
-    // u2 authors; the author can resolve.
     const m1 = openFriendMarket('u2');
     expect(h.mgr.resolveMarket(code, 'u2', m1, 'YES').state).toBeDefined();
-    // Host (u1) can resolve a different market authored by u2 too.
     const m2 = openFriendMarket('u2', 'AGAIN?');
     expect(h.mgr.resolveMarket(code, 'u1', m2, 'NO').state).toBeDefined();
   });
@@ -318,8 +336,8 @@ describe('RoomManager — AI relay (lockstep with the global market)', () => {
     expect(s.markets.at(-1)!.status).toBe('resolved');
     expect(s.markets.at(-1)!.outcome).toBe('YES');
     // Alice took the $200 pool minus the small room fee; Bob net −100.
-    expect(s.players.find((p) => p.userId === 'u1')!.balance).toBeCloseTo(ROOM_START_BALANCE + soleWinnerNet(100, 200), 6);
-    expect(s.players.find((p) => p.userId === 'u2')!.balance).toBe(ROOM_START_BALANCE - 100);
+    expect(s.players.find((p) => p.userId === 'u1')!.balance).toBeCloseTo(soleWinnerNet(100, 200), 6);
+    expect(s.players.find((p) => p.userId === 'u2')!.balance).toBe(-100);
   });
 
   it('one-sided AI market refunds when the winning side has no stake', () => {
@@ -335,8 +353,27 @@ describe('RoomManager — AI relay (lockstep with the global market)', () => {
     h.mgr.onGlobalMarketResolve(resolvedGlobal('YES')); // YES had no stake
     const s = h.mgr.getRoomState(code)!;
     expect(s.markets.at(-1)!.status).toBe('void');
-    expect(s.players.find((p) => p.userId === 'u1')!.balance).toBe(ROOM_START_BALANCE);
-    expect(s.players.find((p) => p.userId === 'u2')!.balance).toBe(ROOM_START_BALANCE);
+    expect(s.players.find((p) => p.userId === 'u1')!.balance).toBe(0);
+    expect(s.players.find((p) => p.userId === 'u2')!.balance).toBe(0);
+  });
+
+  it('does not mirror a new AI market while a friend market is active', () => {
+    const h = makeManager();
+    const code = h.mgr.createRoom('u1', 'A').state!.code;
+    h.mgr.makeMarket(code, 'u1', 'Custom line?');
+    h.mgr.onGlobalMarketOpen(globalMarket({ id: 'mkt_2' }));
+    expect(h.mgr.getRoomState(code)!.markets.filter((m) => m.source === 'ai')).toHaveLength(0);
+  });
+
+  it('backfills the open global market when a friend joins mid-match', () => {
+    const open = globalMarket({ status: 'open' });
+    const h = makeManager({ global: open });
+    const code = h.mgr.createRoom('u1', 'A').state!.code;
+    h.mgr.joinRoom(code, 'u2', 'B');
+    const mkt = h.mgr.getRoomState(code)!.markets.at(-1)!;
+    expect(mkt.source).toBe('ai');
+    expect(mkt.sourceMarketId).toBe('mkt_1');
+    expect(mkt.status).toBe('open');
   });
 
   it('does nothing on resolve without a settled outcome', () => {

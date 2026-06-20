@@ -4,7 +4,8 @@
 // classifier, the AI watcher, the orchestrator's timers) reads from here, so
 // tuning the product is editing this file and nothing else.
 // ───────────────────────────────────────────────────────────────────────────
-import type { FeedEvent, GameState } from '@golazo/core';
+import type { FeedEvent, FeedEventType, GameState, MarketTrigger, Team } from '@golazo/core';
+import { parseClockKey } from '../feed/espn';
 
 export type MarketTier = 'set_piece' | 'fuzzy';
 export type OpenableType =
@@ -12,7 +13,8 @@ export type OpenableType =
   | 'corner'
   | 'free_kick'
   | 'dangerous_attack'
-  | 'attack';
+  | 'attack'
+  | 'var_check';
 
 /** Everything we know about ONE kind of bettable moment. */
 export interface MarketTypeKnob {
@@ -30,17 +32,19 @@ export interface MarketTypeKnob {
  * Per-type knobs. To make a moment more/less bettable, or change its window,
  * edit the numbers here — nothing else.
  *
- * resolveWindowMs is deliberately short (~10-14s): a chance resolves within
- * seconds of the play. HONEST TRADE-OFF: a delayed free feed can report a real
- * goal late; too short → we mis-settle it NO. Fast + accurate needs a licensed
- * low-latency feed. These values bias toward a responsive UX.
+ * resolveWindowMs must cover ESPN's reporting delay (often 30–60s on the free
+ * feed). Too short → a real goal lands after we've already settled NO.
  */
 export const MARKET_TYPES: Record<OpenableType, MarketTypeKnob> = {
-  penalty: { tier: 'set_piece', betWindowMs: 9000, resolveWindowMs: 14000, minConfidence: 0 },
-  corner: { tier: 'set_piece', betWindowMs: 7000, resolveWindowMs: 12000, minConfidence: 0 },
-  free_kick: { tier: 'fuzzy', betWindowMs: 7000, resolveWindowMs: 12000, minConfidence: 0.6 },
-  dangerous_attack: { tier: 'fuzzy', betWindowMs: 6000, resolveWindowMs: 10000, minConfidence: 0.6 },
-  attack: { tier: 'fuzzy', betWindowMs: 6000, resolveWindowMs: 10000, minConfidence: 0.55 },
+  penalty: { tier: 'set_piece', betWindowMs: 12_000, resolveWindowMs: 50_000, minConfidence: 0 },
+  corner: { tier: 'set_piece', betWindowMs: 12_000, resolveWindowMs: 90_000, minConfidence: 0 },
+  free_kick: { tier: 'fuzzy', betWindowMs: 12_000, resolveWindowMs: 90_000, minConfidence: 0.55 },
+  // Open-play build-up — AI-judged; actual locked countdown uses resolveDeadlineMs(kind).
+  dangerous_attack: { tier: 'fuzzy', betWindowMs: 10_000, resolveWindowMs: 60_000, minConfidence: 0.35 },
+  attack: { tier: 'fuzzy', betWindowMs: 10_000, resolveWindowMs: 60_000, minConfidence: 0.3 },
+  // VAR reviews take real time (often 60–120s + feed lag) — a short window made
+  // card/penalty markets settle NO before the decision was even reported. Wait it out.
+  var_check: { tier: 'set_piece', betWindowMs: 14_000, resolveWindowMs: 120_000, minConfidence: 0 },
 };
 
 export function knobFor(type: FeedEvent['type']): MarketTypeKnob | undefined {
@@ -51,26 +55,316 @@ export function tierOf(type: FeedEvent['type']): MarketTier | 'ignore' {
   return knobFor(type)?.tier ?? 'ignore';
 }
 
+/** Match-clock of an event in fractional minutes (e.g. 45+2 → 45.02). */
+export function clockMinutes(ev: FeedEvent): number | undefined {
+  const raw = ev.meta?.clock;
+  if (typeof raw !== 'string') return undefined;
+  const c = parseClockKey(raw);
+  return c.base + c.stopp / 100;
+}
+
+/** How far behind the live scoreboard clock this event's stamp is (minutes). */
+export function feedLagMinutes(ev: FeedEvent, game: GameState): number {
+  const evMin = clockMinutes(ev);
+  if (evMin === undefined) return 0;
+  const liveC = parseClockKey(game.clock);
+  const liveMin = liveC.base + liveC.stopp / 100;
+  return Math.max(0, liveMin - evMin);
+}
+
+/**
+ * Ms before lockAt when we stop taking bets. Capped so it never eats the whole window
+ * (5s buffer on a 7s window was leaving ~1s to bet — the "1 second markets" bug).
+ */
+export const BET_SAFETY_BUFFER_MS = 2000;
+
+/** Buffer scales down for shorter windows; never more than 25% of the betting window. */
+export function bettingSafetyBufferMs(windowMs: number): number {
+  return Math.min(BET_SAFETY_BUFFER_MS, Math.max(800, Math.floor(windowMs * 0.2)));
+}
+
+/** Wall-clock instant after which new bets are rejected (still open until lockAt). */
+export function bettingClosesAt(lockAt: number, windowMs = 10_000): number {
+  return lockAt - bettingSafetyBufferMs(windowMs);
+}
+
+/** Max feed lag we'll still open a market for — set-pieces must be timely. */
+export function staleLagThreshold(type: FeedEvent['type']): number {
+  const k = knobFor(type);
+  if (!k) return 1;
+  return k.tier === 'set_piece' ? 0.5 : 1.25;
+}
+
+/** True when a moment is too far behind live play to open fairly. */
+export function isStalePlay(ev: FeedEvent, game: GameState): boolean {
+  return feedLagMinutes(ev, game) > staleLagThreshold(ev.type);
+}
+
+/**
+ * Before timing out a goal-question to NO, check if ESPN already reported a goal
+ * for this team at/after the chance opened (common when the goal event lands in
+ * a later poll than the attack opener).
+ */
+export function goalAlreadyHappenedForChance(
+  marketTeam: Team | undefined,
+  openClockMin: number | undefined,
+  lastResolverByTeam: ReadonlyMap<Team, number>,
+): boolean {
+  if (!marketTeam || openClockMin === undefined) return false;
+  const last = lastResolverByTeam.get(marketTeam);
+  return last !== undefined && last >= openClockMin - 0.5;
+}
+
+/** Stretch the post-lock resolve window in tense late-game moments. */
+export function scaledResolveWindowMs(type: FeedEvent['type'], game: GameState): number {
+  const knob = knobFor(type);
+  if (!knob) return 10_000;
+  const ctx = parseGameContext(game);
+  let f = 1;
+  if (ctx.isExtraTime) f *= 1.15;
+  if (ctx.isStoppage) f *= 1.15;
+  if (ctx.isClose && (ctx.minutesLeft <= 10 || ctx.isStoppage)) f *= 1.1;
+  return Math.round(knob.resolveWindowMs * f);
+}
+
+/** How long after lock we wait before VOIDing an unresolved goal-question (never auto-NO). */
+export const MAX_PENDING_GOAL_MS = 2 * 60_000;
+/** Min match-clock gap before the same team gets another set-piece market. */
+export const SET_PIECE_OPEN_COOLDOWN_MIN = 2.5;
+/** Extra time added when subs/injury/VAR delay the match. */
+export const STOPPAGE_EXTEND_MS = 90_000;
+
+/**
+ * Post-lock "score window" — how long the user waits for YES evidence once betting
+ * closes. Soccer-realistic: set-pieces need wall/setup time; pressing spells run
+ * 1–2 minutes; VAR reviews take minutes. Shown on the card as a locked countdown.
+ */
+export function resolveDeadlineMs(kind: string): number {
+  switch (kind) {
+    case 'penalty_scored':
+      return 50_000; // run-up + kick + ESPN lag
+    case 'goal_from_corner':
+      return 90_000; // organize, deliver, scramble, recycle
+    case 'goal_from_free_kick':
+      return 90_000; // wall, routine or direct shot
+    case 'goal_from_open_play':
+      return 120_000; // sustained press — up to ~2 match minutes
+    case 'chance_from_play':
+      return 60_000; // next shot in the move — ~1 minute of live play
+    case 'penalty_awarded':
+    case 'red_card_given':
+      return 120_000; // VAR review
+    case 'goal_in_extra_time':
+      return 25 * 60_000;
+    default:
+      return 75_000;
+  }
+}
+
+export type ResolvePolicy = 'event_only' | 'timeout_no';
+
+/** Goal markets resolve only on feed evidence; cards/VAR keep short timeout NO. */
+export function resolvePolicyFor(kind: string): ResolvePolicy {
+  if (kind.startsWith('goal_from') || kind === 'penalty_scored') return 'event_only';
+  return 'timeout_no';
+}
+
+/** Live match clock as fractional minutes from the scoreboard. */
+export function liveClockMinutes(game: GameState): number {
+  const liveC = parseClockKey(game.clock);
+  return liveC.base + liveC.stopp / 100;
+}
+
+/** Absolute pending cap before VOID (goal questions — never guess NO). */
+export function maxPendingMs(kind: string): number {
+  return resolveDeadlineMs(kind);
+}
+
+/**
+ * Set-pieces we only open from structured ESPN keyEvents — never commentary prose.
+ * Penalties stay keyEvent-only (commentary "penalty area…" false-positives); corners
+ * now open from ESPN's canonical "Corner, <Team>." commentary too, since the FIFA
+ * feed often narrates a corner before (or without) a structured keyEvent.
+ */
+export const KEY_EVENT_ONLY_OPENERS = new Set<FeedEvent['type']>(['penalty']);
+
+/**
+ * Exactly ONE market is live at a time — you bet on the moment happening NOW.
+ * The product goal isn't parallel markets, it's a FAST FLOW: each market resolves
+ * quickly (on real evidence, else a short timeout) so the next can open right
+ * behind it. A moment that occurs while a market is live is IGNORED — never
+ * queued and replayed later (that path only breeds stale, wrong markets).
+ */
+export const MAX_CONCURRENT_MARKETS = 1;
+
+/** True for instant rule-based open: structured ESPN keyEvent set-pieces. */
+export function isStructuredSetPiece(ev: FeedEvent): boolean {
+  return ev.meta?.source === 'espn.keyEvent' && KEY_EVENT_ONLY_OPENERS.has(ev.type);
+}
+
+/**
+ * ESPN's canonical "X wins a free kick in the attacking half" line — bettable
+ * BEFORE the kick, unlike bare "Foul by Y" commentary.
+ */
+/** Attacking-half / final-third location language (EN + ES). */
+const ATTACKING_LOCATION =
+  /\b(attacking|final|opposition'?s?)\s+(half|third)\b|campo contrario|zona ofensiva|área ofensiva|area ofensiva/;
+
+/**
+ * Defensive / own-half set-piece language — these are NEVER goal-chance markets
+ * (e.g. "Paraguay wins a free kick in their own half" / a FK in their keeper's box).
+ */
+export function isDefensiveSetPiece(text: string): boolean {
+  const t = text.toLowerCase();
+  if (/\b(defensive|defending|own)\s+(half|third|area|box|penalty area)\b/.test(t)) return true;
+  if (/\bin (?:their|his) own\b/.test(t)) return true;
+  if (/zona defensiva|campo propio|área defensiva|area defensiva|su (?:propia )?área/.test(t)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Bettable BEFORE the kick — but ONLY with POSITIVE attacking-location evidence.
+ * A bare "wins a free kick" with no location, or a structured keyEvent without an
+ * attacking zone, is NOT auto-opened: it falls through to the AI judge (which reads
+ * the commentary for location) instead of blindly opening a possibly-defensive FK.
+ */
+export function isAwardedFreeKick(ev: FeedEvent): boolean {
+  if (ev.type !== 'free_kick') return false;
+  const t = ev.text.toLowerCase();
+  if (isDefensiveSetPiece(t)) return false;
+
+  // English ESPN award line: "X wins a free kick in the attacking half".
+  if (/\bwins a free kick\b/.test(t)) return ATTACKING_LOCATION.test(t);
+  // Spanish: "X ha recibido una falta en campo contrario / zona ofensiva / banda".
+  if (/\bha recibido una falta\b/.test(t)) {
+    return ATTACKING_LOCATION.test(t) || /banda (izquierda|derecha)/.test(t);
+  }
+  // Structured keyEvent FK: only instant-open when it positively names an attacking zone.
+  if (ev.meta?.source === 'espn.keyEvent') return ATTACKING_LOCATION.test(t);
+  return false;
+}
+
+/** Goal-scoring moments outrank card/VAR markets when both arrive together. */
+export function openerPriority(type: FeedEvent['type']): number {
+  switch (type) {
+    case 'corner':
+    case 'penalty':
+    case 'free_kick':
+      return 0;
+    case 'dangerous_attack':
+    case 'attack':
+      return 1;
+    case 'var_check':
+      return 2;
+    default:
+      return 9;
+  }
+}
+
+export function isGoalMomentKind(kind: string): boolean {
+  return kind.startsWith('goal_from') || kind === 'penalty_scored';
+}
+
+/** Commentary that describes a shot ALREADY taken — never open a market on this. */
+export function isPostShotCommentary(text: string): boolean {
+  const t = text.trim().toLowerCase();
+  if (/^goal[!]/.test(t)) return true;
+  if (/^attempt\s+(saved|blocked|missed|wide|over)/.test(t)) return true;
+  // Spanish ESPN: "Remate parado/fallado/bloqueado…"
+  if (/^remate\s+(parado|fallado|bloqueado|desviado|fuera)/.test(t)) return true;
+  if (/^¡?goooo*ol!/.test(t)) return true;
+  if (/\bforces\s+a\s+save\b/.test(t)) return true;
+  if (/\boff\s+the\s+(post|bar|crossbar)\b/.test(t)) return true;
+  if (/\b(saved|blocked|missed)\s*[\.\!]?\s*$/i.test(t)) return true;
+  return false;
+}
+
+/**
+ * Commentary that RESOLVES a locked set-piece (never opens markets).
+ * Goals stay keyEvent-only; this covers kicks taken, cleared, saved, routine.
+ */
+export function classifyResolverCommentary(text: string): FeedEventType | undefined {
+  const t = text.trim().toLowerCase();
+  // Never invent goals from prose — structured keyEvents are authoritative.
+  if (/^goal[!]|^¡?goooo*ol/i.test(t)) return undefined;
+
+  if (isPostShotCommentary(text)) return 'miss';
+
+  const taken =
+    /\b(takes|took|delivers|delivered|struck|strike[sd]?|plays|played|hits|hit)\s+(the\s+)?(a\s+)?(direct\s+|short\s+)?free[- ]?kick\b/.test(
+      t,
+    ) ||
+    /\bfree[- ]?kick\s+(is\s+)?(taken|played|delivered|worked|routine|short)\b/.test(t) ||
+    /\b(plays?|played|touches?|touched)\s+(?:it\s+)?short\b/.test(t) ||
+    /\bshort\s+pass\b/.test(t) ||
+    /\bpass(?:es|ed)?\s+(?:it\s+)?short\b/.test(t) ||
+    /\b(into the wall|hits? the wall|off the wall|deflected|headed clear|headed away|heads?\s+clear)\b/.test(
+      t,
+    ) ||
+    /\b(cleared|clearance|gathered by|caught by|collected by)\b/.test(t) ||
+    /\b(tiro libre|falta)\b.{0,60}\b(corto|corta|juega|toca|muro|rechaz|despej)/.test(t) ||
+    /\b(remate|disparo)\s+(parado|fallado|bloqueado|desviado|fuera)\b/.test(t);
+  if (taken) return 'play_end';
+
+  return undefined;
+}
+
+/** Build-up prose that can still be a timely chance (before the shot). */
+export function isPreShotBuildUp(text: string): boolean {
+  return isMomentumBuildUp(text);
+}
+
+/** EARLY momentum — not box entry / shot imminent (too late for a fair market). */
+export function isMomentumBuildUp(text: string): boolean {
+  if (isPostShotCommentary(text)) return false;
+  const t = text.toLowerCase();
+  if (/\b(into the box|in the (?:box|area|penalty)|worked into|played into|whipped in|crosses? into|one[-\s]?on[-\s]?one|clear chance|big chance)\b/.test(t)) {
+    return false;
+  }
+  return /\b(surging forward|pushing forward|on the attack|in the final third|attacking third|attacking half|building (?:an )?attack|building pressure|counter[- ]?attack|breaks? forward|drives? forward|press(?:es|ing)? forward|overloads?|quick transition|winning the ball back|in possession|zona ofensiva|campo contrario|en ataque|presi[oó]n (?:alta|ofensiva)|avanzando)\b/.test(
+    t,
+  );
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // COMMENTARY PATTERNS — phrase → event type. First match wins (most dangerous
-// first). EXPANDED to catch live attacks that were slipping through ("chance",
-// "header", "cut-back", "rebound", "scramble", "shot/effort in the box", ...).
+// first). Only PRE-SHOT build-up; post-shot lines are rejected in classifyCommentary.
 // ───────────────────────────────────────────────────────────────────────────
 export const COMMENTARY_PATTERNS: { type: OpenableType; re: RegExp }[] = [
-  // Set-pieces — the award is published BEFORE the kick, so a market can open
-  // pre-outcome. "penalty area/box/spot" is a location, not an award → excluded.
-  { type: 'penalty', re: /\bpenalty\b(?!\s*(area|box|spot))/i },
-  { type: 'corner', re: /\bcorner\b/i },
-  { type: 'free_kick', re: /\b(free[-\s]?kick|direct free|indirect free)\b/i },
-  // Clear, dangerous chances → dangerous_attack.
+  // VAR review — opens a VAR market. The SUBJECT (penalty vs red card) is decided
+  // downstream from the text by varReviewTrigger; here we just detect "a review".
+  {
+    type: 'var_check',
+    re: /\b(VAR|video assistant|checking|review(?:ing)?)\b[^.]{0,80}\b(penalty|handball|foul|possible|red card|sending[- ]?off|violent|serious foul)\b/i,
+  },
+  { type: 'var_check', re: /\b(penalty|red[- ]?card) (?:check|review|appeal)\b/i },
+  { type: 'var_check', re: /\bVAR\b[^.]{0,40}\b(red|sending[- ]?off|dismissal)\b/i },
+  // A VAR decision/check about a CARD (incl. "VAR Decision: No card change", which
+  // ESPN sometimes prints right before the card is actually shown). Also catches a
+  // referee heading to the pitchside monitor / on-field review.
+  { type: 'var_check', re: /\bVAR\b[^.]{0,40}\b(card|decision|check)\b/i },
+  { type: 'var_check', re: /\b(on[- ]field review|pitchside monitor|checks the monitor|goes to the monitor|revisi[oó]n del var|revisa el monitor)\b/i },
+  // NOTE: cards are bettable ONLY under VAR (above) — instant cards have no window.
+  // Penalties from commentary (anchored — "penalty area" etc. is gated keyEvent-only).
+  { type: 'penalty', re: /^penalty(?:\s+awarded)?(?:\s+to)?\s+/i },
+  { type: 'penalty', re: /^penalti/i },
+  // Corners from ESPN's canonical line: "Corner, Türkiye. Conceded by X." Anchored so
+  // "corner flag" / "into the corner" never match. Spanish: "Saque/Tiro de esquina".
+  { type: 'corner', re: /^corner,\s/i },
+  { type: 'corner', re: /^(?:saque|tiro)\s+de\s+esquina\b/i },
+  { type: 'free_kick', re: /\bwins a free kick\b/i },
+  { type: 'free_kick', re: /\bha recibido una falta\b/i },
+  // Clear, dangerous PRE-SHOT chances → dangerous_attack (never post-shot lines).
   {
     type: 'dangerous_attack',
-    re: /\b(dangerous|through ball|one[-\s]?on[-\s]?one|clear chance|big chance|golden chance|breaks? (?:free|clear|through)|counter[-\s]?attack|cut[-\s]?back|rebound|header (?:from|at|towards)|(?:shot|effort|strike|attempt|volley)\b[^.]*\b(?:box|goal|net|post|bar|target)\b|saved|tipped over|off the (?:line|post|bar))/i,
+    re: /\b(dangerous|through ball|clear chance|big chance|golden chance|breaks? (?:free|clear|through)|counter[-\s]?attack|cut[-\s]?back|rebound falls|pase en profundidad|contraataque|ocasi[oó]n (?:clara|de gol))\b/i,
   },
-  // General forward momentum → attack (looser; many fizzle, so lower confidence).
+  // Early momentum → attack (AI judges; never box-entry / shot-imminent phrases).
   {
     type: 'attack',
-    re: /\b(into the box|in the (?:box|area|penalty)|\battack\b|chance|surging forward|building (?:an )?attack|pressure|press(?:es|ing)? forward|breaks? forward|drives? forward|dribbl|takes? on|whipped (?:in|cross)|crosses? (?:in|into)|scramble|loose ball in)/i,
+    re: /\b(surging forward|pushing forward|on the attack|in the final third|attacking third|attacking half|building (?:an )?attack|building pressure|press(?:es|ing)? forward|breaks? forward|drives? forward|counter[- ]?attack|quick transition|in possession|overloads?|zona ofensiva|campo contrario|en ataque|presi[oó]n (?:alta|ofensiva)|avanzando)\b/i,
   },
 ];
 
@@ -134,17 +428,70 @@ export function windowMultiplier(ctx: GameContext): number {
   return f;
 }
 
+/** High AI confidence → slightly longer window; low → tighter. */
+export function confidenceWindowMs(baseMs: number, confidence: number, game: GameState): number {
+  const ctx = parseGameContext(game);
+  const conf = Math.min(1, Math.max(0, confidence));
+  return Math.round(baseMs * (0.88 + conf * 0.22) * windowMultiplier(ctx));
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // PERIOD MARKETS — longer-lived, state-triggered markets (not tied to a single
-// play). e.g. on entering extra time of a tight game: "Will Korea score in
+// play). e.g. on entering extra time of a tight game: "Will Scotland score in
 // extra time?" — short bet window, but the question lives across the period.
 // ───────────────────────────────────────────────────────────────────────────
 export const PERIOD_MARKET = {
   enabled: true,
   /** Bet window — still snappy (you can't bet once it locks), per the "10s to bet" idea. */
   betWindowMs: 12000,
-  /** The question lives a long time: settle NO if the period ends with no goal. */
-  resolveWindowMs: 8 * 60_000,
+  /** Safety net after lock — primary settlement is on matching goal or full time. */
+  resolveWindowMs: 25 * 60_000,
   /** Only when the game is this close (≤ N goals) — a blowout isn't bettable. */
   maxMargin: 1,
 };
+
+/** Dedupe key so a feed restart mid-ET doesn't open a second period market. */
+export function periodMarketKey(gameId: string): string {
+  return `period:et:${gameId}`;
+}
+
+/**
+ * Build the extra-time period market trigger when conditions are met, or null.
+ * Called on ET entry (and retried after a blocking moment market closes).
+ */
+export function buildPeriodMarketTrigger(game: GameState): MarketTrigger | null {
+  if (!PERIOD_MARKET.enabled) return null;
+  const ctx = parseGameContext(game);
+  if (!ctx.isExtraTime || !ctx.isClose) return null;
+
+  const margin = game.scoreHome - game.scoreAway;
+  if (Math.abs(margin) > PERIOD_MARKET.maxMargin) return null;
+
+  if (margin < 0) {
+    return {
+      gameId: game.gameId,
+      question: `Will ${game.home.name} score in extra time?`,
+      kind: 'goal_in_extra_time',
+      team: 'home',
+      windowMs: PERIOD_MARKET.betWindowMs,
+      trueProb: 0.32,
+    };
+  }
+  if (margin > 0) {
+    return {
+      gameId: game.gameId,
+      question: `Will ${game.away.name} score in extra time?`,
+      kind: 'goal_in_extra_time',
+      team: 'away',
+      windowMs: PERIOD_MARKET.betWindowMs,
+      trueProb: 0.32,
+    };
+  }
+  return {
+    gameId: game.gameId,
+    question: `Will there be a goal in extra time?`,
+    kind: 'goal_in_extra_time',
+    windowMs: PERIOD_MARKET.betWindowMs,
+    trueProb: 0.45,
+  };
+}

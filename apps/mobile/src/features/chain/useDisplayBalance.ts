@@ -6,7 +6,7 @@
 // also in $. One hook so no header can drift between units or show raw SOL.
 import { useChain } from "./useChain";
 import { useStore } from "@/state/store";
-import { money } from "@/lib/format";
+import { money, pts } from "@/lib/format";
 
 /** Display conversion: one $ "unit" of stake/balance = this much SOL on-chain.
  *  $1 = 0.01 SOL. Used both to turn the real SOL balance into the $ figure we
@@ -16,9 +16,11 @@ export const SOL_PER_UNIT = 0.01;
 export interface DisplayBalance {
   /** True when the figure is backed by the real on-chain balance (vs play money). */
   chain: boolean;
+  /** Play-mode points (server authoritative, separate from real bettors). */
+  points: boolean;
   /** The dollar balance to render. */
   amount: number;
-  /** Formatter ($, identical in every mode). */
+  /** Formatter ($, pts, or SOL-backed $). */
   format: (n: number) => string;
   /** Balance in $ "units" for over-balance checks (same as `amount`). */
   balanceInUnits: number;
@@ -27,6 +29,15 @@ export interface DisplayBalance {
 export function useDisplayBalance(): DisplayBalance {
   const chain = useChain();
   const store = useStore();
+  if (store.session.moneyMode === "points") {
+    return {
+      chain: false,
+      points: true,
+      amount: store.pointsBalance,
+      format: pts,
+      balanceInUnits: store.pointsBalance,
+    };
+  }
   // REAL balance only in live mode with a connected wallet. A DEMO game (offline
   // mode, loaded from the Demo button) is always play money. Either way we render
   // DOLLARS — the on-chain SOL balance is converted to $ via SOL_PER_UNIT.
@@ -34,6 +45,7 @@ export function useDisplayBalance(): DisplayBalance {
     const dollars = chain.balanceSol / SOL_PER_UNIT;
     return {
       chain: true,
+      points: false,
       amount: dollars,
       format: money,
       balanceInUnits: dollars,
@@ -41,6 +53,7 @@ export function useDisplayBalance(): DisplayBalance {
   }
   return {
     chain: false,
+    points: false,
     amount: store.balance,
     format: money,
     balanceInUnits: store.balance,

@@ -1,0 +1,10 @@
+# TLS termination for Golazo. Proxies to the Node static server on :8080.
+{$GOLAZO_DOMAIN} {
+	encode gzip
+	reverse_proxy 127.0.0.1:8080
+}
+
+# Redirect bare HTTP → HTTPS (Let's Encrypt HTTP-01 needs :80 open).
+http://{$GOLAZO_DOMAIN} {
+	redir https://{host}{uri} permanent
+}

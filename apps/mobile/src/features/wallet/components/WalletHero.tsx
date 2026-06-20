@@ -70,7 +70,7 @@ export function WalletHero({
   }));
 
   return (
-    <Surface level={2} radius="xl" glow="yes" style={styles.card}>
+    <Surface level={2} radius="xl" glow="none" style={styles.card}>
       {/* Lime radial bloom behind the balance */}
       <Animated.View
         style={[StyleSheet.absoluteFill, styles.bloomWrap, bloom]}

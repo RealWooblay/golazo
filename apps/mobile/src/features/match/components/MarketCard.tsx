@@ -11,6 +11,7 @@ import { colors, radius, spacing, spring, type } from "@/theme";
 import { Chip, Surface, Text } from "@/ui";
 import { money, multiple } from "@/lib/format";
 import { RAKE } from "@/lib/config";
+import { bettingClosesAt, bettingSafetyBufferMs } from "@/lib/config";
 import type { MarketVM, PendingBet } from "@/state/types";
 import { CountdownRing } from "./CountdownRing";
 import { PoolMeter } from "./PoolMeter";
@@ -42,6 +43,7 @@ export function MarketCard({
   formatStake = money,
   fixedOdds = false,
   hapticsEnabled = true,
+  betDisabled = false,
 }: {
   market: MarketVM;
   now: number;
@@ -60,14 +62,41 @@ export function MarketCard({
    */
   fixedOdds?: boolean;
   hapticsEnabled?: boolean;
+  /** External gate (e.g. on-chain twin still initializing). */
+  betDisabled?: boolean;
 }) {
   const locked = market.phase !== "open";
-  const left = Math.max(0, market.lockAt - now);
-  const fraction = market.windowMs > 0 ? left / market.windowMs : 0;
+  const betCutoff = bettingClosesAt(market.lockAt, market.windowMs);
+  const closing = !locked && now >= betCutoff;
+  const bettingOpen = !locked && !closing && !betDisabled;
+  const resolveWindowMs = market.resolveWindowMs > 0 ? market.resolveWindowMs : 60_000;
+  const resolveAt =
+    market.resolveAt > 0 ? market.resolveAt : market.lockAt + resolveWindowMs;
+  const left = bettingOpen
+    ? Math.max(0, betCutoff - now)
+    : locked
+      ? Math.max(0, resolveAt - now)
+      : Math.max(0, market.lockAt - now);
+  const fraction =
+    market.windowMs > 0
+      ? bettingOpen
+        ? left / Math.max(1, market.windowMs - bettingSafetyBufferMs(market.windowMs))
+        : closing
+          ? (market.lockAt - now) / bettingSafetyBufferMs(market.windowMs)
+          : locked
+            ? left / Math.max(1, resolveWindowMs)
+            : 0
+      : 0;
   const seconds = left / 1000;
+  const resolveMins = Math.floor(seconds / 60);
+  const resolveSecs = Math.floor(seconds % 60);
+  const resolveLabel =
+    resolveMins > 0
+      ? `${resolveMins}:${String(resolveSecs).padStart(2, "0")}`
+      : `${Math.ceil(seconds)}s`;
 
   const betPlaced = pending != null && pending.marketId === market.id;
-  const canBet = !locked && !betPlaced;
+  const canBet = bettingOpen && !betPlaced;
   const yesPool = market.pool * (market.yesShare / 100);
   const noPool = market.pool - yesPool;
   const quote = (side: "YES" | "NO") => {
@@ -91,8 +120,14 @@ export function MarketCard({
       {/* header: phase chip + question */}
       <View style={styles.head}>
         <Chip
-          label={locked ? "LOCKED · here it comes" : "LIVE · bet now"}
-          tone={locked ? "win" : "live"}
+          label={
+            locked
+              ? `LOCKED · ${resolveLabel} to score`
+              : closing
+                ? "CLOSING · no more bets"
+                : "LIVE · bet now"
+          }
+          tone={locked ? "win" : closing ? "win" : "live"}
           dot
         />
         <Text style={styles.question}>{market.question}</Text>
@@ -108,8 +143,10 @@ export function MarketCard({
         <CountdownRing
           fraction={fraction}
           seconds={seconds}
-          locked={locked}
+          locked={locked || closing}
+          urgent={bettingOpen}
           hapticsEnabled={hapticsEnabled}
+          lockedPhase={locked}
         />
         <PoolMeter
           pool={market.pool}
@@ -155,9 +192,13 @@ export function MarketCard({
         />
       </View>
 
-      {locked && !betPlaced ? (
+      {closing && !betPlaced ? (
         <Text style={styles.sat} center>
-          You sat this one out — watching it play.
+          Betting closed — waiting for lock. Outcome may be imminent.
+        </Text>
+      ) : locked && !betPlaced ? (
+        <Text style={styles.sat} center>
+          Watching — can resolve anytime before the window ends.
         </Text>
       ) : null}
     </Surface>

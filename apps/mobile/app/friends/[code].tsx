@@ -12,7 +12,7 @@
 // reveals for flavour. Visual language matches app/match/[id].tsx — same
 // scoreboard, commentary ticker, market + reveal cards — so friends mode feels
 // like the main loop, just scored for two.
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import {
   useFocusEffect,
@@ -20,23 +20,30 @@ import {
   useRouter,
 } from "expo-router";
 import type { Outcome, RoomMarket } from "@golazo/core";
-import { impliedOdds, indicativeQuote } from "@golazo/core";
+import { impliedOdds, indicativeQuote, ROOM_RAKE } from "@golazo/core";
 import { colors, radius, spacing, type } from "@/theme";
 import {
   Banner,
   Button,
   Chip,
   Confetti,
-  IconBack,
-  IconButton,
   Screen,
   Surface,
   Text,
   Toast,
 } from "@/ui";
+import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { haptics } from "@/ui/haptics";
 import { useStore } from "@/state/store";
 import { useTick } from "@/hooks";
+import { useChain } from "@/features/chain/useChain";
+import { useRoomChainBets } from "@/features/friends/useRoomChainBets";
+import {
+  useDisplayBalance,
+  makeStakeFormatter,
+  SOL_PER_UNIT,
+} from "@/features/chain/useDisplayBalance";
+import { bettingSafetyBufferMs } from "@/lib/config";
 import { resolveTeams } from "@/features/match/teams";
 import {
   CommentaryTicker,
@@ -46,7 +53,6 @@ import {
   WaitingCard,
 } from "@/features/match/components";
 import type { MarketVM, RevealVM } from "@/state/types";
-import { money } from "@/lib/format";
 import {
   useFriendsRoomContext,
   type FriendsRoomReveal,
@@ -55,6 +61,7 @@ import {
   Leaderboard,
   MakeMarketSheet,
   RoomInviteCard,
+  FriendsChainPanel,
 } from "@/features/friends/components";
 
 /**
@@ -67,16 +74,17 @@ import {
  *                  are only fallbacks, since MarketCard recomputes stake-aware
  *                  pool odds itself once the card has a live pool + stake,
  *   • phase      = the card's lifecycle from the market status,
- *   • NO onChain — room markets are never on-chain.
+ *   • onChain    — per-room on-chain twin when chain mode is active.
  */
-function toMarketVM(m: RoomMarket): MarketVM {
+function toMarketVM(m: RoomMarket, now?: number): MarketVM {
   const pool = m.pool.yes + m.pool.no;
   const yesShare = pool > 0 ? (100 * m.pool.yes) / pool : 50;
-  const odds = impliedOdds(m.pool, 0);
+  const odds = impliedOdds(m.pool, ROOM_RAKE);
+  const expired = now != null && m.status === "open" && now > m.lockAt;
   const phase =
-    m.status === "open"
+    m.status === "open" && !expired
       ? "open"
-      : m.status === "locked"
+      : m.status === "open" || m.status === "locked"
         ? "locked"
         : "resolved";
   const subtitle =
@@ -97,6 +105,11 @@ function toMarketVM(m: RoomMarket): MarketVM {
     openedAt: m.openedAt,
     lockAt: m.lockAt,
     windowMs: m.windowMs,
+    // Friend markets settle by hand (host/author) — no fixed resolve clock; 0s
+    // let MarketCard fall back to its own defaults for the post-lock countdown.
+    resolveWindowMs: 0,
+    resolveAt: 0,
+    ...(m.onChain ? { onChain: m.onChain } : {}),
   };
 }
 
@@ -127,6 +140,9 @@ export default function FriendsRoomScreen() {
   const router = useRouter();
   const store = useStore();
   const hapticsOn = store.session.hapticsOn;
+  const chain = useChain();
+  const bal = useDisplayBalance();
+  const stakeFormat = makeStakeFormatter(bal.chain);
 
   const room = useFriendsRoomContext();
 
@@ -150,6 +166,7 @@ export default function FriendsRoomScreen() {
     opponent,
     isHost,
     openMarkets,
+    activeMarkets,
     myBetByMarket,
     reveals,
     placeBet,
@@ -162,12 +179,11 @@ export default function FriendsRoomScreen() {
 
   const code = state?.code ?? routeCode ?? "";
   const phase = state?.phase ?? "lobby";
-  const waiting = !opponent; // no friends yet → show the invite hero
-  const roomFull = players.length >= 8; // mirrors the server cap (MAX_ROOM_PLAYERS)
+  const waiting = players.length < 2;
+  const roomFull = players.length >= 8;
+  const chainMode =
+    chain.ready && store.session.moneyMode === "real" && bal.chain;
 
-  // Local stake selector ($), independent of the global $ stake chip. Room bets
-  // are real-$ parimutuel — chips are $10 / $25 / $50 / $100.
-  const [stake, setStake] = useState(25);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [confetti, setConfetti] = useState(0);
   // Toggle to re-show the invite card once friends are in (keep adding up to 8).
@@ -181,8 +197,32 @@ export default function FriendsRoomScreen() {
       return () => setFocused(false);
     }, []),
   );
-  const ticking = focused && openMarkets.length > 0;
+  const ticking = focused && activeMarkets.length > 0;
   const now = useTick(80, ticking);
+
+  const activeMarketVMs = useMemo(
+    () => activeMarkets.map((m) => toMarketVM(m, now)),
+    [activeMarkets, now],
+  );
+  const roomChain = useRoomChainBets(
+    chain,
+    store.stake,
+    chainMode,
+    activeMarketVMs,
+  );
+
+  const resolvedMarketIds = useMemo(
+    () =>
+      new Set(
+        (state?.markets ?? [])
+          .filter((m) => m.status === "resolved" || m.status === "void")
+          .map((m) => m.id),
+      ),
+    [state?.markets],
+  );
+  useEffect(() => {
+    if (chainMode) roomChain.markResolved(resolvedMarketIds);
+  }, [chainMode, resolvedMarketIds, roomChain.markResolved]);
 
   const teams = useMemo(() => resolveTeams(game?.gameId, game ?? null), [game]);
 
@@ -192,8 +232,12 @@ export default function FriendsRoomScreen() {
     router.replace("/(tabs)");
   };
 
-  const onBet = (m: RoomMarket, side: "YES" | "NO") => {
-    placeBet(m.id, side, stake);
+  const onBet = async (m: RoomMarket, side: "YES" | "NO") => {
+    if (!chainMode) return;
+    const vm = toMarketVM(m, now);
+    if (!vm.onChain) return;
+    const ok = await roomChain.placeBet(vm, side, store.stake);
+    if (ok) placeBet(m.id, side, store.stake);
   };
 
   const onReveal = (r: FriendsRoomReveal) => {
@@ -212,6 +256,8 @@ export default function FriendsRoomScreen() {
     (m.status === "open" || m.status === "locked");
 
   const fulltime = phase === "fulltime";
+  const canMakeMarket = activeMarkets.length === 0 && !waiting && !fulltime;
+
   const winner = useMemo(() => {
     if (!fulltime || players.length === 0) return undefined;
     const top = players[0];
@@ -221,27 +267,27 @@ export default function FriendsRoomScreen() {
 
   return (
     <Screen scroll padded={false} vignette={fulltime ? "gold" : "yes"}>
-      {/* slim header: room code + leave */}
-      <View style={styles.header}>
-        <IconButton accessibilityLabel="Leave room" onPress={leave}>
-          <IconBack size={20} color={colors.textPrimary} />
-        </IconButton>
-        <View style={styles.headerCenter}>
-          <Text style={styles.brand}>FRIENDS</Text>
-          <Chip label={`ROOM ${code}`} tone="info" />
-        </View>
-        <Button
-          label="Leave"
-          onPress={leave}
-          variant="ghost"
-          size="sm"
-          haptic="tap"
-        />
-      </View>
+      {/* slim header: FRIENDS title, leave on the back glyph, the room code chip
+          + wallet pill in the right slot. */}
+      <UnifiedHeader
+        variant="slim"
+        title="FRIENDS"
+        onBack={leave}
+        style={styles.header}
+        right={
+          <View style={styles.headerRight}>
+            <Chip label={`ROOM ${code}`} tone="info" />
+            <View style={styles.walletPill}>
+              <Text style={styles.walletValue}>{bal.format(bal.amount)}</Text>
+              <Text style={styles.walletLabel}>WALLET</Text>
+            </View>
+          </View>
+        }
+      />
 
       <View style={styles.body}>
         {/* connection / error state */}
-        {room.conn === "error" || room.error ? (
+        {room.conn === "error" && room.error ? (
           <View style={styles.gutter}>
             <Banner
               tone="danger"
@@ -258,7 +304,7 @@ export default function FriendsRoomScreen() {
             scoreHome={game?.scoreHome ?? 0}
             scoreAway={game?.scoreAway ?? 0}
             clock={game?.clock ?? "0'"}
-            momentum={openMarkets[0]?.team}
+            momentum={activeMarkets[0]?.team}
             live={!fulltime}
           />
         </View>
@@ -288,10 +334,10 @@ export default function FriendsRoomScreen() {
               </Text>
               <Text style={styles.finalSub} center>
                 {winner
-                  ? `${money(winner.balance)} vs ${money(
+                  ? `${stakeFormat(winner.balance)} vs ${stakeFormat(
                       players[1]?.balance ?? 0,
                     )}`
-                  : "You finished level on the money."}
+                  : "You finished level on session net."}
               </Text>
             </Surface>
           </View>
@@ -303,6 +349,8 @@ export default function FriendsRoomScreen() {
             players={players}
             meId={room.userId}
             compact={fulltime}
+            format={stakeFormat}
+            balanceLabel="NET"
           />
         </View>
 
@@ -330,36 +378,97 @@ export default function FriendsRoomScreen() {
             ))
           : null}
 
+        {chainMode && chain.configured ? (
+          <View style={styles.gutter}>
+            <FriendsChainPanel
+              bets={roomChain.bets}
+              error={roomChain.error}
+              onClaim={roomChain.claim}
+            />
+          </View>
+        ) : null}
+
+        {!fulltime && !waiting && !chainMode ? (
+          <View style={styles.gutter}>
+            <Banner
+              tone="info"
+              title="Wallet required"
+              message="Switch to real money and connect your wallet to bet with friends."
+            />
+          </View>
+        ) : null}
+
         {!fulltime && !waiting
-          ? openMarkets.map((m) => {
+          ? activeMarkets.map((m) => {
               const myBet = myBetByMarket[m.id];
-              const pending = myBet
-                ? {
-                    marketId: m.id,
-                    side: myBet.side,
-                    stake: myBet.stake,
-                    // Parimutuel has no fixed multiple — show the indicative
-                    // quote my stake earned from the pool at bet time (rake 0).
-                    estimatedMult: indicativeQuote(
-                      m.pool,
-                      myBet.side,
-                      myBet.stake,
-                      0,
-                    ).multiple,
-                  }
-                : null;
+              const vm = toMarketVM(m, now);
+              const chainBet = roomChain.getBet(m.id);
+              const liveOdds = roomChain.getLiveOdds(m.id);
+              const displayMarket =
+                chainMode && liveOdds
+                  ? {
+                      ...vm,
+                      oddsYes: liveOdds.oddsYes,
+                      oddsNo: liveOdds.oddsNo,
+                      pool: liveOdds.poolSol / SOL_PER_UNIT,
+                      yesShare: liveOdds.yesShare,
+                    }
+                  : vm;
+              const chainLocked =
+                chainMode && (roomChain.placing || !!chainBet);
+              const chainPreparing =
+                chainMode &&
+                !!m.onChain &&
+                !roomChain.isTwinReady(m.id) &&
+                !chainBet;
+              const marketClosing =
+                vm.phase === "open" &&
+                now >= vm.lockAt - bettingSafetyBufferMs(vm.windowMs);
+              const pending =
+                chainMode && chainBet
+                  ? {
+                      marketId: m.id,
+                      side: chainBet.side,
+                      stake: store.stake,
+                      estimatedMult: chainBet.estimatedMultiple,
+                    }
+                  : myBet
+                    ? {
+                        marketId: m.id,
+                        side: myBet.side,
+                        stake: myBet.stake,
+                        estimatedMult: indicativeQuote(
+                          m.pool,
+                          myBet.side,
+                          myBet.stake,
+                          ROOM_RAKE,
+                        ).multiple,
+                      }
+                    : null;
               return (
                 <View key={m.id} style={styles.gutter}>
+                  {chainPreparing ? (
+                    <Banner
+                      tone="info"
+                      message="On-chain market preparing — bet buttons unlock in a moment."
+                    />
+                  ) : null}
                   <MarketCard
-                    market={toMarketVM(m)}
+                    market={displayMarket}
                     now={now}
-                    stake={stake}
-                    onStakeChange={setStake}
+                    stake={store.stake}
+                    onStakeChange={store.setStake}
                     pending={pending}
-                    balance={me?.balance ?? 0}
-                    formatStake={money}
-                    onBet={(side) => onBet(m, side)}
+                    balance={bal.balanceInUnits}
+                    formatStake={stakeFormat}
+                    onBet={(side) => void onBet(m, side)}
                     hapticsEnabled={hapticsOn}
+                    betDisabled={
+                      !chainMode ||
+                      chainPreparing ||
+                      chainLocked ||
+                      marketClosing
+                    }
                   />
                   {canResolve(m) ? (
                     <ResolveControls
@@ -376,6 +485,7 @@ export default function FriendsRoomScreen() {
         {!fulltime &&
         !waiting &&
         openMarkets.length === 0 &&
+        activeMarkets.length === 0 &&
         reveals.length === 0 ? (
           <View style={styles.gutter}>
             <WaitingCard
@@ -386,7 +496,7 @@ export default function FriendsRoomScreen() {
         ) : null}
 
         {/* make-a-market + invite-more CTAs (live + friends present) */}
-        {!fulltime && !waiting ? (
+        {!fulltime && !waiting && canMakeMarket ? (
           <View style={[styles.gutter, styles.ctaStack]}>
             <Button
               label="＋ Make a market"
@@ -441,7 +551,13 @@ export default function FriendsRoomScreen() {
       />
 
       <Toast
-        message={room.conn === "connecting" ? "Connecting…" : null}
+        message={
+          room.conn === "connecting"
+            ? room.code
+              ? "Reconnecting to room…"
+              : "Connecting…"
+            : null
+        }
         tone="info"
         onHide={() => {}}
       />
@@ -467,7 +583,7 @@ function ResolveControls({
   };
   return (
     <View style={styles.resolveWrap}>
-      <Text style={styles.resolveLabel}>YOU SETTLE THIS ONE</Text>
+      <Text style={styles.resolveLabel}>YOU SETTLE THIS ONE · REAL ON-CHAIN</Text>
       <View style={styles.resolveRow}>
         <Button
           label="YES"
@@ -501,19 +617,15 @@ function ResolveControls({
 }
 
 const styles = StyleSheet.create({
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.sm,
-  },
-  headerCenter: { alignItems: "center", gap: 5 },
-  brand: {
+  header: { paddingBottom: spacing.sm },
+  headerRight: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  walletPill: { minWidth: 78, alignItems: "flex-end", paddingVertical: 4 },
+  walletValue: { ...type.mono, fontSize: 14, color: colors.textPrimary },
+  walletLabel: {
     ...type.overline,
-    fontSize: 10,
+    fontSize: 8,
     color: colors.textFaint,
-    letterSpacing: 2,
+    marginTop: 1,
   },
   body: { gap: spacing.md, marginTop: spacing.xs },
   gutter: { paddingHorizontal: spacing.lg },

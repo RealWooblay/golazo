@@ -38,24 +38,31 @@ export function CountdownRing({
   fraction,
   seconds,
   locked = false,
+  urgent = true,
   hapticsEnabled = true,
+  /** True when betting closed — show the score-window countdown (not ⏳). */
+  lockedPhase = false,
 }: {
   fraction: number;
   seconds: number;
   locked?: boolean;
+  /** When false, ring stays calm (closing buffer — no urgent pulse). */
+  urgent?: boolean;
   hapticsEnabled?: boolean;
+  lockedPhase?: boolean;
 }) {
   const f = Math.max(0, Math.min(1, fraction));
   const secsLeft = Math.max(0, Math.ceil(seconds));
-  const urgent = !locked && secsLeft <= URGENT_AT && secsLeft > 0;
+  const showUrgent = urgent && !locked && secsLeft <= URGENT_AT && secsLeft > 0;
+  const showResolveCountdown = lockedPhase && secsLeft > 0;
 
   // dashoffset grows as time drains (0 = full ring → CIRC = empty).
   const offset = useSharedValue(CIRC * (1 - f));
   useEffect(() => {
-    offset.value = withTiming(CIRC * (1 - (locked ? 0 : f)), {
+    offset.value = withTiming(CIRC * (1 - (locked && !lockedPhase ? 0 : f)), {
       duration: dur.instant,
     });
-  }, [f, locked, offset]);
+  }, [f, locked, lockedPhase, offset]);
 
   const ringProps = useAnimatedProps(() => ({
     strokeDashoffset: offset.value,
@@ -64,7 +71,7 @@ export function CountdownRing({
   // Urgency pulse: a gentle breathing scale on the whole ring in the last 3s.
   const pulse = useSharedValue(1);
   useEffect(() => {
-    if (urgent) {
+    if (showUrgent) {
       pulse.value = withRepeat(
         withSequence(
           withTiming(1.09, { duration: dur.pulse / 2 }),
@@ -78,7 +85,7 @@ export function CountdownRing({
       pulse.value = withTiming(1, { duration: dur.fast });
     }
     return () => cancelAnimation(pulse);
-  }, [urgent, pulse]);
+  }, [showUrgent, pulse]);
 
   const pulseStyle = useAnimatedStyle(() => ({
     transform: [{ scale: pulse.value }],
@@ -87,18 +94,20 @@ export function CountdownRing({
   // Haptic tick on each whole-second boundary inside the urgent window.
   const lastTick = useRef<number>(-1);
   useEffect(() => {
-    if (urgent && secsLeft !== lastTick.current) {
+    if (showUrgent && secsLeft !== lastTick.current) {
       lastTick.current = secsLeft;
       if (hapticsEnabled) haptics.tap();
     }
-    if (!urgent) lastTick.current = -1;
-  }, [urgent, secsLeft, hapticsEnabled]);
+    if (!showUrgent) lastTick.current = -1;
+  }, [showUrgent, secsLeft, hapticsEnabled]);
 
-  const [from, to] = locked
+  const [from, to] = showResolveCountdown
     ? [colors.gold, colors.raw.goldDeep]
-    : urgent
-      ? [colors.gold, colors.raw.redDeep]
-      : [colors.primary, colors.cyan];
+    : locked
+      ? [colors.gold, colors.raw.goldDeep]
+      : showUrgent
+        ? [colors.gold, colors.raw.redDeep]
+        : [colors.primary, colors.cyan];
 
   return (
     <Animated.View style={[styles.ring, pulseStyle]}>
@@ -131,7 +140,16 @@ export function CountdownRing({
         />
       </Svg>
       <View style={styles.numWrap} pointerEvents="none">
-        {locked ? (
+        {showResolveCountdown ? (
+          <Text
+            style={[styles.num, styles.numResolve]}
+            allowFontScaling={false}
+          >
+            {secsLeft >= 60
+              ? `${Math.floor(secsLeft / 60)}:${String(secsLeft % 60).padStart(2, "0")}`
+              : secsLeft}
+          </Text>
+        ) : locked ? (
           <Text style={styles.lock}>⏳</Text>
         ) : (
           <Text
@@ -159,6 +177,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   num: { ...type.display, fontSize: 26, color: colors.textPrimary },
+  numResolve: { fontSize: 18, color: colors.gold },
   numUrgent: { color: colors.no },
   lock: { fontSize: 22 },
 });

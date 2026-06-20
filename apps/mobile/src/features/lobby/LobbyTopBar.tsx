@@ -12,13 +12,17 @@ import { CountUp, PressableScale } from "../_shared/primitives";
 export function LobbyTopBar({
   balance,
   format = money,
+  balanceLabel = "balance",
+  showAddCash = true,
   hapticsEnabled,
   onAddCash,
   onOpenProfile,
 }: {
   balance: number;
-  /** Formatter for the balance — SOL in chain mode, $ in sandbox. */
+  /** Formatter for the balance — SOL in chain mode, $ in sandbox, pts in play mode. */
   format?: (n: number) => string;
+  balanceLabel?: string;
+  showAddCash?: boolean;
   hapticsEnabled: boolean;
   onAddCash: () => void;
   onOpenProfile: () => void;
@@ -41,23 +45,25 @@ export function LobbyTopBar({
         <PressableScale
           haptic="tap"
           hapticsEnabled={hapticsEnabled}
-          onPress={onAddCash}
+          onPress={showAddCash ? onAddCash : onOpenProfile}
           hitSlop={4}
         >
           <View style={styles.balBlock}>
             <CountUp value={balance} format={format} style={styles.balValue} />
-            <Text style={styles.balLabel}>balance</Text>
+            <Text style={styles.balLabel}>{balanceLabel}</Text>
           </View>
         </PressableScale>
-        <PressableScale
-          haptic="select"
-          hapticsEnabled={hapticsEnabled}
-          onPress={onAddCash}
-        >
-          <View style={styles.addBtn}>
-            <Text style={styles.addText}>+ Add cash</Text>
-          </View>
-        </PressableScale>
+        {showAddCash ? (
+          <PressableScale
+            haptic="select"
+            hapticsEnabled={hapticsEnabled}
+            onPress={onAddCash}
+          >
+            <View style={styles.addBtn}>
+              <Text style={styles.addText}>+ Add cash</Text>
+            </View>
+          </PressableScale>
+        ) : null}
       </View>
     </View>
   );

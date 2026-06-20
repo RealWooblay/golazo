@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { StyleSheet, View } from "react-native";
+import { StyleSheet, useWindowDimensions, View } from "react-native";
 import Animated, {
   Easing,
   cancelAnimation,
@@ -21,6 +21,8 @@ import Svg, {
   Stop,
 } from "react-native-svg";
 import { colors, motion, radius, spacing, type } from "@/theme";
+import { POINTS_START_BALANCE } from "@golazo/core";
+import { pts } from "@/lib/format";
 import { Text } from "@/ui";
 import { GradientFill, Vignette } from "../_shared/primitives";
 
@@ -36,7 +38,16 @@ import { GradientFill, Vignette } from "../_shared/primitives";
  *                        ("Every match, every moment.")
  */
 
-const SIZE = 240;
+// The hero's design size. On short viewports we scale this down off the window
+// height so it never dominates the screen; a floor keeps it from collapsing.
+const SIZE_MAX = 240;
+const SIZE_MIN = 150;
+
+/** Responsive hero edge: ~34% of viewport height, clamped to [SIZE_MIN, SIZE_MAX]. */
+function useSceneSize() {
+  const { height } = useWindowDimensions();
+  return Math.max(SIZE_MIN, Math.min(SIZE_MAX, Math.round(height * 0.34)));
+}
 
 function SceneFrame({
   children,
@@ -45,10 +56,13 @@ function SceneFrame({
   children: React.ReactNode;
   tint?: string;
 }) {
+  const size = useSceneSize();
   return (
-    <View style={styles.frame}>
+    <View style={[styles.frame, { width: size, height: size }]}>
       <Vignette color={tint} opacity={0.18} cx="50%" cy="42%" />
-      <View style={styles.stage}>{children}</View>
+      <View style={[styles.stage, { width: size, height: size }]}>
+        {children}
+      </View>
     </View>
   );
 }
@@ -186,10 +200,12 @@ export function SceneMarketPop() {
   );
 }
 
-/** Slide 2 — the payout: a balance counts up with a coin burst. */
+/** Slide 2 — the payout: points count up with a coin burst. */
 export function SceneInstantPay() {
   const v = useSharedValue(0);
-  const [n, setN] = React.useState(0);
+  const [n, setN] = React.useState(POINTS_START_BALANCE);
+  const from = POINTS_START_BALANCE;
+  const to = POINTS_START_BALANCE + 242;
 
   useEffect(() => {
     const loop = () => {
@@ -200,23 +216,19 @@ export function SceneInstantPay() {
     };
     loop();
     const tick = setInterval(() => {
-      // count-up driven on JS for the displayed number (web-safe)
       const start = Date.now();
-      const from = 1000;
-      const to = 1242;
       const step = () => {
         const p = Math.min(1, (Date.now() - start) / 1000);
         setN(Math.round(from + (to - from) * (1 - Math.pow(1 - p, 3))));
         if (p < 1) requestAnimationFrame(step);
-        else setTimeout(() => setN(1000), 1300);
+        else setTimeout(() => setN(from), 1300);
       };
       requestAnimationFrame(step);
     }, 2500);
-    // kick once immediately
     const startNow = Date.now();
     const stepNow = () => {
       const p = Math.min(1, (Date.now() - startNow) / 1000);
-      setN(Math.round(1000 + 242 * (1 - Math.pow(1 - p, 3))));
+      setN(Math.round(from + (to - from) * (1 - Math.pow(1 - p, 3))));
       if (p < 1) requestAnimationFrame(stepNow);
     };
     requestAnimationFrame(stepNow);
@@ -224,17 +236,17 @@ export function SceneInstantPay() {
       cancelAnimation(v);
       clearInterval(tick);
     };
-  }, [v]);
+  }, [v, from, to]);
 
   return (
     <SceneFrame tint={colors.gold}>
       <View style={styles.payWrap}>
         <Text style={styles.payLabel}>YOU WON</Text>
         <Text style={styles.payValue} allowFontScaling={false}>
-          ${n.toLocaleString("en-US")}
+          {pts(n)}
         </Text>
         <View style={styles.payDelta}>
-          <Text style={styles.payDeltaText}>+$242 · 3.4x</Text>
+          <Text style={styles.payDeltaText}>+242 pts · 3.4x</Text>
         </View>
       </View>
       {/* coin burst */}
@@ -411,16 +423,18 @@ function PulseCore({ color }: { color: string }) {
 }
 
 const styles = StyleSheet.create({
+  // width/height are set inline (responsive, see useSceneSize); the min floor here
+  // guarantees the box can never flex-collapse to 0 even mid-measure.
   frame: {
-    width: SIZE,
-    height: SIZE,
+    minWidth: SIZE_MIN,
+    minHeight: SIZE_MIN,
     alignItems: "center",
     justifyContent: "center",
     alignSelf: "center",
   },
   stage: {
-    width: SIZE,
-    height: SIZE,
+    minWidth: SIZE_MIN,
+    minHeight: SIZE_MIN,
     alignItems: "center",
     justifyContent: "center",
   },

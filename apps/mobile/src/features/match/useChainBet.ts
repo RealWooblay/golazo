@@ -10,9 +10,10 @@
 // The off-chain market drives the UX (question, countdown, when it resolves);
 // the money is 100% on-chain. We show an indicative quote from the live
 // on-chain pool, then the PROGRAM pays the final proportional pool share.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { MarketVM } from "@/state/types";
 import { LAMPORTS_PER_SOL } from "@/features/chain/config";
+import { holdBeforeChainBet } from "@/features/chain/betHold";
 import type { UseChain } from "@/features/chain/useChain";
 import type { OnChainSide } from "@/features/chain/types";
 import { useStore } from "@/state/store";
@@ -21,10 +22,18 @@ import { useStore } from "@/state/store";
 const SOL_PER_UNIT = 0.01;
 /** Keep a little SOL back for tx fees when checking affordability. */
 const FEE_HEADROOM_SOL = 0.01;
+/** Poll until the operator's initialize_market tx lands on devnet. */
+const CHAIN_TWIN_POLL_MS = 1500;
+const CHAIN_TWIN_MAX_WAIT_MS = 45_000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const errMsg = (e: unknown) =>
-  e instanceof Error ? e.message : "On-chain action failed";
+const errMsg = (e: unknown) => {
+  const raw = e instanceof Error ? e.message : String(e);
+  if (/0x177[c-d]|InsufficientVaultFunds|601[23]/i.test(raw)) {
+    return "Vault short on devnet — retry claim in a few seconds (operator topping up).";
+  }
+  return raw || "On-chain action failed";
+};
 
 export interface ChainBetVM {
   marketSeed: number;
@@ -48,7 +57,7 @@ export interface ChainBetVM {
 export interface ChainOdds {
   oddsYes: number;
   oddsNo: number;
-  yesShare: number; // 0..100 for the split bar
+  yesShare: number; // 0-100 for the split bar
   poolSol: number;
 }
 
@@ -59,6 +68,8 @@ export interface UseChainBet {
   error: string | null;
   /** True when this market is a real on-chain market and the wallet is live. */
   active: boolean;
+  /** True once the on-chain twin account exists and bets can land. */
+  chainTwinReady: boolean;
   /** On-chain pool odds for the current market (null until the twin is readable). */
   liveOdds: ChainOdds | null;
   placeChainBet: (side: "YES" | "NO", stakeUnits: number) => Promise<void>;
@@ -82,19 +93,63 @@ export function useChainBet(
   const [funding, setFunding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [liveOdds, setLiveOdds] = useState<ChainOdds | null>(null);
-  const { mode, stake } = useStore();
+  const [chainTwinReady, setChainTwinReady] = useState(false);
+  const marketRef = useRef(market);
+  marketRef.current = market;
+  const { mode, stake, session } = useStore();
 
-  // Real on-chain betting only in LIVE mode. A demo game (offline) is play-money.
-  const active = chain.ready && mode === "live" && !!market?.onChain;
+  // Real on-chain betting only in LIVE + REAL money mode. Points mode uses the
+  // server-authoritative points pool; demo/offline is play-money.
+  const active =
+    chain.ready && mode === "live" && session.moneyMode === "real" && !!market?.onChain;
   const seed = market?.onChain?.marketSeed;
   const auth = market?.onChain?.authority;
+
+  // New market → clear stale errors from the previous twin.
+  useEffect(() => {
+    setError(null);
+    setChainTwinReady(false);
+  }, [market?.id, seed]);
+
+  // Poll until the operator's initialize_market lands so bets don't hit a missing PDA.
+  useEffect(() => {
+    if (!active || seed === undefined || !auth) {
+      setChainTwinReady(false);
+      return;
+    }
+    let cancelled = false;
+    const started = Date.now();
+    const poll = async () => {
+      try {
+        const m = await chain.fetchMarket(auth, seed);
+        if (cancelled) return;
+        if (m) {
+          setChainTwinReady(true);
+          return;
+        }
+        if (Date.now() - started > CHAIN_TWIN_MAX_WAIT_MS) {
+          setError(
+            "On-chain market is taking longer than usual — tap bet again or use play-money.",
+          );
+        }
+      } catch {
+        /* transient RPC blip */
+      }
+    };
+    void poll();
+    const id = setInterval(poll, CHAIN_TWIN_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [active, seed, auth, chain]);
 
   // Poll the on-chain pool so the card shows the REAL indicative odds for the
   // selected stake (not the bot-inflated off-chain pool). Stops once a bet is
   // placed / market gone.
   useEffect(() => {
-    if (!active || seed === undefined || !auth || bet) {
-      setLiveOdds(null);
+    if (!active || seed === undefined || !auth || bet || !chainTwinReady) {
+      if (!bet) setLiveOdds(null);
       return;
     }
     let cancelled = false;
@@ -124,7 +179,7 @@ export function useChainBet(
       cancelled = true;
       clearInterval(id);
     };
-  }, [active, seed, auth, bet, chain, stake]);
+  }, [active, seed, auth, bet, chain, stake, chainTwinReady]);
 
   // RESOLUTION: when our bet's off-chain market is no longer the one on screen
   // (it resolved → setMarket(null), or a new market opened), the on-chain twin
@@ -151,6 +206,20 @@ export function useChainBet(
     }
   }, [chain]);
 
+  const waitForChainTwin = useCallback(async (): Promise<boolean> => {
+    if (!auth || seed === undefined) return false;
+    const deadline = Date.now() + CHAIN_TWIN_MAX_WAIT_MS;
+    while (Date.now() < deadline) {
+      const m = await chain.fetchMarket(auth, seed);
+      if (m) {
+        setChainTwinReady(true);
+        return true;
+      }
+      await sleep(CHAIN_TWIN_POLL_MS);
+    }
+    return false;
+  }, [auth, seed, chain]);
+
   const placeChainBet = useCallback(
     async (side: "YES" | "NO", stakeUnits: number) => {
       const onChain = market?.onChain;
@@ -167,19 +236,36 @@ export function useChainBet(
       setPlacing(true);
       setError(null);
       try {
-        // The operator may still be confirming initialize_market; wait briefly.
-        let m = await chain.fetchMarket(authority, marketSeed);
-        for (let i = 0; !m && i < 5; i++) {
-          await sleep(1200);
-          m = await chain.fetchMarket(authority, marketSeed);
+        let ready = chainTwinReady;
+        if (!ready) {
+          setError("Preparing on-chain market…");
+          ready = await waitForChainTwin();
         }
-        if (!m) {
-          setError("On-chain market still settling in — try again in a second.");
+        if (!ready) {
+          setError(
+            "On-chain market not ready yet — wait a moment and tap again.",
+          );
           return;
         }
+
+        const hold = await holdBeforeChainBet(
+          () =>
+            marketRef.current?.id === market.id &&
+            marketRef.current?.phase === "open",
+        );
+        if (!hold.ok) {
+          setError(hold.reason ?? "Bet not accepted");
+          return;
+        }
+
+        const m = await chain.fetchMarket(authority, marketSeed);
+        if (!m) {
+          setError("On-chain market not found — tap bet again in a moment.");
+          setChainTwinReady(false);
+          return;
+        }
+
         const onChainSide: OnChainSide = side === "YES" ? "Yes" : "No";
-        // Indicative quote from the LIVE on-chain pool. The final claim payout
-        // floats until betting closes.
         const quote = chain.quoteBet(m, onChainSide, stakeLamports);
         const res = await chain.placeBetOnChain({
           authority,
@@ -187,6 +273,7 @@ export function useChainBet(
           side: onChainSide,
           stakeLamports,
         });
+        setError(null);
         setBet({
           marketSeed,
           authority,
@@ -206,7 +293,7 @@ export function useChainBet(
         setPlacing(false);
       }
     },
-    [market, chain, placing],
+    [market, chain, placing, chainTwinReady, waitForChainTwin],
   );
 
   const claimChainBet = useCallback(async () => {
@@ -214,12 +301,9 @@ export function useChainBet(
     setBet((b) => (b ? { ...b, claiming: true } : b));
     setError(null);
     try {
-      // The operator resolves the on-chain market around the same time the
-      // off-chain one resolves; if the resolve tx hasn't landed yet the claim
-      // reverts (MarketNotSettled) — retry a couple times before surfacing.
       let res = null as Awaited<ReturnType<UseChain["claim"]>> | null;
       let lastErr: unknown = null;
-      for (let i = 0; i < 4 && !res; i++) {
+      for (let i = 0; i < 6 && !res; i++) {
         try {
           res = await chain.claim({
             authority: bet.authority,
@@ -227,7 +311,7 @@ export function useChainBet(
           });
         } catch (e) {
           lastErr = e;
-          await sleep(1500);
+          await sleep(2500);
         }
       }
       if (!res) throw lastErr ?? new Error("Claim failed");
@@ -241,6 +325,7 @@ export function useChainBet(
             }
           : b,
       );
+      setError(null);
     } catch (e) {
       setError(errMsg(e));
       setBet((b) => (b ? { ...b, claiming: false } : b));
@@ -256,6 +341,7 @@ export function useChainBet(
     funding,
     error,
     active,
+    chainTwinReady,
     liveOdds,
     placeChainBet,
     claimChainBet,

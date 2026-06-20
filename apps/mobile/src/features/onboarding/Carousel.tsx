@@ -148,7 +148,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl,
     gap: spacing.xl,
   },
-  scene: { alignItems: "center", justifyContent: "center" },
+  // flex:1 so the scene reserves + fills the space above the copy and centers the
+  // hero. Without it the flex chain collapses this box to 0px and the hero (a
+  // fixed-size SceneFrame) is clipped to nothing on mobile.
+  scene: { flex: 1, alignSelf: "stretch", alignItems: "center", justifyContent: "center" },
   copy: { alignItems: "center", gap: spacing.sm },
   title: { color: colors.textPrimary, textAlign: "center" },
   body: { maxWidth: 320, marginTop: spacing.xs },

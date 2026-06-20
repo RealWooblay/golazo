@@ -9,12 +9,16 @@
     "services/*"
   ],
   "scripts": {
-    "test": "npm run test --workspace @golazo/core",
+    "test": "npm run test --workspace @golazo/core && npm run test --workspace @golazo/feed",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "feed": "npm run dev --workspace @golazo/feed",
     "mobile": "npm run start --workspace @golazo/mobile"
   },
   "engines": {
     "node": ">=18"
+  },
+  "comment:dependencies": "expo-router is pinned at the workspace root ONLY so it hoists next to the root-hoisted babel-preset-expo. babel-preset-expo gates its expo-router Babel transform on require.resolve('expo-router') from its own (root) location; with expo-router nested in apps/mobile/node_modules that resolve fails and the EXPO_ROUTER_APP_ROOT inlining is skipped, crashing the _ctx require.context transform. Keep in sync with apps/mobile.",
+  "dependencies": {
+    "expo-router": "~4.0.22"
   }
 }

@@ -1,48 +1,43 @@
 import React from "react";
 import { StyleSheet, TextInput, View } from "react-native";
+import { POINTS_START_BALANCE } from "@golazo/core";
 import { colors, radius, spacing, type } from "@/theme";
-import { money } from "@/lib/format";
+import { pts } from "@/lib/format";
 import { Button, Text } from "@/ui";
 import { GradientFill } from "../_shared/primitives";
 
 /**
- * StartPanel — the frictionless finish of onboarding (Rainbet-style: instant in,
- * link a wallet later). An optional display-name field, a clear "starter stack"
- * callout so the player knows they can play immediately, and the glowing primary
- * CTA. No required fields — the loop is the product.
+ * StartPanel — frictionless onboarding finish. Paper trade by default: live
+ * feed, fake points, global rank — no real money required.
  */
 export function StartPanel({
   name,
   onChangeName,
-  startBalance,
   onStart,
 }: {
   name: string;
   onChangeName: (v: string) => void;
-  startBalance: number;
   onStart: () => void;
 }) {
   return (
     <View style={styles.wrap}>
-      {/* starter stack callout */}
       <View style={styles.stack}>
         <GradientFill
-          colors={["rgba(0,229,138,0.16)", "rgba(22,198,255,0.08)"]}
+          colors={["rgba(255,199,58,0.14)", "rgba(22,198,255,0.08)"]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
         />
         <View style={styles.stackText}>
-          <Text style={styles.stackLabel}>STARTER STACK · ON THE HOUSE</Text>
+          <Text style={styles.stackLabel}>PAPER TRADE MODE</Text>
           <Text style={styles.stackValue} allowFontScaling={false}>
-            {money(startBalance)}
+            {pts(POINTS_START_BALANCE)}
           </Text>
-        </View>
-        <View style={styles.coin}>
-          <Text style={styles.coinGlyph}></Text>
+          <Text style={styles.stackSub}>
+            Live moments · fake points · real leaderboard
+          </Text>
         </View>
       </View>
 
-      {/* optional name */}
       <View style={styles.field}>
         <Text style={styles.fieldLabel}>WHAT SHOULD WE CALL YOU?</Text>
         <TextInput
@@ -60,7 +55,7 @@ export function StartPanel({
       </View>
 
       <Button
-        label="Start playing"
+        label="Start paper trading"
         onPress={onStart}
         variant="primary"
         size="lg"
@@ -69,7 +64,7 @@ export function StartPanel({
         haptic="win"
       />
       <Text preset="caption" faint center style={styles.fine}>
-        Play money to start. Link a wallet or cash out any time.
+        No real money. Switch to Real mode later for devnet SOL.
       </Text>
     </View>
   );
@@ -78,30 +73,17 @@ export function StartPanel({
 const styles = StyleSheet.create({
   wrap: { gap: spacing.lg },
   stack: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
     borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: "rgba(0,229,138,0.28)",
+    borderColor: "rgba(255,199,58,0.28)",
     overflow: "hidden",
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
   },
-  stackText: { gap: 2 },
-  stackLabel: { ...type.overline, color: colors.yes, fontSize: 9 },
+  stackText: { gap: 4 },
+  stackLabel: { ...type.overline, color: colors.gold, fontSize: 9 },
   stackValue: { ...type.display, color: colors.textPrimary, fontSize: 30 },
-  coin: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: colors.alpha.yes,
-    borderWidth: 1,
-    borderColor: "rgba(0,229,138,0.4)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  coinGlyph: { fontSize: 20 },
+  stackSub: { ...type.caption, color: colors.textMuted, fontSize: 12 },
   field: { gap: spacing.sm },
   fieldLabel: { ...type.overline, color: colors.textMuted, fontSize: 9 },
   input: {
