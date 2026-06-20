@@ -8,6 +8,7 @@
  *   • fixtures      — the mock slate + helpers (live/upcoming)
  */
 export { LobbyTopBar } from "./LobbyTopBar";
+export { MoneyModePicker } from "./MoneyModePicker";
 export { LiveHero } from "./LiveHero";
 export { FixtureRow } from "./FixtureRow";
 export { LobbySkeleton } from "./LobbySkeleton";

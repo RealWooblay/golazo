@@ -63,6 +63,36 @@ export function IconWallet({
   );
 }
 
+/** Rank / podium — play-mode leaderboard. */
+export function IconRank({
+  size = 24,
+  color = "#fff",
+  strokeWidth = 2,
+}: IconProps) {
+  return (
+    <Svg {...base(size)} fill="none">
+      <Path
+        d="M7 20V11l5-3 5 3v9"
+        stroke={color}
+        strokeWidth={strokeWidth}
+        strokeLinejoin="round"
+      />
+      <Path
+        d="M5 20h14"
+        stroke={color}
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+      />
+      <Path
+        d="M12 5l1.8 3.6 4 .6-2.9 2.8.7 4-3.6-1.9-3.6 1.9.7-4L6.2 9.2l4-.6L12 5z"
+        stroke={color}
+        strokeWidth={strokeWidth * 0.85}
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
 /** Profile / person. */
 export function IconProfile({
   size = 24,

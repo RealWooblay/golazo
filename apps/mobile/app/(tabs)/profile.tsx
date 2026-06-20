@@ -20,11 +20,15 @@ import {
   ToggleRow,
   filterLedger,
   lifetimeStats,
+  FeedOpsPanel,
+  useFeedOps,
   type LedgerFilter,
 } from "@/features/profile";
 import { Entrance } from "@/features/_shared/primitives";
-import { ScreenHeader } from "@/features/_shared/ScreenHeader";
+import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
+import { AccountCard } from "@/features/auth/AccountCard";
+import { useAccount } from "@/features/auth/useAccount";
 
 const FILTERS: { value: LedgerFilter; label: string }[] = [
   { value: "all", label: "All" },
@@ -34,6 +38,7 @@ const FILTERS: { value: LedgerFilter; label: string }[] = [
 
 export default function ProfileTab() {
   const router = useRouter();
+  const account = useAccount();
   const store = useStore();
   const hx = store.session.hapticsOn;
 
@@ -74,7 +79,11 @@ export default function ProfileTab() {
     setConfirmReset(false);
   }, [store, hx]);
 
+  // Profile is mode-independent: the page reads identically in every money/live
+  // mode. The one exception is the live-feed status line at the very bottom,
+  // which only has anything to report while the live feed is connected.
   const goLive = store.session.mode === "live";
+  const feedOps = useFeedOps(goLive);
 
   // Load a fresh DEMO game: flip to the offline simulator (play money) and open
   // the demo match. The sim starts 0-0 and auto-resets, so it's always fresh.
@@ -84,18 +93,23 @@ export default function ProfileTab() {
     router.push("/match/sim-arg-fra");
   }, [store, hx, router]);
 
+  // Signed-out (web, Privy on): show ONLY the sign-in card. This gate lives
+  // AFTER every hook above — an early return before any hook would change the
+  // hook count between renders when auth state flips, crashing the screen.
+  const needsSignIn =
+    account.enabled && account.ready && !account.authenticated;
+  if (needsSignIn) {
+    return (
+      <Screen vignette="gold">
+        <UnifiedHeader variant="screen" title="Profile" />
+        <AccountCard noTopMargin />
+      </Screen>
+    );
+  }
+
   return (
     <Screen vignette="gold">
-      <ScreenHeader
-        title="Profile"
-        accessory={
-          <Chip
-            label={goLive ? "LIVE FEED" : "SANDBOX"}
-            tone={goLive ? "live" : "neutral"}
-            dot={goLive}
-          />
-        }
-      />
+      <UnifiedHeader variant="screen" title="Profile" />
 
       <ProfileHero
         name={store.session.displayName ?? ""}
@@ -104,6 +118,9 @@ export default function ProfileTab() {
         stats={stats}
         onEditName={openEdit}
       />
+
+      {/* Account — Privy sign-in (recoverable, cross-device wallet) */}
+      <AccountCard />
 
       {/* History ledger */}
       <View style={styles.section}>
@@ -179,7 +196,7 @@ export default function ProfileTab() {
           <LinkRow
             glyph=""
             title="Demo match"
-            sub="Play a fresh simulated game — play money, no risk"
+            sub="Offline sim — practice the loop without the live feed"
             onPress={loadDemo}
             hapticsEnabled={hx}
           />
@@ -200,7 +217,7 @@ export default function ProfileTab() {
           <LinkRow
             glyph="↺"
             title="Reset balance & history"
-            sub="Back to a fresh starter stack"
+            sub="Clear local history (wallet & rank id stay)"
             onPress={() => setConfirmReset(true)}
             hapticsEnabled={hx}
             danger
@@ -208,9 +225,14 @@ export default function ProfileTab() {
         </SettingsGroup>
       </View>
 
-      <Text preset="caption" faint center style={styles.version}>
-        GOLAZO
-      </Text>
+      {goLive ? (
+        <FeedOpsPanel
+          health={feedOps.health}
+          metrics={feedOps.metrics}
+          error={feedOps.error}
+          onRefresh={feedOps.refresh}
+        />
+      ) : null}
 
       {/* Name editor */}
       <Sheet open={editing} onClose={() => setEditing(false)}>
@@ -248,8 +270,8 @@ export default function ProfileTab() {
         <View style={styles.sheet}>
           <Text preset="subtitle">Reset everything?</Text>
           <Text preset="body" muted>
-            This wipes your balance back to the starter stack and clears every
-            bet and transaction. Can&apos;t be undone.
+            This wipes your local bet history and sandbox balance. Your wallet
+            address and paper-trade rank id are kept.
           </Text>
           <View style={styles.confirmBtns}>
             <Button
@@ -322,7 +344,6 @@ const styles = StyleSheet.create({
     borderColor: colors.hairline,
     borderRadius: radius.lg,
   },
-  version: { marginTop: spacing.xl, marginBottom: spacing.sm },
   sheet: { gap: spacing.md, paddingBottom: spacing.md },
   input: {
     ...type.subtitle,

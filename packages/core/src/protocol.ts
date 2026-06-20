@@ -1,6 +1,7 @@
 import type { GameState, Outcome, Side, Team } from './types';
 import type { Market } from './engine';
 import type { RoomMarket, RoomState } from './rooms';
+import type { PointsMarketSnapshot, PointsPlayer } from './points';
 
 /**
  * Wire protocol shared by the feed service (server) and the mobile app (client).
@@ -10,6 +11,9 @@ import type { RoomMarket, RoomState } from './rooms';
 export type ServerMessage =
   | { t: 'game'; game: GameState }
   | { t: 'commentary'; text: string; ts: number }
+  // The agent's live read of who's pressing — drives the session momentum bar.
+  // `bar` is the side to lean the UI toward (null = rest neutral).
+  | { t: 'momentum'; bar: Team | null; home: number; away: number }
   | { t: 'market_open'; market: Market }
   | { t: 'market_update'; market: Market } // pool / odds changed
   | { t: 'market_lock'; market: Market }
@@ -17,6 +21,20 @@ export type ServerMessage =
   // A held bet was NOT accepted (the play resolved inside the bet-delay window, or
   // the market closed first). The client must refund its optimistic debit.
   | { t: 'bet_rejected'; marketId: string; userId: string; stake: number; reason: string }
+  // ── Play mode (points) ────────────────────────────────────────────────────
+  | { t: 'points_state'; userId: string; balance: number; rank: number }
+  | { t: 'points_leaderboard'; players: PointsPlayer[] }
+  | { t: 'points_market_update'; snapshot: PointsMarketSnapshot }
+  | { t: 'points_bet_rejected'; marketId: string; userId: string; stake: number; reason: string }
+  | { t: 'points_refill_rejected'; userId: string; reason: string }
+  | {
+      t: 'points_settle';
+      marketId: string;
+      userId: string;
+      payout: number;
+      outcome: Outcome;
+      balance: number;
+    }
   // ── Friends mode (rooms) ──────────────────────────────────────────────────
   // Authoritative room snapshot (players w/ points, phase, markets). Sent on join,
   // on any roster/points/phase change, and after every room market resolve.
@@ -29,6 +47,10 @@ export type ServerMessage =
 export type ClientMessage =
   | { t: 'hello'; userId: string }
   | { t: 'bet'; marketId: string; side: Side; stake: number; userId: string }
+  // ── Play mode (points) ────────────────────────────────────────────────────
+  | { t: 'points_hello'; userId: string; name: string }
+  | { t: 'points_bet'; marketId: string; side: Side; stake: number; userId: string }
+  | { t: 'points_refill'; userId: string }
   // ── Friends mode (rooms) ──────────────────────────────────────────────────
   | { t: 'room_create'; userId: string; name: string }
   | { t: 'room_join'; userId: string; name: string; code: string }

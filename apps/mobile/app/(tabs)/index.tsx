@@ -5,25 +5,31 @@
 // rich tappable rows, and a trending-parlay teaser for flair. Brief skeleton on
 // first paint + pull-to-refresh, a thoughtful empty state if nothing's live.
 // Everything is play-data (src/features/lobby/fixtures) and web-safe.
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useStore } from "@/state/store";
 import { colors, MAX_WIDTH, radius, spacing, type } from "@/theme";
-import { GrainOverlay, Pressable, Surface, Text, Vignette } from "@/ui";
+import { GrainOverlay, Pressable, Surface, Text, Vignette, Button, Toast } from "@/ui";
 import { haptics } from "@/ui/haptics";
+import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
+import { CountUp, PressableScale } from "@/features/_shared/primitives";
 import {
   FixtureRow,
   LiveHero,
   LobbySkeleton,
-  LobbyTopBar,
+  MoneyModePicker,
   liveFixtures,
   upcomingFixtures,
   type Fixture,
 } from "@/features/lobby";
+import { usePointsLeaderboardSync } from "@/features/points/usePointsLeaderboardSync";
+import { usePointsRefill } from "@/features/points/usePointsRefill";
 import { useLobbyFixtures } from "@/features/lobby/useEspnFixtures";
 import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
+import { useAccount } from "@/features/auth/useAccount";
+import type { MoneyMode } from "@/state/types";
 import {
   Entrance,
   EmptyLobby,
@@ -47,7 +53,35 @@ export default function PlayTab() {
       if (store.mode !== "live") store.setMode("live");
     }, [store]),
   );
-  const bal = useDisplayBalance(); // real SOL in chain mode, play $ otherwise
+  const bal = useDisplayBalance();
+  const account = useAccount();
+  const playMode = store.session.moneyMode === "points";
+
+  // Seamless real-money entry: tapping "Real" while signed out opens the Privy
+  // login (which silently mints the Solana wallet) instead of switching into a
+  // walletless real mode. Once signed in, finish the switch — the chain layer
+  // wires up the Privy wallet automatically.
+  const [wantsReal, setWantsReal] = useState(false);
+  useEffect(() => {
+    if (wantsReal && account.authenticated) {
+      store.setMoneyMode("real");
+      setWantsReal(false);
+    }
+  }, [wantsReal, account.authenticated, store]);
+  const onModeChange = useCallback(
+    (mode: MoneyMode) => {
+      if (mode === "real" && account.enabled && !account.authenticated) {
+        setWantsReal(true);
+        account.login();
+        return;
+      }
+      store.setMoneyMode(mode);
+    },
+    [account, store],
+  );
+
+  usePointsLeaderboardSync(playMode);
+  const pointsRefill = usePointsRefill();
   const { fixtures, loading, refresh } = useLobbyFixtures();
   const [refreshing, setRefreshing] = useState(false);
 
@@ -96,12 +130,23 @@ export default function PlayTab() {
         style={[styles.topBarWrap, { paddingTop: insets.top + spacing.xs }]}
       >
         <View style={styles.column}>
-          <LobbyTopBar
-            balance={bal.amount}
-            format={bal.format}
-            hapticsEnabled={hx}
-            onAddCash={addCash}
-            onOpenProfile={() => router.push("/(tabs)/profile")}
+          {/* Brand row routed through UnifiedHeader for a consistent family with
+              the match / wallet / profile screens. The balance + Add-cash pill
+              live in the right slot — same behaviour as the old LobbyTopBar:
+              the balance opens add-cash (sandbox) or profile (play). */}
+          <UnifiedHeader
+            variant="tab"
+            right={
+              <BalancePill
+                balance={bal.amount}
+                format={bal.format}
+                balanceLabel={playMode ? "points" : "balance"}
+                showAddCash={!playMode}
+                hapticsEnabled={hx}
+                onAddCash={addCash}
+                onOpenProfile={() => router.push("/(tabs)/profile")}
+              />
+            }
           />
         </View>
       </View>
@@ -120,6 +165,28 @@ export default function PlayTab() {
         }
       >
         <View style={styles.column}>
+          {/* Give the Real/Paper switch room to breathe: vertical padding so it
+              doesn't crowd the header above or the content below, and horizontal
+              gutter so it doesn't hug the screen edges. (Its own colours are
+              owned by the MoneyModePicker component.) */}
+          <View style={styles.modePickerWrap}>
+            <MoneyModePicker
+              value={store.session.moneyMode}
+              onChange={onModeChange}
+              hapticsEnabled={hx}
+            />
+          </View>
+          {playMode && pointsRefill.needsRefill ? (
+            <View style={styles.refillWrap}>
+              <Button
+                label={pointsRefill.loading ? "Reloading…" : "Out of points — reload"}
+                onPress={pointsRefill.refill}
+                variant="secondary"
+                fullWidth
+                disabled={pointsRefill.loading}
+              />
+            </View>
+          ) : null}
           <View style={styles.body}>
             {loading ? (
               <LobbySkeleton />
@@ -216,9 +283,80 @@ export default function PlayTab() {
       </ScrollView>
 
       <GrainOverlay opacity={0.035} />
+      <Toast
+        message={pointsRefill.message}
+        tone="info"
+        onHide={pointsRefill.clearMessage}
+      />
     </View>
   );
 }
+
+/**
+ * BalancePill — the lobby header's right slot: an animated count-up balance
+ * (taps to add-cash in sandbox, profile in play) and a "+ Add cash" pill. Lifted
+ * out of the old LobbyTopBar's right block unchanged so behaviour is identical;
+ * the brand row itself now comes from UnifiedHeader.
+ */
+function BalancePill({
+  balance,
+  format,
+  balanceLabel,
+  showAddCash,
+  hapticsEnabled,
+  onAddCash,
+  onOpenProfile,
+}: {
+  balance: number;
+  format: (n: number) => string;
+  balanceLabel: string;
+  showAddCash: boolean;
+  hapticsEnabled: boolean;
+  onAddCash: () => void;
+  onOpenProfile: () => void;
+}) {
+  return (
+    <>
+      <PressableScale
+        haptic="tap"
+        hapticsEnabled={hapticsEnabled}
+        onPress={showAddCash ? onAddCash : onOpenProfile}
+        hitSlop={4}
+      >
+        <View style={balStyles.block}>
+          <CountUp value={balance} format={format} style={balStyles.value} />
+          <Text style={balStyles.label}>{balanceLabel}</Text>
+        </View>
+      </PressableScale>
+      {showAddCash ? (
+        <PressableScale
+          haptic="select"
+          hapticsEnabled={hapticsEnabled}
+          onPress={onAddCash}
+        >
+          <View style={balStyles.addBtn}>
+            <Text style={balStyles.addText}>+ Add cash</Text>
+          </View>
+        </PressableScale>
+      ) : null}
+    </>
+  );
+}
+
+const balStyles = StyleSheet.create({
+  block: { alignItems: "flex-end" },
+  value: { ...type.mono, color: colors.textPrimary, fontSize: 20 },
+  label: { ...type.overline, color: colors.textMuted, fontSize: 9 },
+  addBtn: {
+    backgroundColor: colors.alpha.cyan,
+    borderWidth: 1,
+    borderColor: "rgba(22,198,255,0.45)",
+    borderRadius: radius.pill,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+  },
+  addText: { ...type.bodyStrong, color: colors.cyan, fontSize: 13 },
+});
 
 /**
  * FriendsEntry — the lobby's tasteful door into friends mode. A
@@ -295,8 +433,16 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.hairlineSoft,
   },
   column: { width: "100%", maxWidth: MAX_WIDTH, alignSelf: "center" },
+  // Breathing room for the Real/Paper mode switch: it sits clearly between the
+  // header and the content rather than hugging either edge.
+  modePickerWrap: {
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
+  },
   scroll: { alignItems: "center", flexGrow: 1 },
   body: { paddingHorizontal: spacing.lg, paddingTop: spacing.md },
+  refillWrap: { paddingHorizontal: spacing.lg, marginBottom: spacing.sm },
   section: { marginTop: spacing.xxl },
   list: { gap: spacing.sm },
 });

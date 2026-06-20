@@ -20,6 +20,17 @@ export function multiple(x: number): string {
   return x.toFixed(2) + "x";
 }
 
+/** "5,000 pts" — play-mode balance. */
+export function pts(n: number): string {
+  return Math.round(n).toLocaleString("en-US") + " pts";
+}
+
+/** "+240 pts" / "−25 pts" */
+export function signedPts(n: number): string {
+  const sign = n >= 0 ? "+" : "−";
+  return sign + Math.abs(Math.round(n)).toLocaleString("en-US") + " pts";
+}
+
 /** Percentage of the pool on YES, used for the split bar width. */
 export function pct(part: number, whole: number): number {
   return whole > 0 ? (100 * part) / whole : 50;

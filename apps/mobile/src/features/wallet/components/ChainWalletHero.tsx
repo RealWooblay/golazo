@@ -7,7 +7,7 @@
 // balance instead (WalletHero).
 import React, { useState } from "react";
 import { StyleSheet, View } from "react-native";
-import { Button, Chip, Pressable, Surface, Text } from "@/ui";
+import { Button, Pressable, Surface, Text } from "@/ui";
 import { colors, radius, spacing, type } from "@/theme";
 import { money } from "@/lib/format";
 import { SOL_PER_UNIT } from "@/features/chain/useDisplayBalance";
@@ -16,19 +16,21 @@ import { copyToClipboard } from "../platform";
 export function ChainWalletHero({
   address,
   balanceSol,
-  cluster,
   airdropEnabled,
   onFund,
   onWithdraw,
   funding,
+  fundDisabled = false,
+  fundWaitSec = 0,
 }: {
   address?: string;
   balanceSol: number;
-  cluster: string;
   airdropEnabled: boolean;
   onFund: () => void;
   onWithdraw: () => void;
   funding: boolean;
+  fundDisabled?: boolean;
+  fundWaitSec?: number;
 }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
@@ -41,16 +43,10 @@ export function ChainWalletHero({
   };
 
   return (
-    <Surface radius={radius.xl} glow="yes" style={styles.card}>
-      <View style={styles.topRow}>
-        <Chip label="ON-CHAIN WALLET" tone="live" />
-        <Text style={styles.cluster}>{cluster}</Text>
-      </View>
-
+    <Surface radius={radius.xl} style={styles.card}>
       <Text style={styles.balance} allowFontScaling={false}>
         {money(balanceSol / SOL_PER_UNIT)}
       </Text>
-      <Text style={styles.sub}>Real on-chain balance · self-custodial</Text>
 
       {/* Deposit address = the real on-ramp: send SOL here to fund. Shown IN
           FULL (selectable, wrapping monospace) since this is the address the
@@ -69,11 +65,18 @@ export function ChainWalletHero({
       <View style={styles.actions}>
         {airdropEnabled ? (
           <Button
-            label="Fund (test SOL)"
+            label={
+              funding
+                ? "Funding…"
+                : fundDisabled && fundWaitSec > 0
+                  ? `Wait ${fundWaitSec}s`
+                  : "Fund (test SOL)"
+            }
             variant="primary"
             size="md"
             loading={funding}
             onPress={onFund}
+            disabled={fundDisabled || funding}
             style={styles.action}
           />
         ) : null}
@@ -92,15 +95,7 @@ export function ChainWalletHero({
 
 const styles = StyleSheet.create({
   card: { padding: spacing.lg, gap: 6, overflow: "hidden" },
-  topRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  cluster: { ...type.caption, fontSize: 11, color: colors.textMuted, textTransform: "uppercase", letterSpacing: 1 },
   balance: { ...type.display, fontSize: 44, color: colors.textPrimary, marginTop: spacing.sm },
-  unit: { ...type.display, fontSize: 22, color: colors.textMuted },
-  sub: { ...type.caption, fontSize: 12.5, color: colors.textMuted },
   addrRow: {
     flexDirection: "row",
     alignItems: "flex-start",

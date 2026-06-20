@@ -36,6 +36,10 @@ export interface Market {
   openedAt: number;
   windowMs: number;
   lockAt: number; // openedAt + windowMs
+  /** Ms after lockAt before force-settle; drives the locked-phase countdown. */
+  resolveWindowMs: number;
+  /** Absolute deadline for resolution (lockAt + resolveWindowMs). */
+  resolveAt: number;
   settlement?: Settlement;
   /**
    * On-chain twin identity, set ONLY in chain mode (the feed operator mirrors
@@ -96,6 +100,8 @@ export class MarketEngine {
     const yesSeed = this.baseSeed > 0 ? Math.round(this.baseSeed * t.trueProb) : 0;
     const noSeed = this.baseSeed > 0 ? Math.max(0, this.baseSeed - yesSeed) : 0;
     const openedAt = this.now();
+    const lockAt = openedAt + t.windowMs;
+    const resolveWindowMs = t.resolveWindowMs ?? 60_000;
     const m: Market = {
       id: `mkt_${++this.seq}`,
       gameId: t.gameId,
@@ -109,7 +115,9 @@ export class MarketEngine {
       bets: [],
       openedAt,
       windowMs: t.windowMs,
-      lockAt: openedAt + t.windowMs,
+      lockAt,
+      resolveWindowMs,
+      resolveAt: lockAt + resolveWindowMs,
       ...(t.onChain ? { onChain: t.onChain } : {}),
     };
     this.markets.set(m.id, m);

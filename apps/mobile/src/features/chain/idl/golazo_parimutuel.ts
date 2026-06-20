@@ -179,6 +179,11 @@ export const IDL = {
       name: "BetMarketMismatch",
       msg: "The provided bet does not belong to the resolved market.",
     },
+    {
+      code: 6012,
+      name: "InsufficientVaultFunds",
+      msg: "Vault has insufficient lamports to cover this payout/refund.",
+    },
   ],
   types: [
     {

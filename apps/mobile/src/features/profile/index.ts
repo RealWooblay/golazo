@@ -22,3 +22,5 @@ export {
   relativeTime,
 } from "./stats";
 export type { LifetimeStats, LedgerFilter } from "./stats";
+export { FeedOpsPanel } from "./FeedOpsPanel";
+export { useFeedOps } from "./useFeedOps";

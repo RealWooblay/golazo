@@ -35,8 +35,13 @@ export function BetButton({
   const grad = isYes
     ? [colors.raw.limeBright, colors.raw.limeDeep]
     : [colors.raw.redBright, colors.raw.redDeep];
+  // Solid fill so the button is never invisible if the SVG gradient fails to
+  // paint on web (YES uses near-black text — on a transparent button it vanishes).
+  const solid = isYes ? colors.raw.lime : colors.raw.red;
   const fg = isYes ? colors.onYes : "#ffffff";
-  const id = `betbtn-${side}`;
+  // Unique per-instance id — multiple cards (e.g. friends room) would otherwise
+  // collide on a shared `betbtn-YES`/`betbtn-NO`, breaking the fill on web.
+  const id = `betbtn-${side}-${React.useId().replace(/[^a-zA-Z0-9]/g, "")}`;
 
   // When a pick is in, the chosen side stays lit, the other goes flat.
   const dimmed = picked != null && picked !== side;
@@ -53,26 +58,35 @@ export function BetButton({
       accessibilityState={{ disabled: !!disabled }}
       style={[
         styles.btn,
+        { backgroundColor: solid },
         glow ? (isYes ? shadows.glowYes : shadows.glowNo) : null,
         dimmed && styles.dimmed,
       ]}
     >
-      <View style={[StyleSheet.absoluteFill, styles.clip]}>
-        <Svg width="100%" height="100%" pointerEvents="none">
+      <View style={[StyleSheet.absoluteFill, styles.clip]} pointerEvents="none">
+        <Svg
+          width="100%"
+          height="100%"
+          viewBox="0 0 1 1"
+          preserveAspectRatio="none"
+        >
           <Defs>
             <LinearGradient id={id} x1="0" y1="0" x2="0" y2="1">
               <Stop offset="0" stopColor={grad[0]} />
               <Stop offset="1" stopColor={grad[1]} />
             </LinearGradient>
           </Defs>
-          <Rect width="100%" height="100%" fill={`url(#${id})`} />
+          <Rect x="0" y="0" width="1" height="1" fill={`url(#${id})`} />
         </Svg>
       </View>
 
-      <Text style={[styles.word, { color: fg }]} allowFontScaling={false}>
+      <Text
+        style={[styles.word, styles.content, { color: fg }]}
+        allowFontScaling={false}
+      >
         {side}
       </Text>
-      <View style={styles.oddsRow}>
+      <View style={[styles.oddsRow, styles.content]}>
         <AnimatedNumber
           value={odds}
           format={multiple}
@@ -95,7 +109,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     overflow: "hidden",
   },
-  clip: { borderRadius: radius.lg, overflow: "hidden" },
+  clip: { borderRadius: radius.lg, overflow: "hidden", zIndex: 0 },
+  content: { zIndex: 1 },
   dimmed: { opacity: 0.4 },
   word: { ...type.display, fontSize: 22, letterSpacing: 1 },
   oddsRow: {

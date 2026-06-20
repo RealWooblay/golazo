@@ -14,6 +14,7 @@ export { StakeRow } from "./StakeRow";
 export { BetButton } from "./BetButton";
 export { RevealCard } from "./RevealCard";
 export { ResultsRail } from "./ResultsRail";
+export { ClosedMarketsList } from "./ClosedMarketsList";
 export { WaitingCard } from "./WaitingCard";
 export { FullTimeCard } from "./FullTimeCard";
 export { MatchFriendsBar } from "./MatchFriendsBar";

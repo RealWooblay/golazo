@@ -25,6 +25,8 @@ describe('MarketEngine lifecycle', () => {
     expect(m.pool.no).toBe(0);
     expect(eng.odds(m.id).prob).toBeCloseTo(0.5, 2);
     expect(m.lockAt).toBe(1000 + 6000);
+    expect(m.resolveWindowMs).toBe(60_000);
+    expect(m.resolveAt).toBe(m.lockAt + 60_000);
   });
 
   it('accepts bets while open and rejects them once locked', () => {

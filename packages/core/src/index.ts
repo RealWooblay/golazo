@@ -15,3 +15,4 @@ export * from './rooms';
 export * from './watcher';
 export * from './sim';
 export * from './protocol';
+export * from './points';

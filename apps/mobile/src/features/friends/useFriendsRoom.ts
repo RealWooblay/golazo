@@ -13,7 +13,7 @@ import {
   type Team,
 } from "@golazo/core";
 import { connectFeed, type FeedSocket } from "@/lib/ws";
-import { defaultLiveUrl } from "@/lib/config";
+import { useStore } from "@/state/store";
 import { buildInviteLink } from "./invite";
 
 /**
@@ -71,7 +71,9 @@ export interface UseFriendsRoom {
   players: RoomPlayer[];
   me?: RoomPlayer;
   opponent?: RoomPlayer;
-  /** Markets currently open for betting (status === 'open'). */
+  /** Markets currently open or locked for betting (at most one). */
+  activeMarkets: RoomMarket[];
+  /** @deprecated use activeMarkets — kept for callers that only need status open */
   openMarkets: RoomMarket[];
   /** My current bet on each market, keyed by marketId. */
   myBetByMarket: Record<string, RoomBet | undefined>;
@@ -123,6 +125,8 @@ function readWebUid(): string | null {
 }
 
 export function useFriendsRoom(): UseFriendsRoom {
+  const { liveUrl } = useStore();
+
   // userId is fixed for the lifetime of this hook instance. On web we can read it
   // synchronously (per-tab via sessionStorage); on native we seed an in-memory id
   // now and reconcile with AsyncStorage on mount (per-install, stable across
@@ -145,6 +149,10 @@ export function useFriendsRoom(): UseFriendsRoom {
   const pendingRef = useRef<ClientMessage | null>(null);
   const codeRef = useRef<string | undefined>(undefined);
   codeRef.current = code;
+  /** Set once the user creates/joins — drives the persistent WS session + rejoin. */
+  const sessionActiveRef = useRef(false);
+  /** Name + room code to replay after a reconnect. */
+  const membershipRef = useRef<{ code?: string; name: string } | null>(null);
 
   // Native: reconcile the in-memory userId with the persisted per-install id.
   // (No-op on web, where sessionStorage already gave us a per-tab id.) We don't
@@ -194,93 +202,137 @@ export function useFriendsRoom(): UseFriendsRoom {
   );
 
   // ================================================================
-  // Connection lifecycle. LAZY: one socket, opened on the FIRST create/join and
-  // kept for the rest of the room session. This hook is mounted ONCE by
-  // FriendsRoomProvider (above the navigator), so the socket — and therefore the
-  // room membership — survives navigation between the entry, join, and room
-  // screens. (Per-screen hook instances would each open their own socket and the
-  // room would be dropped the moment the creating screen unmounted.)
+  // Connection lifecycle. LAZY: opens on the FIRST create/join, then STAYS UP
+  // with auto-reconnect + room rejoin (mobile browsers drop WS constantly).
   // ================================================================
-  const ensureSocket = useCallback((): FeedSocket => {
-    if (socketRef.current) return socketRef.current;
-    setConn("connecting");
-    setError(undefined);
+  const [sessionActive, setSessionActive] = useState(false);
 
-    const socket = connectFeed(defaultLiveUrl(), {
-      onOpen: () => {
-        setConn("connected");
-        setError(undefined);
-        // Flush a create/join frame that was queued before the socket opened.
-        if (pendingRef.current) {
-          socket.send(pendingRef.current);
-          pendingRef.current = null;
-        }
-      },
-      onClose: (reason) => {
-        socketRef.current = null;
-        setConn("error");
-        setError(reason);
-      },
-      onMessage: (msg) => {
-        switch (msg.t) {
-          // Global match frames — used for the scoreboard/clock/commentary the
-          // room overlays. We IGNORE the global `market_*` frames in friends mode
-          // (only `room_*` drives the room).
-          case "game":
-            setGame(msg.game);
-            break;
-          case "commentary":
-            setCommentary(msg.text);
-            break;
+  useEffect(() => {
+    if (!sessionActive) return;
 
-          // Authoritative room snapshot. Drives balances, roster, phase, markets.
-          case "room_state": {
-            const next = msg.state;
-            // Only adopt snapshots that include ME — guards against frames for a
-            // different room arriving on a shared socket.
-            const mine = next.players.some(
-              (p) => p.userId === effectiveUserIdRef.current,
-            );
-            if (!mine) break;
-            setState(next);
-            if (next.code !== codeRef.current) {
-              setCode(next.code);
-            }
-            break;
-          }
+    let cancelled = false;
+    let attempts = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
-          // Room markets: state is already carried in room_state, so the open/
-          // update frames are advisory. The RESOLVE frame is where we build MY
-          // reveal (the balances themselves come from the room_state broadcast).
-          case "room_market_resolve": {
-            if (msg.code !== codeRef.current) break;
-            const reveal = buildReveal(msg.market, effectiveUserIdRef.current);
-            if (reveal) {
-              setReveals((prev) =>
-                prev.some((r) => r.marketId === reveal.marketId)
-                  ? prev
-                  : [...prev, reveal],
+    const replayMembership = (socket: FeedSocket) => {
+      const m = membershipRef.current;
+      const c = codeRef.current;
+      if (c && m?.name) {
+        socket.send({
+          t: "room_join",
+          code: c,
+          userId: effectiveUserIdRef.current,
+          name: m.name,
+        });
+      } else if (pendingRef.current) {
+        socket.send(pendingRef.current);
+        pendingRef.current = null;
+      }
+    };
+
+    const onDrop = (reason: string) => {
+      if (cancelled) return;
+      socketRef.current = null;
+      attempts += 1;
+      setConn("connecting");
+      setError(
+        attempts >= 4 ? `Reconnecting (${reason})…` : undefined,
+      );
+      const delay = Math.min(8000, 1500 * Math.min(attempts, 5));
+      retryTimer = setTimeout(connect, delay);
+    };
+
+    const connect = () => {
+      if (cancelled) return;
+      setConn("connecting");
+
+      const socket = connectFeed(liveUrl, {
+        onOpen: () => {
+          if (cancelled) return;
+          attempts = 0;
+          setConn("connected");
+          setError(undefined);
+          socketRef.current = socket;
+          replayMembership(socket);
+        },
+        onClose: (reason) => onDrop(reason),
+        onMessage: (msg) => {
+          if (cancelled) return;
+          switch (msg.t) {
+            case "game":
+              setGame(msg.game);
+              break;
+            case "commentary":
+              setCommentary(msg.text);
+              break;
+            case "room_state": {
+              const next = msg.state;
+              const mine = next.players.some(
+                (p) => p.userId === effectiveUserIdRef.current,
               );
+              if (!mine) break;
+              setState(next);
+              if (next.code !== codeRef.current) {
+                setCode(next.code);
+              }
+              membershipRef.current = {
+                code: next.code,
+                name:
+                  next.players.find(
+                    (p) => p.userId === effectiveUserIdRef.current,
+                  )?.name ?? membershipRef.current?.name ?? "",
+              };
+              break;
             }
-            break;
+            case "room_market_resolve": {
+              if (msg.code !== codeRef.current) break;
+              const reveal = buildReveal(msg.market, effectiveUserIdRef.current);
+              if (reveal) {
+                setReveals((prev) =>
+                  prev.some((r) => r.marketId === reveal.marketId)
+                    ? prev
+                    : [...prev, reveal],
+                );
+              }
+              break;
+            }
+            case "room_error": {
+              if (msg.code && msg.code !== codeRef.current) break;
+              setError(msg.message);
+              break;
+            }
+            default:
+              break;
           }
+        },
+      });
+      socketRef.current = socket;
+    };
 
-          case "room_error": {
-            // Scope to our room if the server tagged it; otherwise surface it.
-            if (msg.code && msg.code !== codeRef.current) break;
-            setError(msg.message);
-            break;
-          }
+    connect();
 
-          // room_market_open / room_market_update: no extra work — the next
-          // room_state carries the canonical market list.
-          default:
-            break;
-        }
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      socketRef.current?.close();
+      socketRef.current = null;
+    };
+  }, [sessionActive, liveUrl]);
+
+  const ensureSocket = useCallback((): FeedSocket => {
+    if (!sessionActiveRef.current) {
+      sessionActiveRef.current = true;
+      setSessionActive(true);
+    }
+    if (socketRef.current) return socketRef.current;
+    // Socket is being opened by the effect — queue the frame for onOpen.
+    return {
+      send: (msg: ClientMessage) => {
+        pendingRef.current = msg;
+        return false;
       },
-    });
-    socketRef.current = socket;
-    return socket;
+      close: () => {},
+    };
   }, []);
 
   /** Send a frame now if the socket is open, else open it + queue to flush. */
@@ -295,6 +347,7 @@ export function useFriendsRoom(): UseFriendsRoom {
   // Close the socket when the provider unmounts (app teardown).
   useEffect(() => {
     return () => {
+      sessionActiveRef.current = false;
       socketRef.current?.close();
       socketRef.current = null;
     };
@@ -304,6 +357,7 @@ export function useFriendsRoom(): UseFriendsRoom {
 
   const createRoom = useCallback(
     (name: string) => {
+      membershipRef.current = { name };
       sendOrQueue({ t: "room_create", userId: effectiveUserIdRef.current, name });
     },
     [sendOrQueue],
@@ -312,8 +366,7 @@ export function useFriendsRoom(): UseFriendsRoom {
   const joinRoom = useCallback(
     (joinCode: string, name: string) => {
       const normalized = joinCode.trim().toUpperCase();
-      // Optimistically remember which room we're trying to join so room_state /
-      // room_error frames for it aren't filtered out before the first snapshot.
+      membershipRef.current = { code: normalized, name };
       setCode(normalized);
       sendOrQueue({
         t: "room_join",
@@ -334,8 +387,9 @@ export function useFriendsRoom(): UseFriendsRoom {
         userId: effectiveUserIdRef.current,
       });
     }
-    // Tear the socket down on leave so we don't leave an idle connection open;
-    // the next create/join reopens it. Clears the local room view immediately.
+    sessionActiveRef.current = false;
+    setSessionActive(false);
+    membershipRef.current = null;
     socketRef.current?.close();
     socketRef.current = null;
     pendingRef.current = null;
@@ -422,9 +476,18 @@ export function useFriendsRoom(): UseFriendsRoom {
 
   const isHost = me?.isHost ?? false;
 
+  const activeMarkets = useMemo<RoomMarket[]>(() => {
+    if (!state) return [];
+    const active = state.markets.filter(
+      (m) => m.status === "open" || m.status === "locked",
+    );
+    const latest = active.at(-1);
+    return latest ? [latest] : [];
+  }, [state]);
+
   const openMarkets = useMemo<RoomMarket[]>(
-    () => (state ? state.markets.filter((m) => m.status === "open") : []),
-    [state],
+    () => activeMarkets.filter((m) => m.status === "open"),
+    [activeMarkets],
   );
 
   const myBetByMarket = useMemo<Record<string, RoomBet | undefined>>(() => {
@@ -448,6 +511,7 @@ export function useFriendsRoom(): UseFriendsRoom {
     players,
     me,
     opponent,
+    activeMarkets,
     openMarkets,
     myBetByMarket,
     reveals,

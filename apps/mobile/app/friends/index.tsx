@@ -14,7 +14,8 @@ import { useRouter } from "expo-router";
 import { ROOM_CODE_LEN } from "@golazo/core";
 import { useStore } from "@/state/store";
 import { colors, radius, spacing, type } from "@/theme";
-import { Banner, Button, Chip, IconBack, IconButton, Screen, Text } from "@/ui";
+import { Banner, Button, Chip, Screen, Text } from "@/ui";
+import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useFriendsRoomContext } from "@/features/friends";
 
 type Tab = "create" | "join";
@@ -65,17 +66,16 @@ export default function FriendsEntryScreen() {
 
   return (
     <Screen>
-      <View style={styles.head}>
-        <IconButton accessibilityLabel="Back" onPress={() => router.back()}>
-          <IconBack size={20} color={colors.textPrimary} />
-        </IconButton>
-        <Text style={styles.title}>Play with friends</Text>
-        <View style={styles.headSpacer} />
-      </View>
+      <UnifiedHeader
+        variant="slim"
+        title="Play with friends"
+        onBack={() => router.back()}
+      />
 
       <Text style={styles.blurb}>
-        Same live match, bet your friends for real $ — a private session settled
-        up at full time. Spin up a room and share the code.
+        Same live match, private on-chain session with up to 8 friends — real
+        devnet SOL parimutuel pools, session net on the leaderboard, and custom
+        markets you settle by hand.
       </Text>
 
       {/* tab toggle */}
@@ -120,7 +120,7 @@ export default function FriendsEntryScreen() {
             onChangeText={(t) =>
               setCode(t.replace(/[^a-zA-Z0-9]/g, "").toUpperCase())
             }
-            placeholder={"ABCD".slice(0, ROOM_CODE_LEN)}
+            placeholder={"X".repeat(ROOM_CODE_LEN)}
             placeholderTextColor={colors.textFaint}
             style={[styles.input, styles.codeInput]}
             maxLength={ROOM_CODE_LEN}
@@ -169,7 +169,7 @@ export default function FriendsEntryScreen() {
       <Banner
         tone="info"
         title="Your own private pool"
-        message="Bet your friends in a separate session ($1,000 to start) — winner takes the pool, settle up at full time. Your main balance isn't touched."
+        message="Bet your friends with real devnet SOL in a private room (2% fee) — session PnL on the leaderboard, up to 8 players. Your main wallet funds each bet."
         style={styles.note}
       />
     </Screen>
@@ -177,14 +177,6 @@ export default function FriendsEntryScreen() {
 }
 
 const styles = StyleSheet.create({
-  head: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: spacing.md,
-  },
-  title: { ...type.title, fontSize: 20, color: colors.textPrimary },
-  headSpacer: { width: 40 },
   blurb: {
     ...type.body,
     fontSize: 14,
