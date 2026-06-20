@@ -111,6 +111,22 @@ describe('SimMatch — goals are RARE (realistic scoreline)', () => {
   });
 });
 
+describe('SimMatch — half time', () => {
+  it('flips to halftime around 45\' (one event), then resumes live', () => {
+    const sim = new SimMatch({ startAt: 0, rng: lcg(5) });
+    const events = runFor(sim, 50 * MS_PER_GAME_MIN); // past 45' + the HT beat
+    // Exactly one half-time whistle per match.
+    expect(events.filter((e) => e.type === 'halftime').length).toBe(1);
+    // By ~50' the second half is underway again.
+    expect(sim.state.status).toBe('live');
+    // Sampling inside the HT window (45'–~48') sees the halftime status.
+    const fresh = new SimMatch({ startAt: 0, rng: lcg(5) });
+    fresh.due(0);
+    fresh.due(45 * MS_PER_GAME_MIN + 500); // 500ms into half time
+    expect(fresh.state.status).toBe('halftime');
+  });
+});
+
 describe('SimMatch — ends at 90 and AUTO-RESETS', () => {
   it('flips to final at 90\' and emits exactly one final event', () => {
     const sim = new SimMatch({ startAt: 0, rng: lcg(5) });

@@ -8,33 +8,33 @@
  *   • PRIVATE: only the friends in the room are in the pool (no bots).
  *   • SMALL FEE: a low ROOM_RAKE (2%) vs the main book's 6% — much smaller, but
  *     not free; it accrues to the treasury like the main rake.
- *   • SETTLE AT END: each player carries a running $ balance (a "tab"); markets
- *     resolve into that tab live (the leaderboard), and the single real payout is
- *     done ONCE at full time — so a real-money session is one settlement tx, not
- *     one per market.
+ *   • SESSION NET: each player carries a running session PnL on the leaderboard
+ *     (starts at 0). Real SOL stakes come from the wallet; wins/losses accrue as
+ *     net after each market resolves. Claim on-chain after each market.
  *
  * AI markets from the live feed are MIRRORED into the room (empty pool the friends
  * bet into) and resolve in lockstep with the match; either player can also author
  * a "bet this moment" market the host/author settles by hand.
  *
- * Money: balances are $ (a session buy-in). In demo/sandbox it's play money; the
- * real on-chain end-of-session settlement is wired separately.
+ * Money: real SOL from the player's wallet. Room balances are session net PnL only
+ * (not a separate tab). Friend markets settle on-chain when the host/author taps
+ * YES / NO / VOID.
  *
  * The SERVER (services/feed) is authoritative for balances + room state; clients
  * render whatever the latest `RoomState` says and animate reveals for flavour.
  * Pure types + helpers only — no I/O, so feed and app share one source of truth.
  */
-import type { Outcome, Side, Team } from './types';
+import type { Outcome, Side, Team, OnChainRef } from './types';
 import type { MarketStatus } from './engine';
 import { settle, type Pool, type Settlement } from './parimutuel';
 
 export type RoomPhase = 'lobby' | 'live' | 'fulltime';
 export type RoomMarketSource = 'ai' | 'friend';
 
-/** Session buy-in every player starts with ($; play money in demo). */
-export const ROOM_START_BALANCE = 1000;
+/** Session PnL baseline — leaderboard starts at zero; stakes come from the wallet. */
+export const ROOM_START_BALANCE = 0;
 /** Length of the human-shareable room code. */
-export const ROOM_CODE_LEN = 4;
+export const ROOM_CODE_LEN = 7;
 /** Default betting window for a friend-authored "bet this moment" market. */
 export const FRIEND_MARKET_WINDOW_MS = 30_000;
 /** Private friends pool fee — small (2%) vs the main book's 6%. NOT free; the
@@ -44,7 +44,7 @@ export const ROOM_RAKE = 0.02;
 export interface RoomPlayer {
   userId: string;
   name: string;
-  /** Running session $ balance (buy-in − staked + winnings) — the leaderboard. */
+  /** Running session net PnL (wins − losses) — the leaderboard. */
   balance: number;
   isHost: boolean;
   connected: boolean;
@@ -75,6 +75,8 @@ export interface RoomMarket {
   outcome?: Outcome;
   /** AI markets only: the global feed market id, so the server resolves in lockstep. */
   sourceMarketId?: string;
+  /** On-chain twin for real-SOL betting in chain mode (private per-room market). */
+  onChain?: OnChainRef;
 }
 
 export interface RoomState {

@@ -94,6 +94,11 @@ pub fn handler(ctx: Context<Claim>) -> Result<()> {
 
     // --- Pay out from the vault (if anything is owed) ---------------------
     if amount > 0 {
+        let rent_min = Rent::get()?.minimum_balance(0);
+        let vault_lamports = ctx.accounts.vault.to_account_info().lamports();
+        let available = vault_lamports.saturating_sub(rent_min);
+        require!(amount <= available, GolazoError::InsufficientVaultFunds);
+
         // Sign for the vault PDA. These seeds MUST match the `seeds=` on the
         // vault account above, with the stored bump appended.
         let market_key = market.key();

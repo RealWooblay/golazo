@@ -17,7 +17,7 @@ import {
 } from "@/theme";
 import { Blur } from "./Blur";
 import { Pressable } from "./Pressable";
-import { IconPlay, IconProfile, IconWallet, type IconProps } from "./icons";
+import { IconPlay, IconProfile, IconRank, IconWallet, type IconProps } from "./icons";
 
 /**
  * TabBar — the custom, blurred, floating bottom tab bar for the (tabs) group.
@@ -35,6 +35,7 @@ const TABS: Record<
   { label: string; Icon: React.ComponentType<IconProps>; tint: string }
 > = {
   index: { label: "Play", Icon: IconPlay, tint: colors.yes },
+  rank: { label: "Rank", Icon: IconRank, tint: colors.gold },
   wallet: { label: "Wallet", Icon: IconWallet, tint: colors.cyan },
   profile: { label: "Profile", Icon: IconProfile, tint: colors.gold },
 };

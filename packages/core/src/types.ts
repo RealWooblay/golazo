@@ -50,6 +50,12 @@ export type FeedEventType =
   | 'goal'
   | 'miss'
   | 'card'
+  | 'yellow_card'
+  | 'red_card'
+  | 'var_check'
+  | 'card_incident'
+  | 'red_card_incident'
+  | 'var_penalty_denied'
   | 'snap'
   | 'play_end'
   | 'halftime'
@@ -79,9 +85,14 @@ export interface OnChainRef {
 export interface MarketTrigger {
   gameId: string;
   question: string; // "Argentina on the attack — GOAL?"
-  kind: string; // 'goal_from_open_play' | 'penalty_scored' | 'corner_goal' | ...
+  kind: string; // 'chance_from_play' | 'goal_from_free_kick' | 'penalty_scored' | ...
   team?: Team;
   windowMs: number; // betting window length
+  /**
+   * Ms after lockAt the market must settle if no YES evidence (shown on the card
+   * as the "score window" countdown once betting closes).
+   */
+  resolveWindowMs?: number;
   /**
    * Model estimate of the YES probability. Used to seed the pool so opening
    * odds are sane, and (in the simulator only) to resolve the outcome.

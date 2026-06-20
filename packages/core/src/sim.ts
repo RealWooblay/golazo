@@ -76,7 +76,7 @@ const HALF_AT_MS = HALF_TIME_MIN * MS_PER_GAME_MIN;
 /** A SHORT half-time pause: betting closes, then the second half kicks off. Kept
  *  deliberately quick (and INSIDE the existing match window, so full-time timing
  *  is unchanged) — the clock keeps ticking under the HT badge. */
-const HALFTIME_BEAT_MS = 3000;
+const HALFTIME_BEAT_MS = 4000;
 /** Quiet beat between full time and the next kickoff, so the reset reads clean. */
 const RESET_BEAT_MS = 6000;
 /** Total length of one match CYCLE (play + final whistle beat). */
@@ -103,6 +103,8 @@ export class SimMatch {
   private cycle = 0;
   /** Guard so we emit exactly one `final` per cycle. */
   private finalEmitted = false;
+  /** Guard so we emit exactly one `halftime` per cycle. */
+  private halftimeEmitted = false;
 
   constructor(opts: { gameId?: string; home?: TeamRef; away?: TeamRef; rng?: Rng; startAt: number }) {
     this.rng = opts.rng ?? defaultRng;
@@ -127,10 +129,19 @@ export class SimMatch {
   /** Pop every event whose time has arrived, lazily scheduling the next phase. */
   due(now: number): FeedEvent[] {
     // Lifecycle FIRST: roll over to a fresh match if this cycle has elapsed, and
-    // ring the final whistle once we've crossed 90' of the current cycle. This
-    // is what makes the clock + score reset *together* and stops the score from
-    // ballooning past a real scoreline.
+    // queue the half-time + final-whistle events. This is what makes the clock +
+    // score reset *together* and stops the score ballooning past a real line.
     this.advanceLifecycle(now);
+
+    // Advance the display clock + lifecycle status off ELAPSED wall time within
+    // the current cycle (~1 game-min per 900ms, capped at 90'). Using per-cycle
+    // elapsed (not absolute `now`) is what lets the clock reset to 0' next match.
+    // Status (live → halftime → live → final) gates new market generation below,
+    // so betting pauses at half time and full time.
+    const intoCycle = Math.max(0, now - this.startAt - this.cycle * CYCLE_MS);
+    const mins = Math.min(FULL_TIME_MIN, Math.floor(intoCycle / MS_PER_GAME_MIN));
+    this.state.clock = `${mins}'`;
+    this.state.status = statusFor(intoCycle);
 
     if (now >= this.nextPhaseAt && this.state.status === 'live') this.schedulePhase(this.nextPhaseAt);
     const out: FeedEvent[] = [];
@@ -138,23 +149,20 @@ export class SimMatch {
     while (this.queue.length && this.queue[0]!.at <= now) {
       out.push(this.queue.shift()!.ev);
     }
-    // Advance the display clock off ELAPSED wall time within the current cycle
-    // (~1 game-min per 900ms, capped at 90'). Using the per-cycle elapsed (not
-    // absolute `now`) is what lets the clock reset to 0' on the next match.
-    const intoCycle = Math.max(0, now - this.startAt - this.cycle * CYCLE_MS);
-    const mins = Math.min(FULL_TIME_MIN, Math.floor(intoCycle / MS_PER_GAME_MIN));
-    this.state.clock = `${mins}'`;
     return out;
   }
 
   /**
-   * Drive the match clock past full time and into the next match.
+   * Drive the match clock through half time, full time, and into the next match.
+   * Status itself is DERIVED in `due()` via `statusFor` (so it auto-resumes after
+   * each pause); this method only handles the cycle ROLLOVER and queues the
+   * one-shot `halftime` / `final` commentary events. The phase scheduler is gated
+   * on status==='live', so no new markets open during either pause.
    *
-   * - At/after 90' of the current cycle: stop scoring (status -> 'final') and
-   *   emit ONE `final` event. The phase scheduler is gated on status==='live',
-   *   so no new goals/misses are generated during the whistle beat.
-   * - Once the whole cycle (match + beat) has elapsed: RESET clock and score to
-   *   a fresh 0-0 'live' match, advance the cycle counter, and re-kick-off.
+   * - At 45': queue ONE `halftime` event (a brief betting pause).
+   * - At 90': queue ONE `final` event (full time; scoring stops).
+   * - Once the whole cycle (match + reset beat) has elapsed: RESET clock + score
+   *   to a fresh 0-0 'live' match, advance the cycle counter, and re-kick-off.
    */
   private advanceLifecycle(now: number) {
     const elapsed = Math.max(0, now - this.startAt);
@@ -168,6 +176,7 @@ export class SimMatch {
       this.state.clock = "0'";
       this.state.status = 'live';
       this.finalEmitted = false;
+      this.halftimeEmitted = false;
       // Drop any stale resolutions still queued from the previous match so they
       // can't score into the fresh 0-0.
       this.queue = [];
@@ -176,13 +185,22 @@ export class SimMatch {
       this.nextPhaseAt = kickoffAt + 2500;
     }
 
-    // Within the current cycle: ring full time once we cross 90'.
     const intoCycle = elapsed - this.cycle * CYCLE_MS;
-    if (intoCycle >= MATCH_MS && this.state.status === 'live' && !this.finalEmitted) {
-      this.state.status = 'final';
+    const cycleStart = this.startAt + this.cycle * CYCLE_MS;
+
+    // Half time at 45' — one short whistle. (Status flips via statusFor.)
+    if (intoCycle >= HALF_AT_MS && !this.halftimeEmitted) {
+      this.halftimeEmitted = true;
+      this.push(cycleStart + HALF_AT_MS, {
+        type: 'halftime',
+        text: `Half time — ${this.state.home.abbr} ${this.state.scoreHome}–${this.state.scoreAway} ${this.state.away.abbr}`,
+      });
+    }
+
+    // Full time at 90' — one whistle, scoring stops.
+    if (intoCycle >= MATCH_MS && !this.finalEmitted) {
       this.finalEmitted = true;
-      const fullTimeAt = this.startAt + this.cycle * CYCLE_MS + MATCH_MS;
-      this.push(fullTimeAt, {
+      this.push(cycleStart + MATCH_MS, {
         type: 'final',
         text: `Full time! ${this.state.home.abbr} ${this.state.scoreHome}–${this.state.scoreAway} ${this.state.away.abbr}`,
       });

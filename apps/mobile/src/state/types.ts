@@ -19,6 +19,9 @@ import type { Outcome, Side } from "@golazo/core";
 /** Which feed the app is running against. */
 export type FeedMode = "offline" | "live";
 
+/** Real money (SOL/play $) vs server-authoritative play points. */
+export type MoneyMode = "real" | "points";
+
 /** Phase of the on-screen market card. */
 export type MarketPhase = "idle" | "open" | "locked" | "resolved";
 
@@ -40,6 +43,10 @@ export interface MarketVM {
   openedAt: number;
   lockAt: number;
   windowMs: number;
+  /** Ms after lockAt before force-settle — drives the locked countdown ring. */
+  resolveWindowMs: number;
+  /** Absolute deadline once betting closes (lockAt + resolveWindowMs). */
+  resolveAt: number;
   /**
    * On-chain twin identity (only in CHAIN MODE) — the operator authority + the
    * market_seed for the program PDAs. Present → the app places REAL bets on it.
@@ -67,6 +74,22 @@ export interface RevealVM {
   outcome: Outcome;
   won: boolean;
   payout: number; // 0 on a loss; stake on a VOID refund; capped win otherwise
+}
+
+/** A settled market in this session — final pool + odds, whether or not you bet. */
+export interface ClosedMarketVM {
+  marketId: string;
+  question: string;
+  outcome: Outcome;
+  oddsYes: number;
+  oddsNo: number;
+  poolYes: number;
+  poolNo: number;
+  poolTotal: number;
+  yesShare: number;
+  settledAt: number;
+  /** Set when you had a bet on this market — highlights your side in the list. */
+  userSide?: Side;
 }
 
 // ── Persisted ledger (Profile screen + history) ──────────────────────────────

@@ -56,7 +56,7 @@ const DISC = {
   place_bet: [222, 62, 67, 220, 63, 166, 126, 33],
   lock_market: [107, 8, 184, 91, 223, 13, 180, 38],
   resolve_market: [155, 23, 80, 173, 46, 74, 23, 239],
-  void_market: [200, 51, 122, 179, 28, 67, 197, 240],
+  void_market: [243, 175, 46, 124, 95, 101, 39, 69],
   claim: [62, 198, 214, 193, 213, 159, 108, 210],
 } as const;
 
@@ -263,24 +263,35 @@ export async function requestAirdrop(
     throw new Error("Airdrop is only available on devnet / testnet / localnet.");
   }
   const lamports = Math.round(sol * LAMPORTS_PER_SOL);
-  const signature = await ctx.connection.requestAirdrop(
-    ctx.wallet.publicKey,
-    lamports,
-  );
-  const latest = await ctx.connection.getLatestBlockhash("confirmed");
-  await ctx.connection.confirmTransaction(
-    {
-      signature,
-      blockhash: latest.blockhash,
-      lastValidBlockHeight: latest.lastValidBlockHeight,
-    },
-    "confirmed",
-  );
-  return {
-    signature,
-    explorerUrl: explorerTxUrl(signature, ctx.config.cluster),
-  };
+  let lastErr: unknown = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const signature = await ctx.connection.requestAirdrop(
+        ctx.wallet.publicKey,
+        lamports,
+      );
+      const latest = await ctx.connection.getLatestBlockhash("confirmed");
+      await ctx.connection.confirmTransaction(
+        {
+          signature,
+          blockhash: latest.blockhash,
+          lastValidBlockHeight: latest.lastValidBlockHeight,
+        },
+        "confirmed",
+      );
+      return {
+        signature,
+        explorerUrl: explorerTxUrl(signature, ctx.config.cluster),
+      };
+    } catch (e) {
+      lastErr = e;
+      if (attempt < 3) await sleep(1500 * (attempt + 1));
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("Airdrop failed");
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Withdraw SOL from the embedded wallet to an external address (cash out). */
 export async function withdrawSol(

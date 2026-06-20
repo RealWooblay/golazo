@@ -9,7 +9,7 @@
     "services/*"
   ],
   "scripts": {
-    "test": "npm run test --workspace @golazo/core",
+    "test": "npm run test --workspace @golazo/core && npm run test --workspace @golazo/feed",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "feed": "npm run dev --workspace @golazo/feed",
     "mobile": "npm run start --workspace @golazo/mobile"

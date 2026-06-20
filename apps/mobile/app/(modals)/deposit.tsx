@@ -24,10 +24,10 @@ import {
   FlowStatus,
   MethodHeaderTabs,
   MethodOption,
-  ModalHeader,
   useDepositAddress,
   useWallet,
 } from "@/features/wallet";
+import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 
 type Tab = "cash" | "crypto";
 
@@ -71,9 +71,9 @@ export default function DepositModal() {
   if (inFlow) {
     return (
       <Screen scroll={false} topInset>
-        <ModalHeader
-          chip="Add cash"
-          chipTone="info"
+        <UnifiedHeader
+          variant="modal"
+          chip={{ label: "Add cash", tone: "info" }}
           title="Deposit"
           onClose={close}
         />
@@ -94,9 +94,9 @@ export default function DepositModal() {
 
   return (
     <Screen topInset footerSpace={spacing.xl}>
-      <ModalHeader
-        chip="Add cash"
-        chipTone="info"
+      <UnifiedHeader
+        variant="modal"
+        chip={{ label: "Add cash", tone: "info" }}
         title="Deposit"
         onClose={close}
       />

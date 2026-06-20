@@ -165,7 +165,7 @@ export function ChainProvider({
   /** If true, attempt connect on mount when config is ok (default off — opt-in). */
   autoConnect?: boolean;
 }) {
-  const { setWallet, wallet } = useStore();
+  const { setWallet, wallet, hydrated } = useStore();
 
   const [status, setStatus] = useState<ChainStatus>("idle");
   const [reason, setReason] = useState<string | undefined>(
@@ -269,17 +269,42 @@ export function ChainProvider({
     setWallet({ connected: false, walletKind: "sandbox", address: undefined });
   }, [setWallet]);
 
-  // Optional auto-connect (opt-in). Also: if the store was persisted as an
-  // embedded wallet from a previous session, transparently reconnect so the
-  // address survives a reload without the user re-tapping "go on-chain".
+  // Restore the persisted wallet address immediately so the UI doesn't flash a
+  // new pubkey on refresh while connect() loads the secret from storage.
   useEffect(() => {
+    if (!hydrated) return;
+    let alive = true;
+    (async () => {
+      try {
+        const walletMod = await import("./wallet");
+        const addr = await walletMod.EmbeddedWallet.peekAddress();
+        if (!alive || !addr) return;
+        if (wallet.address === addr && wallet.walletKind === "embedded") return;
+        setWallet({
+          connected: true,
+          walletKind: "embedded",
+          address: addr,
+        });
+      } catch {
+        /* best-effort */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [hydrated, setWallet, wallet.address, wallet.walletKind]);
+
+  // Auto-connect once the store is hydrated (one shot).
+  const autoConnected = useRef(false);
+  useEffect(() => {
+    if (!hydrated || !chainConfig.ok || autoConnected.current) return;
+    if (status !== "idle") return;
     const shouldAuto =
-      chainConfig.ok &&
-      status === "idle" &&
-      (autoConnect || (wallet.connected && wallet.walletKind === "embedded"));
-    if (shouldAuto) void connect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      autoConnect || (wallet.connected && wallet.walletKind === "embedded");
+    if (!shouldAuto) return;
+    autoConnected.current = true;
+    void connect();
+  }, [hydrated, autoConnect, wallet.connected, wallet.walletKind, status, connect]);
 
   // Keep the on-chain balance fresh while connected. The wallet can be funded
   // externally (SOL sent to the deposit address) with no in-app action to

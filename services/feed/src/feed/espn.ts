@@ -37,8 +37,9 @@
  *       -> 'dangerous_attack'
  *     "attack", "forward", "into the box", "pressure", "building"
  *       -> 'attack'
- *   These are the "set moments" the watcher opens a market on. The matching
- *   structured goal/miss keyEvent (correlated by sequenceId) resolves it later.
+ *   These are the "set moments" the watcher opens a market on.
+ *   Commentary that shows a set-piece was TAKEN (saved, cleared, short pass)
+ *   is also emitted as resolver events (`miss`, `play_end`) to settle locked markets.
  *
  * Every emitted event carries `meta.sequenceId` so the orchestrator can pair an
  * attack with the goal/miss that decides it — exactly like the simulator does.
@@ -53,12 +54,14 @@
 
 import type { FeedEvent, FeedEventType, GameState, Team, TeamRef } from '@golazo/core';
 import type { FeedSource } from './index';
-import { COMMENTARY_PATTERNS } from '../ai/marketTuning';
+import { COMMENTARY_PATTERNS, classifyResolverCommentary, isPostShotCommentary, isPreShotBuildUp } from '../ai/marketTuning';
 
 const SCOREBOARD = (league: string) =>
   `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/scoreboard`;
-const SUMMARY = (league: string, eventId: string) =>
-  `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/summary?event=${encodeURIComponent(eventId)}`;
+const SUMMARY = (league: string, eventId: string, lang?: string) => {
+  const base = `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/summary?event=${encodeURIComponent(eventId)}&region=us`;
+  return lang ? `${base}&lang=${lang}` : base;
+};
 
 /** Network timeout for any single ESPN request. */
 const FETCH_TIMEOUT_MS = 6000;
@@ -100,6 +103,8 @@ export interface EspnKeyEvent {
   clock?: { displayValue?: string };
   team?: { id?: string };
   scoringPlay?: boolean;
+  /** ISO wall-clock when ESPN received the play — used for timing, not keywords. */
+  wallclock?: string;
 }
 export interface EspnSummary {
   commentary?: EspnCommentary[];
@@ -116,25 +121,37 @@ interface LiveGame {
 
 export interface EspnFeedOptions {
   league: string;
+  /** Commentary language: dual = EN keyEvents + ES+EN commentary merge. */
+  commentaryLang?: 'en' | 'es' | 'dual';
   /** Override for tests; defaults to global fetch (Node 18+). */
   fetchImpl?: typeof fetch;
+  /** Tests: emit first-poll backlog. Production: prime `seen` and skip history replay. */
+  replayHistory?: boolean;
 }
 
 export class EspnFeed implements FeedSource {
   readonly kind = 'espn' as const;
   private readonly league: string;
+  private readonly commentaryLang: 'en' | 'es' | 'dual';
   private readonly fetchImpl: typeof fetch;
 
   /** The game we're tracking, once `start()` finds a live one. */
   private game: LiveGame | undefined;
   /** Sequence ids we've already emitted, so polling doesn't double-fire. */
   private readonly seen = new Set<string>();
+  /** Bettable-moment keys (type+team+clock) — dedupes commentary/keyEvent twins. */
+  private readonly momentsSeen = new Set<string>();
   /** Monotonic counter for synthesising sequence ids when ESPN omits them. */
   private synthSeq = 0;
+  /** First poll primes `seen` without replaying the full match history. */
+  private primed = false;
+  private readonly replayHistory: boolean;
 
   constructor(opts: EspnFeedOptions) {
     this.league = opts.league;
+    this.commentaryLang = opts.commentaryLang ?? 'en';
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.replayHistory = opts.replayHistory ?? false;
   }
 
   /**
@@ -170,8 +187,18 @@ export class EspnFeed implements FeedSource {
   async poll(_now: number = Date.now()): Promise<FeedEvent[]> {
     if (!this.game) return [];
 
-    const summary = await this.getJson<EspnSummary>(SUMMARY(this.league, this.game.eventId));
+    const summary = await this.fetchSummary();
     if (!summary) return [];
+
+    // First poll after attach: ingest ESPN's cumulative backlog into `seen` only.
+    // Replaying 50+ minutes of chances would all be stale and blocks live openers.
+    if (!this.primed && !this.replayHistory) {
+      for (const ke of summary.keyEvents ?? []) this.normalizeKeyEvent(ke);
+      for (const { c, lang } of summary.commentary ?? []) this.normalizeCommentary(c, lang);
+      this.primed = true;
+      await this.refreshGameState();
+      return [];
+    }
 
     // Refresh score/clock/status opportunistically from the scoreboard so the
     // app's GameState stays current even between key events. Best-effort only.
@@ -188,12 +215,32 @@ export class EspnFeed implements FeedSource {
       const ev = this.normalizeKeyEvent(ke);
       if (ev) entries.push(toEntry(ev, ke.clock?.displayValue));
     }
-    for (const c of summary.commentary ?? []) {
-      const ev = this.normalizeCommentary(c);
+    for (const { c, lang } of summary.commentary ?? []) {
+      const ev = this.normalizeCommentary(c, lang);
       if (ev) entries.push(toEntry(ev, c.time?.displayValue));
     }
     entries.sort((a, b) => a.base - b.base || a.stopp - b.stopp || a.rank - b.rank);
-    return entries.map((e) => e.ev);
+
+    // Dedupe: ESPN publishes the same corner/penalty as commentary AND keyEvent
+    // (different sequence ids). Prefer the structured keyEvent in each batch.
+    const batchKeMoments = new Set<string>();
+    for (const { ev } of entries) {
+      if (ev.meta?.source === 'espn.keyEvent') {
+        const mk = momentKey(ev);
+        if (mk) batchKeMoments.add(mk);
+      }
+    }
+    const out: FeedEvent[] = [];
+    for (const { ev } of entries) {
+      const mk = momentKey(ev);
+      if (mk) {
+        if (this.momentsSeen.has(mk)) continue;
+        if (ev.meta?.source === 'espn.commentary' && batchKeMoments.has(mk)) continue;
+        this.momentsSeen.add(mk);
+      }
+      out.push(ev);
+    }
+    return out;
   }
 
   applyGoal(_team: Team): void {
@@ -208,7 +255,46 @@ export class EspnFeed implements FeedSource {
 
   async close(): Promise<void> {
     this.seen.clear();
+    this.momentsSeen.clear();
+    this.primed = false;
     this.game = undefined;
+  }
+
+  /** The ESPN event id we're tracking (undefined before start). */
+  currentEventId(): string | undefined {
+    return this.game?.eventId;
+  }
+
+  /**
+   * True when this match is over and we should look for the next live game.
+   * Status is refreshed on every poll via the scoreboard.
+   */
+  shouldRotate(): boolean {
+    return this.game?.state.status === 'final';
+  }
+
+  /**
+   * Switch to the next live ESPN game on the scoreboard. Clears per-match dedupe
+   * caches so the new fixture starts fresh. Returns false if nothing else is live.
+   */
+  async rotateToNextLive(): Promise<boolean> {
+    const board = await this.getJson<EspnScoreboard>(SCOREBOARD(this.league));
+    const currentId = this.game?.eventId;
+    const live = (board?.events ?? []).filter((e) => e.status?.type?.state === 'in' && e.id);
+
+    let pick = live.find((e) => e.id !== currentId);
+    if (!pick && this.game?.state.status === 'final') pick = live[0];
+    if (!pick?.id) return false;
+    if (pick.id === currentId && this.game?.state.status !== 'final') return false;
+
+    const parsed = parseGameState(pick);
+    if (!parsed) return false;
+
+    this.seen.clear();
+    this.momentsSeen.clear();
+    this.synthSeq = 0;
+    this.game = { eventId: pick.id, ...parsed };
+    return true;
   }
 
   // -------------------------------------------------------------------------
@@ -220,9 +306,50 @@ export class EspnFeed implements FeedSource {
     if (this.seen.has(seqId)) return undefined;
 
     const mapped = mapKeyEventType(ke);
+    const typeText = (ke.type?.text ?? '').trim();
+
+    // ESPN structured stoppage markers (drinks break, injury delay, etc.)
+    if (/^(start delay|inicio retrasado)$/i.test(typeText)) {
+      this.seen.add(seqId);
+      return {
+        gameId: this.game!.eventId,
+        ts: Date.now(),
+        type: 'calm',
+        text: ke.text || 'Stoppage in play',
+        meta: {
+          sequenceId: seqId,
+          source: 'espn.keyEvent',
+          clock: ke.clock?.displayValue,
+          delay: 'start',
+          ...(ke.wallclock ? { wallclock: ke.wallclock } : {}),
+        },
+      };
+    }
+    if (/^(end delay|fin del retraso)$/i.test(typeText)) {
+      this.seen.add(seqId);
+      return {
+        gameId: this.game!.eventId,
+        ts: Date.now(),
+        type: 'calm',
+        text: ke.text || 'Play resumes',
+        meta: {
+          sequenceId: seqId,
+          source: 'espn.keyEvent',
+          clock: ke.clock?.displayValue,
+          delay: 'end',
+          ...(ke.wallclock ? { wallclock: ke.wallclock } : {}),
+        },
+      };
+    }
+
     if (!mapped) {
       this.seen.add(seqId); // mark seen so we don't re-evaluate every poll
       return undefined;
+    }
+
+    let team = this.teamSide(ke.team?.id);
+    if (!team && (mapped === 'goal' || mapped === 'miss')) {
+      team = this.teamFromText(ke.text || ke.type?.text || '');
     }
 
     this.seen.add(seqId);
@@ -230,31 +357,50 @@ export class EspnFeed implements FeedSource {
       gameId: this.game!.eventId,
       ts: Date.now(),
       type: mapped,
-      ...(this.teamSide(ke.team?.id) ? { team: this.teamSide(ke.team?.id)! } : {}),
+      ...(team ? { team } : {}),
       text: ke.text || ke.type?.text || mapped,
-      meta: { sequenceId: seqId, source: 'espn.keyEvent', clock: ke.clock?.displayValue },
+      meta: {
+        sequenceId: seqId,
+        source: 'espn.keyEvent',
+        clock: ke.clock?.displayValue,
+        ...(ke.wallclock ? { wallclock: ke.wallclock } : {}),
+      },
     };
   }
 
-  private normalizeCommentary(c: EspnCommentary): FeedEvent | undefined {
-    const seqId = this.seqId('cm', c.sequence);
+  private normalizeCommentary(c: EspnCommentary, lang: 'en' | 'es' = 'en'): FeedEvent | undefined {
+    const seqId = this.seqId('cm', c.sequence, lang);
     if (this.seen.has(seqId)) return undefined;
 
     const text = (c.text ?? '').trim();
     if (!text) return undefined;
 
-    const type = classifyCommentary(text);
+    let type = classifyCommentary(text);
+    if (!type) type = classifyResolverCommentary(text);
+    if (!type && isAiCommentaryProbe(text)) type = 'attack';
     this.seen.add(seqId); // always mark seen; classification is deterministic
     if (!type) return undefined;
 
-    const team = this.teamFromText(text);
+    const awarded = parseAwardedTeamFromCommentary(
+      text,
+      this.game!.state.home.name,
+      this.game!.state.away.name,
+      this.game!.state.home.abbr,
+      this.game!.state.away.abbr,
+    );
+    const team = awarded ?? this.teamFromText(text);
     return {
       gameId: this.game!.eventId,
       ts: Date.now(),
       type,
       ...(team ? { team } : {}),
       text,
-      meta: { sequenceId: seqId, source: 'espn.commentary', clock: c.time?.displayValue },
+      meta: {
+        sequenceId: seqId,
+        source: 'espn.commentary',
+        clock: c.time?.displayValue,
+        lang,
+      },
     };
   }
 
@@ -267,9 +413,8 @@ export class EspnFeed implements FeedSource {
   }
 
   /**
-   * Attribute a commentary line to a team by matching its name in the prose
-   * ("Free kick, Mexico" → home/away). So markets read "Mexico free kick — GOAL?"
-   * not "They free kick — GOAL?", and resolution can team-match correctly.
+   * Fallback team attribution for open-play lines that name a side in prose.
+   * Set-pieces should use parseAwardedTeamFromCommentary first.
    */
   private teamFromText(text: string): Team | undefined {
     if (!this.game) return undefined;
@@ -282,9 +427,38 @@ export class EspnFeed implements FeedSource {
   }
 
   /** Stable per-event id; synthesise a monotonic one if ESPN omits sequence. */
-  private seqId(prefix: string, raw: number | string | undefined): string {
-    if (raw !== undefined && raw !== null && `${raw}` !== '') return `espn_${prefix}_${raw}`;
-    return `espn_${prefix}_synth_${++this.synthSeq}`;
+  private seqId(prefix: string, raw: number | string | undefined, lang?: string): string {
+    const langTag = lang ? `${lang}_` : '';
+    if (raw !== undefined && raw !== null && `${raw}` !== '') return `espn_${prefix}_${langTag}${raw}`;
+    return `espn_${prefix}_${langTag}synth_${++this.synthSeq}`;
+  }
+
+  /**
+   * Fetch summary payload. `dual` uses EN keyEvents (stable type labels) and merges
+   * ES+EN commentary — Spanish FIFA feeds are denser on build-up and fouls.
+   */
+  private async fetchSummary(): Promise<
+    { keyEvents: EspnKeyEvent[]; commentary: { c: EspnCommentary; lang: 'en' | 'es' }[] } | undefined
+  > {
+    const eventId = this.game!.eventId;
+    if (this.commentaryLang === 'dual') {
+      const [enSum, esSum] = await Promise.all([
+        this.getJson<EspnSummary>(SUMMARY(this.league, eventId, 'en')),
+        this.getJson<EspnSummary>(SUMMARY(this.league, eventId, 'es')),
+      ]);
+      if (!enSum && !esSum) return undefined;
+      return {
+        keyEvents: enSum?.keyEvents ?? esSum?.keyEvents ?? [],
+        commentary: mergeCommentary(enSum?.commentary, esSum?.commentary),
+      };
+    }
+    const lang = this.commentaryLang;
+    const sum = await this.getJson<EspnSummary>(SUMMARY(this.league, eventId, lang));
+    if (!sum) return undefined;
+    return {
+      keyEvents: sum.keyEvents ?? [],
+      commentary: (sum.commentary ?? []).map((c) => ({ c, lang })),
+    };
   }
 
   /** Re-read the scoreboard to keep score/clock/status fresh. Best-effort. */
@@ -336,6 +510,7 @@ const OPENER_TYPES: ReadonlySet<FeedEvent['type']> = new Set([
   'free_kick',
   'attack',
   'dangerous_attack',
+  'var_check',
 ]);
 
 /** Parse an ESPN clock ("45'" or "45+2'") into {base, stopp} for chronological sort. */
@@ -406,36 +581,172 @@ export function mapKeyEventType(ke: EspnKeyEvent): FeedEventType | undefined {
 
   const text = `${ke.type?.text ?? ''} ${ke.text ?? ''}`.toLowerCase();
 
-  if (/\bpenalty\b/.test(text)) {
-    if (/(scored|converted|goal)/.test(text)) return 'goal';
-    if (/(missed|saved|blocked|wide|over)/.test(text)) return 'miss';
+  if (/\b(penalty|penalti)\b/.test(text)) {
+    if (/(scored|converted|goal|gol|anotad)/.test(text)) return 'goal';
+    if (/(missed|saved|blocked|wide|over|fallad|parad|bloquead)/.test(text)) return 'miss';
     return 'penalty'; // penalty awarded — the bettable "set moment"
   }
-  if (/\bgoal\b/.test(text)) return 'goal';
-  if (/(card|sent off|booking|red|yellow)/.test(text)) return 'card';
-  if (/corner/.test(text)) return 'corner';
-  if (/(free.?kick|foul)/.test(text)) return 'free_kick';
-  if (/(saved|blocked|cleared off the line)/.test(text)) return 'miss';
-  if (/(shot|header|attempt|effort)/.test(text)) {
-    return /(off target|wide|over|missed)/.test(text) ? 'miss' : 'shot';
+  if (/\b(goal|gol)\b/.test(text)) return 'goal';
+  if (/(red card|sent off|second yellow|tarjeta roja|expulsado|segunda amarilla)/.test(text)) {
+    return 'red_card';
+  }
+  if (/(yellow card|booking|caution|tarjeta amarilla|amonestaci[oó]n)/.test(text)) {
+    return 'yellow_card';
+  }
+  if (/(card|sent off)/.test(text)) return 'yellow_card';
+  // Corner ONLY on structured ESPN corner events — never "corner flag" / "corner of the box".
+  const typeText = (ke.type?.text ?? '').trim();
+  const bodyText = (ke.text ?? '').trim();
+  if (/^(corner|esquina)$/i.test(typeText) || /^(corner|esquina),\s/i.test(bodyText)) {
+    return 'corner';
+  }
+  if (/(free.?kick|foul|falta|tiro libre)/.test(text)) return 'free_kick';
+  if (/(saved|blocked|cleared off the line|parad|bloquead)/.test(text)) return 'miss';
+  if (/(shot|header|attempt|effort|remate|disparo|cabezazo)/.test(text)) {
+    if (/(off target|wide|over|missed|fallad|fuera)/.test(text)) return 'miss';
+    return 'shot';
   }
   return undefined;
 }
 
 /**
  * Classify free-text commentary into an attack-type "set moment", or undefined.
- * We are deliberately conservative: goals/misses come from keyEvents only, so
- * prose can only ever OPEN a market, never decide one.
+ * Resolver lines (post-shot, set-piece taken/cleared) return miss/play_end for settlement.
+ * Goals still come from keyEvents only — prose never invents a goal.
  */
 export function classifyCommentary(text: string): FeedEventType | undefined {
-  const t = text.toLowerCase();
-  // Patterns + ordering (most-dangerous first) live in the central tuning module
-  // so capture is tuned in ONE place. Prose can only ever OPEN a market — goals
-  // and misses come from keyEvents, never from this.
+  const t = text.trim().toLowerCase();
+  if (isPostShotCommentary(text)) return undefined;
+  // Play already stopped — never open on offside calls.
+  if (/\b(fuera de juego|offside)\b/.test(t)) return undefined;
+  // Resolvers — prose that settles a VAR *penalty* market NO (never opens). Must be
+  // PENALTY-specific: a card-related VAR decision ("VAR Decision: No card change")
+  // must NOT land here — it routes to var_check below and opens a RED-card market.
+  if (
+    /\b(no penalty|penalty (?:overturned|cancelled|rescinded|denied)|not a penalty|var[^.]*\bno penalty\b)\b/i.test(
+      t,
+    )
+  ) {
+    return 'var_penalty_denied';
+  }
   for (const { type, re } of COMMENTARY_PATTERNS) {
     if (re.test(t)) return type;
   }
+  if (isPreShotBuildUp(text)) return 'attack';
   return undefined;
+}
+
+/**
+ * Lines that don't match a pattern but describe live attacking play — route to
+ * the AI watcher (fuzzy tier) instead of dropping them.
+ */
+export function isAiCommentaryProbe(text: string): boolean {
+  if (isPostShotCommentary(text)) return false;
+  const t = text.trim().toLowerCase();
+  if (
+    /\b(fuera de juego|offside|sustituci[oó]n|entra al campo|lesi[oó]n|hidrataci[oó]n|saque de (banda|esquina|meta)|tiro de meta|medio tiempo|segunda parte)\b/.test(
+      t,
+    )
+  ) {
+    return false;
+  }
+  return /\([^)]+\)/.test(text) && /\b(pase|centro|regate|asistencia|presi[oó]n|ataque)\b/.test(t);
+}
+
+/** Merge ES (primary) + EN (supplement) commentary for richer AI context. */
+export function mergeCommentary(
+  en: EspnCommentary[] | undefined,
+  es: EspnCommentary[] | undefined,
+): { c: EspnCommentary; lang: 'en' | 'es' }[] {
+  const out: { c: EspnCommentary; lang: 'en' | 'es' }[] = [];
+  for (const c of es ?? []) out.push({ c, lang: 'es' });
+  const esNorm = new Set((es ?? []).map((c) => (c.text ?? '').trim().toLowerCase()));
+  for (const c of en ?? []) {
+    const norm = (c.text ?? '').trim().toLowerCase();
+    if (norm && !esNorm.has(norm)) out.push({ c, lang: 'en' });
+  }
+  return out;
+}
+
+/**
+ * Parse which team is AWARDED a set-piece from ESPN's canonical commentary lines.
+ * "Corner, Scotland. Conceded by X" → Scotland (NOT Morocco from "Conceded by").
+ * "Brahim Díaz (Morocco) wins a free kick…" → Morocco via the parenthetical.
+ */
+export function parseAwardedTeamFromCommentary(
+  text: string,
+  homeName: string,
+  awayName: string,
+  homeAbbr?: string,
+  awayAbbr?: string,
+): Team | undefined {
+  const raw = text.trim();
+  let m = /^corner,\s*([^.]+)/i.exec(raw);
+  if (m) return matchTeamFragment(m[1], homeName, awayName, homeAbbr, awayAbbr);
+  m = /^(?:saque|tiro)\s+de\s+esquina[,\s-]+(?:para\s+|de\s+)?([^.]+)/i.exec(raw);
+  if (m) return matchTeamFragment(m[1], homeName, awayName, homeAbbr, awayAbbr);
+  m = /^penalty(?:\s+awarded)?(?:\s+to)?\s+([^.!]+)/i.exec(raw);
+  if (m) return matchTeamFragment(m[1], homeName, awayName, homeAbbr, awayAbbr);
+  m = /\(([^)]+)\)\s+wins a free kick/i.exec(raw);
+  if (m) return matchTeamFragment(m[1], homeName, awayName, homeAbbr, awayAbbr);
+  m = /\(([^)]+)\)\s+ha recibido una falta/i.exec(raw);
+  if (m) return matchTeamFragment(m[1], homeName, awayName, homeAbbr, awayAbbr);
+  return undefined;
+}
+
+function matchTeamFragment(
+  fragment: string,
+  homeName: string,
+  awayName: string,
+  homeAbbr?: string,
+  awayAbbr?: string,
+): Team | undefined {
+  const f = fragment.trim().toLowerCase();
+  const h = homeName.trim().toLowerCase();
+  const a = awayName.trim().toLowerCase();
+  if (!f || !h || !a) return undefined;
+  // Prefer exact / prefix match so "Scotland" wins over a substring false-positive.
+  if (f === h || f.startsWith(`${h} `) || f.startsWith(`${h}.`)) return 'home';
+  if (f === a || f.startsWith(`${a} `) || f.startsWith(`${a}.`)) return 'away';
+  if (homeAbbr && f === homeAbbr.toLowerCase()) return 'home';
+  if (awayAbbr && f === awayAbbr.toLowerCase()) return 'away';
+  // ESPN Spanish uses localized names (Brasil/Brazil, Haití/Haiti).
+  if (namePrefixOverlap(f, h)) return 'home';
+  if (namePrefixOverlap(f, a)) return 'away';
+  return undefined;
+}
+
+function namePrefixOverlap(a: string, b: string): boolean {
+  const n = Math.min(3, a.length, b.length);
+  return n >= 3 && a.slice(0, n) === b.slice(0, n);
+}
+
+/** Stable key for one real-world bettable moment (dedupes commentary + keyEvent twins). */
+export function momentKey(ev: FeedEvent): string | undefined {
+  if (!OPENER_TYPES.has(ev.type)) return undefined;
+  const clock = typeof ev.meta?.clock === 'string' ? ev.meta.clock : '';
+  const { base, stopp } = parseClockKey(clock);
+  const isSetPiece = ev.type === 'free_kick' || ev.type === 'corner' || ev.type === 'penalty';
+  // The discriminator that keeps DISTINCT moments distinct while still folding a
+  // genuine re-stamp of the SAME moment together:
+  //   • With a real match-clock: bucket by minute (set-pieces) or minute+stoppage,
+  //     so ESPN's 4' vs 4+1' re-stamp of one FK dedupes to a single market.
+  //   • WITHOUT a clock (commentary-only / replay): minute would be 0 for EVERY
+  //     event and collapse the whole game into one key per team — which is exactly
+  //     why a 12-corner half produced a single market. Fall back to a short text
+  //     fingerprint so each real corner/FK opens its own market.
+  let disc: string;
+  if (base > 0) {
+    disc = isSetPiece ? `${base}` : `${base}+${stopp}`;
+  } else {
+    disc = `t${momentTextFingerprint(ev.text)}`;
+  }
+  return `${ev.type}:${ev.team ?? '?'}:${disc}`;
+}
+
+/** Stable, compact fingerprint of a commentary line — distinct lines → distinct keys. */
+function momentTextFingerprint(text: string): string {
+  return (text ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 32);
 }
 
 function toInt(s: string | undefined): number {

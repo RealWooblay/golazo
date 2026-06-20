@@ -58,6 +58,20 @@ const GRADIENTS: Record<
   danger: [colors.raw.redBright, colors.raw.redDeep],
 };
 
+/**
+ * Solid fill fallback per variant. The SVG gradient is a nicety layered on top;
+ * this guarantees the button is ALWAYS visible (with correct text contrast) even
+ * if the gradient SVG fails to paint — which it can on React Native Web (a
+ * percentage-sized <Svg> resolving to 0 on first layout, or an id collision).
+ * Without this the filled buttons render transparent and their near-black label
+ * vanishes on the dark background.
+ */
+const SOLID_FILL: Record<Exclude<ButtonVariant, "ghost">, string> = {
+  primary: colors.raw.lime,
+  secondary: colors.raw.cyan,
+  danger: colors.raw.red,
+};
+
 const TEXT_ON: Record<ButtonVariant, string> = {
   primary: colors.onPrimary,
   secondary: colors.raw.onLime,
@@ -87,6 +101,9 @@ export function Button({
 }: ButtonProps) {
   const sz = SIZES[size];
   const isGhost = variant === "ghost";
+  // Unique per-instance gradient id — React.useId() can contain ':' which is
+  // invalid in an SVG id / url(#…), so strip it.
+  const gradId = `uiBtn-${variant}-${React.useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const showGlow = (glow ?? !isGhost) && !disabled;
   const glowShadow =
     variant === "primary"
@@ -107,6 +124,9 @@ export function Button({
       style={[
         styles.base,
         { height: sz.h, paddingHorizontal: sz.px, borderRadius: radii.md },
+        // Solid fill fallback so the button is never invisible if the SVG
+        // gradient fails to paint (RN-Web). The gradient layers on top.
+        !isGhost && { backgroundColor: SOLID_FILL[variant] },
         fullWidth && styles.fullWidth,
         isGhost && styles.ghost,
         showGlow && glowShadow,
@@ -117,23 +137,26 @@ export function Button({
         <View
           style={[
             StyleSheet.absoluteFill,
-            { borderRadius: radii.md, overflow: "hidden" },
+            { borderRadius: radii.md, overflow: "hidden", zIndex: 0 },
           ]}
+          pointerEvents="none"
         >
-          <Svg width="100%" height="100%" pointerEvents="none">
+          {/* viewBox + preserveAspectRatio="none" makes the fill independent of
+              pixel sizing, so it reliably covers the button on web (a plain
+              width/height="100%" SVG can resolve to 0 on first layout). */}
+          <Svg
+            width="100%"
+            height="100%"
+            viewBox="0 0 1 1"
+            preserveAspectRatio="none"
+          >
             <Defs>
-              <LinearGradient
-                id={`uiBtn-${variant}`}
-                x1="0"
-                y1="0"
-                x2="0"
-                y2="1"
-              >
+              <LinearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
                 <Stop offset="0" stopColor={GRADIENTS[variant][0]} />
                 <Stop offset="1" stopColor={GRADIENTS[variant][1]} />
               </LinearGradient>
             </Defs>
-            <Rect width="100%" height="100%" fill={`url(#uiBtn-${variant})`} />
+            <Rect x="0" y="0" width="1" height="1" fill={`url(#${gradId})`} />
           </Svg>
         </View>
       ) : null}
@@ -141,7 +164,7 @@ export function Button({
       {loading ? (
         <ActivityIndicator color={TEXT_ON[variant]} />
       ) : (
-        <View style={styles.row}>
+        <View style={[styles.row, styles.content]}>
           {left}
           <Text
             numberOfLines={1}
@@ -173,5 +196,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.alpha.white06,
   },
   row: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  // Keep the label above the gradient fill (positioned siblings paint over
+  // in-flow content on web regardless of DOM order).
+  content: { zIndex: 1 },
   label: { letterSpacing: 0.2 },
 });

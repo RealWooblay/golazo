@@ -32,6 +32,7 @@ export default function TabsLayout() {
       tabBar={(props) => <TabBar {...props} />}
     >
       <Tabs.Screen name="index" options={{ title: "Play" }} />
+      <Tabs.Screen name="rank" options={{ title: "Rank" }} />
       <Tabs.Screen name="wallet" options={{ title: "Wallet" }} />
       <Tabs.Screen name="profile" options={{ title: "Profile" }} />
     </Tabs>

@@ -24,6 +24,7 @@ import type { FeedSource } from './index';
 import {
   mapKeyEventType,
   classifyCommentary,
+  isAiCommentaryProbe,
   parseGameState,
   parseClockKey,
   type EspnKeyEvent,
@@ -31,6 +32,7 @@ import {
   type EspnSummary,
   type EspnScoreboard,
 } from './espn';
+import { classifyResolverCommentary } from '../ai/marketTuning';
 
 /** Event types that OPEN a market — ordered before same-clock resolvers. */
 const OPENER_SET: ReadonlySet<FeedEvent['type']> = new Set([
@@ -39,6 +41,7 @@ const OPENER_SET: ReadonlySet<FeedEvent['type']> = new Set([
   'free_kick',
   'attack',
   'dangerous_attack',
+  'var_check',
 ]);
 
 const SCOREBOARD = (league: string) =>
@@ -46,8 +49,8 @@ const SCOREBOARD = (league: string) =>
 const SUMMARY = (league: string, id: string) =>
   `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/summary?event=${encodeURIComponent(id)}`;
 
-/** Wall-clock ms per one minute of match time (replay speed). */
-const MS_PER_GAME_MIN = 1300;
+/** Default wall-clock ms per one minute of match time (replay speed). */
+const DEFAULT_MS_PER_GAME_MIN = 1300;
 
 interface TimelineItem {
   atMs: number; // wall-clock offset from replay start
@@ -59,6 +62,12 @@ export interface ReplayOptions {
   league: string;
   eventId: string;
   fetchImpl?: typeof fetch;
+  /**
+   * Wall-clock ms per match-minute. Default compresses ~90' into ~2 min for demos.
+   * The full-game SIM passes 60_000 (real-time spacing) so market windows behave
+   * exactly as they do in production and outcomes resolve faithfully.
+   */
+  msPerGameMin?: number;
 }
 
 export class EspnReplayFeed implements FeedSource {
@@ -66,6 +75,7 @@ export class EspnReplayFeed implements FeedSource {
   private readonly league: string;
   private readonly eventId: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly msPerGameMin: number;
 
   private gameState: GameState = placeholder();
   private homeTeamId?: string;
@@ -79,6 +89,7 @@ export class EspnReplayFeed implements FeedSource {
     this.league = opts.league;
     this.eventId = opts.eventId;
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.msPerGameMin = opts.msPerGameMin ?? DEFAULT_MS_PER_GAME_MIN;
   }
 
   async start(): Promise<boolean> {
@@ -155,7 +166,14 @@ export class EspnReplayFeed implements FeedSource {
     const rankOf = (t: FeedEvent['type']) => (OPENER_SET.has(t) ? 0 : 1);
 
     (summary.commentary ?? []).forEach((c: EspnCommentary, i) => {
-      const type = classifyCommentary(c.text ?? '');
+      // Mirror the LIVE feed's normalization chain exactly, so a replay produces
+      // the SAME event stream the watcher sees in production: opener → resolver
+      // (shots/saves/clears) → fuzzy AI-probe attack. Previously replay only ran
+      // `classifyCommentary`, silently dropping every "Attempt …" / build-up line.
+      const text = c.text ?? '';
+      let type = classifyCommentary(text);
+      if (!type) type = classifyResolverCommentary(text);
+      if (!type && isAiCommentaryProbe(text)) type = 'attack';
       if (!type) return;
       const { key, minute } = keyOf(c.time?.displayValue);
       raws.push({
@@ -185,7 +203,7 @@ export class EspnReplayFeed implements FeedSource {
     raws.sort((a, b) => a.key - b.key || a.rank - b.rank || a.order - b.order);
 
     this.timeline = raws.map((r) => ({
-      atMs: Math.max(0, r.key * MS_PER_GAME_MIN),
+      atMs: Math.max(0, r.key * this.msPerGameMin),
       minute: r.minute,
       ev: r.ev,
     }));

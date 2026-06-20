@@ -10,9 +10,11 @@
 import React, { useMemo, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { spacing } from "@/theme";
-import { Banner, Confetti, Screen, Toast } from "@/ui";
+import { colors, spacing, type } from "@/theme";
+import { AnimatedNumber, Banner, Chip, Confetti, Screen, Text, Toast } from "@/ui";
+import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useStore } from "@/state/store";
+import { BET_SAFETY_BUFFER_MS, bettingSafetyBufferMs } from "@/lib/config";
 import { useTick } from "@/hooks";
 import { useGameFeed } from "@/features/match/useGameFeed";
 import { useChainBet } from "@/features/match/useChainBet";
@@ -25,12 +27,12 @@ import {
 import { resolveTeams } from "@/features/match/teams";
 import {
   ChainBetPanel,
+  ClosedMarketsList,
   CommentaryTicker,
   FullTimeCard,
   LiveScoreboard,
   MarketCard,
   MatchFriendsBar,
-  MatchHeader,
   ResultsRail,
   RevealCard,
   WaitingCard,
@@ -45,9 +47,12 @@ export default function MatchScreen() {
   const {
     game,
     commentary,
+    momentum,
     market,
     pending,
-    reveals,
+    activeReveal,
+    historicMarkets,
+    catchingUp,
     effectiveMode,
     fallbackNotice,
     placeBet,
@@ -75,7 +80,12 @@ export default function MatchScreen() {
   // a clean end state (final score + settle) instead of the idle "reading the
   // game" radar. (Friends rooms have their own full-time standings.)
   const finished = game?.status === "final";
-  const momentumTeam = finished ? undefined : market?.team; // who's pressing right now
+  // Half time: a brief mid-match pause — betting's closed, second half moments away.
+  const halftime = game?.status === "halftime";
+  // Who's pressing: the agent's live momentum read (server-driven) wins; fall back
+  // to the open market's team for offline/sim where there's no momentum feed.
+  const momentumTeam =
+    finished || halftime ? undefined : (momentum ?? market?.team ?? undefined);
 
   // On-chain layer. When the feed runs in chain mode, the current market carries
   // `onChain` and the embedded wallet places REAL bets on it (cb.active). Otherwise
@@ -92,6 +102,11 @@ export default function MatchScreen() {
   const chainLocked =
     chainMode &&
     (cb.placing || cb.bet?.offChainMarketId === market?.id);
+  const chainPreparing = chainMode && market && !cb.chainTwinReady && !cb.bet;
+  const marketClosing =
+    !!market &&
+    market.phase === "open" &&
+    now >= market.lockAt - bettingSafetyBufferMs(market.windowMs);
   const chainPending =
     chainLocked && market
       ? {
@@ -142,12 +157,42 @@ export default function MatchScreen() {
 
   return (
     <Screen scroll padded={false} vignette={vignette} footerSpace={spacing.xxl}>
-      <MatchHeader
-        balance={bal.amount}
-        format={bal.format}
-        live={effectiveMode === "live"}
+      {/* Routed through UnifiedHeader (slim) so the match chrome matches the rest
+          of the app. 'slim' keeps the back chevron MatchHeader had; the live/mode
+          chip (tap → how-it-works) and the animated count-up balance pill ride in
+          the right slot, preserving the old behaviour. */}
+      <UnifiedHeader
+        variant="slim"
+        title="GOLAZO"
         onBack={() => router.back()}
-        onHelp={() => router.push("/how-it-works")}
+        right={
+          <View style={styles.headerRight}>
+            <Chip
+              label={
+                bal.points
+                  ? "PAPER TRADE"
+                  : effectiveMode === "live"
+                    ? "LIVE FEED"
+                    : "SANDBOX"
+              }
+              tone={
+                bal.points ? "win" : effectiveMode === "live" ? "live" : "info"
+              }
+              dot
+              onPress={() => router.push("/how-it-works")}
+            />
+            <View style={styles.balance}>
+              <AnimatedNumber
+                value={bal.amount}
+                format={bal.format}
+                style={styles.balValue}
+              />
+              <Text style={styles.balLabel}>
+                {bal.points ? "points" : "balance"}
+              </Text>
+            </View>
+          </View>
+        }
       />
 
       <View style={styles.body}>
@@ -157,9 +202,9 @@ export default function MatchScreen() {
             away={teams.away}
             scoreHome={game?.scoreHome ?? 0}
             scoreAway={game?.scoreAway ?? 0}
-            clock={finished ? "FT" : (game?.clock ?? "0'")}
+            clock={finished ? "FT" : halftime ? "HT" : (game?.clock ?? "0'")}
             momentum={momentumTeam}
-            live={!finished}
+            live={!finished && !halftime}
           />
         </View>
 
@@ -205,8 +250,21 @@ export default function MatchScreen() {
               onExit={() => router.back()}
             />
           </View>
+        ) : halftime ? (
+          <View style={styles.gutter}>
+            <WaitingCard
+              title="Half time"
+              body="Grab a breather — second-half markets are moments away."
+            />
+          </View>
         ) : market ? (
           <View style={styles.gutter}>
+            {chainPreparing ? (
+              <Banner
+                tone="info"
+                message="On-chain market preparing — bet buttons unlock in a moment."
+              />
+            ) : null}
             <MarketCard
               market={displayMarket ?? market}
               now={now}
@@ -217,25 +275,30 @@ export default function MatchScreen() {
               formatStake={stakeFormat}
               onBet={onBet}
               hapticsEnabled={hapticsOn}
+              betDisabled={chainPreparing || chainLocked || marketClosing}
             />
           </View>
-        ) : reveals.length === 0 ? (
+        ) : !activeReveal ? (
           <View style={styles.gutter}>
             <WaitingCard />
           </View>
         ) : null}
 
-        {reveals.map((reveal) => (
-          <View key={reveal.marketId} style={styles.gutter}>
+        {activeReveal ? (
+          <View style={styles.gutter}>
             <RevealCard
-              reveal={reveal}
-              onAcknowledge={() => onReveal(reveal.marketId, reveal.won)}
+              reveal={activeReveal}
+              onAcknowledge={() => onReveal(activeReveal.marketId, activeReveal.won)}
               hapticsEnabled={hapticsOn}
             />
           </View>
-        ))}
+        ) : null}
 
-        {/* recent results rail — THIS match only (scoped by gameId) */}
+        <View style={styles.gutter}>
+          <ClosedMarketsList markets={historicMarkets} catchingUp={catchingUp} />
+        </View>
+
+        {/* recent results rail — YOUR bets on this match only */}
         <View style={styles.gutter}>
           <ResultsRail
             bets={
@@ -265,4 +328,15 @@ export default function MatchScreen() {
 const styles = StyleSheet.create({
   body: { gap: spacing.md, marginTop: spacing.xs },
   gutter: { paddingHorizontal: spacing.lg },
+  // Header right slot — the mode chip + animated balance pill, mirroring the old
+  // MatchHeader's right block so the count-up + label read identically.
+  headerRight: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  balance: { alignItems: "flex-end", minWidth: 64 },
+  balValue: { ...type.mono, fontSize: 17, color: colors.textPrimary },
+  balLabel: {
+    ...type.overline,
+    fontSize: 8,
+    color: colors.textFaint,
+    marginTop: 1,
+  },
 });

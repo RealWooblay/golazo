@@ -1,7 +1,6 @@
 import React from "react";
 import { StyleSheet, View } from "react-native";
 import type { RoomPlayer } from "@golazo/core";
-import { ROOM_START_BALANCE } from "@golazo/core";
 import { colors, radius, spacing, type } from "@/theme";
 import { AnimatedNumber, Chip, Surface, Text } from "@/ui";
 import { money } from "@/lib/format";
@@ -21,12 +20,19 @@ export function Leaderboard({
   players,
   meId,
   compact = false,
+  format = money,
+  balanceLabel = "BALANCE",
+  startLabel,
 }: {
   players: RoomPlayer[];
   /** The local player's userId — to tag "you". */
   meId: string;
   /** Tighter padding for the full-time panel. */
   compact?: boolean;
+  format?: (n: number) => string;
+  balanceLabel?: string;
+  /** Ghost row hint (defaults to room start balance). */
+  startLabel?: string;
 }) {
   // A clear leader only when someone is actually ahead (no gold tie / level lead).
   const top = players[0]?.balance ?? 0;
@@ -68,7 +74,7 @@ export function Leaderboard({
               </View>
               {isLeader ? (
                 <Text style={styles.leadCaption}>
-                  {money(top - second)} ahead
+                  {format(top - second)} ahead
                 </Text>
               ) : (
                 <Text style={styles.sub} numberOfLines={1}>
@@ -80,13 +86,13 @@ export function Leaderboard({
             <View style={styles.points}>
               <AnimatedNumber
                 value={p.balance}
-                format={money}
+                format={format}
                 style={StyleSheet.flatten([
                   styles.ptsValue,
                   isLeader ? styles.ptsValueLead : undefined,
                 ])}
               />
-              <Text style={styles.ptsLabel}>BALANCE</Text>
+              <Text style={styles.ptsLabel}>{balanceLabel}</Text>
             </View>
           </Surface>
         );
@@ -101,7 +107,7 @@ export function Leaderboard({
           </View>
           <View style={styles.who}>
             <Text style={styles.ghostName}>Waiting for friends…</Text>
-            <Text style={styles.sub}>starts at {money(ROOM_START_BALANCE)}</Text>
+            <Text style={styles.sub}>{startLabel ?? "session net — starts at 0"}</Text>
           </View>
         </View>
       ) : null}

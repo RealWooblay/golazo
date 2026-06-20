@@ -1,22 +1,20 @@
 import React, { useState } from "react";
-import { StyleSheet, TextInput, View } from "react-native";
+import { ScrollView, StyleSheet, TextInput, View } from "react-native";
 import { FRIEND_MARKET_WINDOW_MS, type Team } from "@golazo/core";
 import { colors, radius, spacing, type } from "@/theme";
 import { Button, Chip, Sheet, Text } from "@/ui";
 import { haptics } from "@/ui/haptics";
 
-/**
- * MakeMarketSheet — the "bet this moment" composer. A player types a YES/NO
- * question ("Free kick scored?"), optionally tags a side, and fires it into the
- * room as a parimutuel friend market. The host (or the author) resolves it by
- * hand later.
- *
- * NO fixed odds: a friend market is real-$ parimutuel — you and your friends set
- * the line by betting into the shared pool. The only fixed term is the betting
- * window (a core constant), surfaced as a read-only chip so the author knows how
- * long the market stays open. Controlled by the parent (`open` / `onClose`); on
- * submit we call `onSubmit` and close.
- */
+/** Quick private-market shortcuts friends can fire in one tap. */
+const SHORTCUTS: { label: string; question: string; team?: Team }[] = [
+  { label: "⚽ Goal", question: "Will this attack end in a GOAL?" },
+  { label: "🟨 Yellow", question: "Will there be a YELLOW card?" },
+  { label: "🟥 Red", question: "Will there be a RED card?" },
+  { label: "📺 VAR pen", question: "Will VAR award a PENALTY?" },
+  { label: "🚩 Corner goal", question: "GOAL from this corner?", team: "home" },
+  { label: "🎯 FK goal", question: "GOAL from this free kick?" },
+];
+
 export function MakeMarketSheet({
   open,
   onClose,
@@ -25,7 +23,6 @@ export function MakeMarketSheet({
 }: {
   open: boolean;
   onClose: () => void;
-  /** Create the market. windowMs is omitted → the hook uses the friend default. */
   onSubmit: (question: string, opts?: { team?: Team }) => void;
   hapticsEnabled?: boolean;
 }) {
@@ -41,10 +38,11 @@ export function MakeMarketSheet({
     setTeam(undefined);
   };
 
-  const submit = () => {
-    if (!canSubmit) return;
+  const submit = (q?: string, t?: Team) => {
+    const text = (q ?? trimmed).trim();
+    if (text.length < 3) return;
     if (hapticsEnabled) haptics.win();
-    onSubmit(trimmed, team ? { team } : undefined);
+    onSubmit(text, (t ?? team) ? { team: (t ?? team)! } : undefined);
     reset();
     onClose();
   };
@@ -55,29 +53,41 @@ export function MakeMarketSheet({
   };
 
   return (
-    <Sheet open={open} onClose={onClose} snapPoints={["62%"]}>
+    <Sheet open={open} onClose={onClose} snapPoints={["72%"]}>
       <View style={styles.wrap}>
         <View style={styles.head}>
           <Text style={styles.title}>Make a market</Text>
           <Text style={styles.sub}>
-            Pose a YES/NO call on the next moment. You and your friends set the
-            line by betting; you (or the host) settle it.
+            Private to your room — real SOL parimutuel against friends only.
           </Text>
         </View>
 
+        <Text style={styles.label}>QUICK SHORTCUTS</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <View style={styles.shortcutRow}>
+            {SHORTCUTS.map((s) => (
+              <Chip
+                key={s.label}
+                label={s.label}
+                tone="info"
+                onPress={() => submit(s.question, s.team)}
+              />
+            ))}
+          </View>
+        </ScrollView>
+
         <View style={styles.field}>
-          <Text style={styles.label}>YOUR QUESTION</Text>
+          <Text style={styles.label}>OR TYPE YOUR OWN</Text>
           <TextInput
             value={question}
             onChangeText={setQuestion}
-            placeholder="e.g. Corner taken short?"
+            placeholder="e.g. Will Morocco score from this corner?"
             placeholderTextColor={colors.textFaint}
             style={styles.input}
             maxLength={80}
-            autoFocus
             autoCapitalize="sentences"
             returnKeyType="done"
-            onSubmitEditing={submit}
+            onSubmitEditing={() => submit()}
             selectionColor={colors.yes}
             multiline
           />
@@ -108,13 +118,18 @@ export function MakeMarketSheet({
         </View>
 
         <View style={styles.terms}>
-          <Chip label="PARIMUTUEL · YOU SET THE LINE" tone="win" />
+          <Chip label="PRIVATE · FRIENDS ONLY" tone="win" />
           <Chip label={`${seconds}s WINDOW`} tone="neutral" />
         </View>
 
+        <Text style={styles.resolveNote}>
+          You or the host tap YES / NO / VOID when it lands — real on-chain market,
+          same wallet as the main game.
+        </Text>
+
         <Button
           label="Open the market"
-          onPress={submit}
+          onPress={() => submit()}
           variant="primary"
           size="lg"
           fullWidth
@@ -139,6 +154,7 @@ const styles = StyleSheet.create({
     color: colors.textFaint,
     letterSpacing: 1.6,
   },
+  shortcutRow: { flexDirection: "row", gap: spacing.sm, paddingBottom: spacing.xs },
   input: {
     ...type.subtitle,
     fontSize: 17,
@@ -154,4 +170,5 @@ const styles = StyleSheet.create({
   },
   teamRow: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" },
   terms: { flexDirection: "row", gap: spacing.sm },
+  resolveNote: { ...type.caption, fontSize: 12, color: colors.textMuted },
 });

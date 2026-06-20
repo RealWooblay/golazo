@@ -5,20 +5,23 @@ import {
   indicativeQuote,
   triggerFromEvent,
   outcomeFromEvent,
+  POINTS_RAKE,
   type FeedEvent,
   type GameState,
   type Market,
   type Outcome,
+  type PointsMarketSnapshot,
   type Settlement,
   type Side,
 } from "@golazo/core";
 import { useStore } from "@/state/store";
 import { runBots, type BotRunner } from "@/lib/bots";
 import { connectFeed, type FeedSocket } from "@/lib/ws";
-import { BASE_SEED, RAKE, USER_ID } from "@/lib/config";
+import { BASE_SEED, RAKE, USER_ID, bettingClosesAt } from "@/lib/config";
 import { multiple } from "@/lib/format";
 import type {
   BetRow,
+  ClosedMarketVM,
   MarketVM,
   PendingBet,
   RevealVM,
@@ -66,13 +69,17 @@ import type {
 export interface GameFeedVM {
   game: GameState | null;
   commentary: string;
+  /** The agent's live read of who's pressing — drives the momentum bar. */
+  momentum: "home" | "away" | null;
   market: MarketVM | null;
   pending: PendingBet | null;
-  reveals: RevealVM[];
-  /** Effective mode right now — may be 'offline' even if the user picked 'live'
-   *  (i.e. we fell back). */
+  /** The ONE pending tap-to-reveal (your most recent bet). Null when catching up. */
+  activeReveal: RevealVM | null;
+  /** Older settled markets — compact rows, outcomes always visible. */
+  historicMarkets: ClosedMarketVM[];
+  /** True while loading session history (fresh join) — no big reveal card. */
+  catchingUp: boolean;
   effectiveMode: FeedMode;
-  /** Set when we auto-fell-back from live, so the UI can show a banner. */
   fallbackNotice: string | null;
 }
 
@@ -96,21 +103,36 @@ const betRowId = () =>
 
 export function useGameFeed(): GameFeedApi {
   const store = useStore();
-  const { mode, liveUrl } = store;
+  const { mode, liveUrl, session, pointsBalance, pointsRank } = store;
+  const pointsMode = session.moneyMode === "points";
+  // Points are a SINGLE cross-mode score. In PAPER mode the points identity is
+  // the device's pointsUserId (its paper-pool player). In REAL mode the points
+  // are credited off the real settlement, which is keyed by the engine USER_ID —
+  // so we join the points system under USER_ID there, and both the leaderboard
+  // and points_settle line up with the real bet's payout userId.
+  const pointsUserId = session.pointsUserId ?? "pts_anon";
+  const pointsId = pointsMode ? pointsUserId : USER_ID;
 
   // ---- view-model state (what the screen draws) ----
   const [game, setGame] = useState<GameState | null>(null);
   const [commentary, setCommentary] = useState("Connecting to the match…");
+  const [momentum, setMomentum] = useState<"home" | "away" | null>(null);
   const [market, setMarket] = useState<MarketVM | null>(null);
   const [pending, setPending] = useState<PendingBet | null>(null);
   const [reveals, setReveals] = useState<RevealVM[]>([]);
+  const [closedMarkets, setClosedMarkets] = useState<ClosedMarketVM[]>([]);
+  const [catchingUp, setCatchingUp] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
   const [effectiveMode, setEffectiveMode] = useState<FeedMode>(mode);
   const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
+  const [pointsPool, setPointsPool] = useState<PointsMarketSnapshot | null>(
+    null,
+  );
 
   // ---- refs that must survive re-renders / be read inside async callbacks ----
   const pendingRef = useRef<PendingBet | null>(null);
   pendingRef.current = pending;
+  const pendingMarketQuestionRef = useRef("");
   const gameRef = useRef<GameState | null>(null);
   gameRef.current = game;
   // OFFLINE: the live engine + the id of the market currently on screen. Held in
@@ -120,6 +142,9 @@ export function useGameFeed(): GameFeedApi {
   const openMarketIdRef = useRef<string | null>(null);
   // LIVE: the active socket so placeBet can send a `bet` frame.
   const liveSocketRef = useRef<FeedSocket | null>(null);
+  /** False once we see a live open market after connect — historic replay is catch-up. */
+  const catchingUpRef = useRef(true);
+  const acknowledgeRevealRef = useRef<(marketId: string) => void>(() => {});
 
   const clearToast = useCallback(() => setToast(null), []);
 
@@ -128,11 +153,12 @@ export function useGameFeed(): GameFeedApi {
     const yes = m.pool.yes;
     const no = m.pool.no;
     const gross = yes + no;
-    const net = gross * (1 - RAKE);
-    return {
+    const rake = pointsMode ? POINTS_RAKE : RAKE;
+    const net = gross * (1 - rake);
+    const vm: MarketVM = {
       id: m.id,
       question: m.question,
-      subtitle: "", // caller fills from commentary; preserved on updates
+      subtitle: "",
       team: m.team,
       phase:
         m.status === "open"
@@ -144,15 +170,29 @@ export function useGameFeed(): GameFeedApi {
       oddsNo: no > 0 ? net / no : 1,
       pool: gross,
       yesShare: gross > 0 ? (100 * yes) / gross : 50,
-      // Distinct bettors in the pool right now (you + the crowd). Real count off
-      // the engine/feed market's bets — the public game's "active players".
       participants: m.bets ? new Set(m.bets.map((b) => b.userId)).size : 0,
       openedAt: m.openedAt,
       lockAt: m.lockAt,
       windowMs: m.windowMs,
-      ...(m.onChain ? { onChain: m.onChain } : {}),
+      resolveWindowMs: m.resolveWindowMs,
+      resolveAt: m.resolveAt,
+      ...(m.onChain && !pointsMode ? { onChain: m.onChain } : {}),
     };
-  }, []);
+    if (pointsMode && pointsPool?.marketId === m.id) {
+      const snap = pointsPool;
+      const pg = snap.poolYes + snap.poolNo;
+      return {
+        ...vm,
+        oddsYes: snap.oddsYes,
+        oddsNo: snap.oddsNo,
+        pool: pg,
+        yesShare: snap.yesShare,
+        participants: snap.participants,
+        onChain: undefined,
+      };
+    }
+    return vm;
+  }, [pointsMode, pointsPool]);
 
   const teamWord = useCallback((team: Market["team"]): string => {
     const g = gameRef.current;
@@ -188,8 +228,41 @@ export function useGameFeed(): GameFeedApi {
   );
 
   const enqueueReveal = useCallback((r: RevealVM) => {
-    setReveals((prev) =>
-      prev.some((item) => item.marketId === r.marketId) ? prev : [...prev, r],
+    setReveals((prev) => {
+      if (prev[0] && prev[0].marketId !== r.marketId) {
+        acknowledgeRevealRef.current(prev[0].marketId);
+      }
+      return [r];
+    });
+  }, []);
+
+  /** Snapshot a settled market for the session history rail. */
+  const recordClosedMarket = useCallback((m: Market) => {
+    if (!m.settlement) return;
+    const yes = m.pool.yes;
+    const no = m.pool.no;
+    const gross = yes + no;
+    const net = gross * (1 - RAKE);
+    const p = pendingRef.current;
+    const userSide =
+      p && p.marketId === m.id ? p.side : undefined;
+    const closed: ClosedMarketVM = {
+      marketId: m.id,
+      question: m.question,
+      outcome: m.settlement.outcome,
+      oddsYes: yes > 0 ? net / yes : 1,
+      oddsNo: no > 0 ? net / no : 1,
+      poolYes: yes,
+      poolNo: no,
+      poolTotal: gross,
+      yesShare: gross > 0 ? (100 * yes) / gross : 50,
+      settledAt: Date.now(),
+      ...(userSide ? { userSide } : {}),
+    };
+    setClosedMarkets((prev) =>
+      prev.some((item) => item.marketId === closed.marketId)
+        ? prev
+        : [closed, ...prev],
     );
   }, []);
 
@@ -200,6 +273,8 @@ export function useGameFeed(): GameFeedApi {
     if (mode !== "offline") return;
     setEffectiveMode("offline");
     setFallbackNotice(null);
+    setCatchingUp(false);
+    catchingUpRef.current = false;
 
     let cancelled = false;
     const startAt = Date.now();
@@ -230,6 +305,7 @@ export function useGameFeed(): GameFeedApi {
     // Engine -> UI: a resolved/void market produces the reveal + clears the card.
     const offResolve = engine.on("resolve", (m) => {
       if (cancelled || !m.settlement) return;
+      recordClosedMarket(m);
       bots?.stop();
       const r = buildReveal(m, m.settlement);
       if (r) enqueueReveal(r);
@@ -266,10 +342,14 @@ export function useGameFeed(): GameFeedApi {
         setGame({ ...sim.state });
       }
 
-      // Lifecycle flips: full time (status -> 'final') and the next kickoff
-      // (status -> 'live') must reach the UI so the match screen can show / clear
-      // its full-time end state. The looping sim cycles through these each match.
-      if (ev.type === "final" || ev.type === "kickoff") {
+      // Lifecycle flips: half time, full time, and the next kickoff must reach
+      // the UI so the match screen can show/clear its HT + FT states. The looping
+      // sim cycles through these each match.
+      if (
+        ev.type === "final" ||
+        ev.type === "halftime" ||
+        ev.type === "kickoff"
+      ) {
         setGame({ ...sim.state });
       }
 
@@ -304,17 +384,19 @@ export function useGameFeed(): GameFeedApi {
 
     // The tick loop: pull due events; tick the match clock; lock when elapsed.
     let lastClock = sim.state.clock;
+    let lastStatus = sim.state.status;
     const loop = setInterval(() => {
       if (cancelled) return;
       const now = Date.now();
       for (const ev of sim.due(now)) handleEvent(ev);
 
       // Advance the display clock smoothly (~1' per 900ms wall), pushing to the
-      // UI only when the minute string actually changes so we don't re-render
-      // the scoreboard every 120ms.
+      // UI when the minute string OR the lifecycle status (live/halftime/final)
+      // changes — so the HT/FT badge flips even if the clock is steady.
       const clock = `${Math.min(90, Math.floor((now - startAt) / 900))}'`;
-      if (clock !== lastClock) {
+      if (clock !== lastClock || sim.state.status !== lastStatus) {
         lastClock = clock;
+        lastStatus = sim.state.status;
         sim.setClock(clock);
         setGame({ ...sim.state });
       }
@@ -355,14 +437,19 @@ export function useGameFeed(): GameFeedApi {
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     setEffectiveMode("live");
     setFallbackNotice(null);
+    setCatchingUp(true);
+    catchingUpRef.current = true;
     setCommentary("Connecting to live feed…");
 
     const onDrop = (reason: string) => {
       if (cancelled) return;
-      // A pending live bet whose settlement will never arrive must be refunded.
       const p = pendingRef.current;
       if (p) {
-        store.credit(p.stake);
+        if (pointsMode) {
+          store.setPointsState(store.pointsBalance + p.stake, store.pointsRank);
+        } else {
+          store.credit(p.stake);
+        }
         setPending(null);
         pendingRef.current = null;
         setToast("Connection lost — bet refunded");
@@ -385,7 +472,17 @@ export function useGameFeed(): GameFeedApi {
           if (cancelled) return;
           attempts = 0;
           setFallbackNotice(null);
+          setCatchingUp(true);
+          catchingUpRef.current = true;
+          setReveals([]);
           socket.send({ t: "hello", userId: USER_ID });
+          // Join the points system in BOTH modes so real-mode bettors land on the
+          // one global leaderboard and receive points_settle on every real bet.
+          socket.send({
+            t: "points_hello",
+            userId: pointsId,
+            name: session.displayName ?? "Player",
+          });
           setCommentary("Live — waiting for the next moment…");
         },
         onClose: (reason) => onDrop(reason),
@@ -393,12 +490,39 @@ export function useGameFeed(): GameFeedApi {
           if (cancelled) return;
           switch (msg.t) {
             case "game":
-              setGame(msg.game);
+              setGame((prev) => {
+                if (prev?.gameId && prev.gameId !== msg.game.gameId) {
+                  setClosedMarkets([]);
+                  setReveals([]);
+                  setMomentum(null);
+                }
+                return msg.game;
+              });
+              // Between halves / at full time nobody's pressing — rest the bar.
+              if (msg.game.status === "halftime" || msg.game.status === "final") {
+                setMomentum(null);
+              }
               break;
             case "commentary":
               setCommentary(msg.text);
               break;
+            case "momentum":
+              setMomentum(msg.bar);
+              break;
             case "market_open":
+              catchingUpRef.current = false;
+              setCatchingUp(false);
+              if (pointsMode) {
+                setPointsPool({
+                  marketId: msg.market.id,
+                  poolYes: 0,
+                  poolNo: 0,
+                  oddsYes: 1,
+                  oddsNo: 1,
+                  yesShare: 50,
+                  participants: 0,
+                });
+              }
               setMarket({ ...toVM(msg.market), subtitle: msg.market.question });
               break;
             case "market_update":
@@ -418,26 +542,106 @@ export function useGameFeed(): GameFeedApi {
               break;
             case "market_resolve": {
               const settlement = msg.market.settlement;
-              if (settlement) {
+              recordClosedMarket(msg.market);
+              const hadBet = pendingRef.current?.marketId === msg.market.id;
+              if (hadBet) pendingMarketQuestionRef.current = msg.market.question;
+              if (settlement && !catchingUpRef.current && !pointsMode) {
                 const r = buildReveal(msg.market, settlement);
                 if (r) enqueueReveal(r);
               }
-              if (pendingRef.current?.marketId === msg.market.id) {
+              if (hadBet && !pointsMode) {
                 setPending(null);
                 pendingRef.current = null;
+              } else if (!hadBet && settlement?.outcome === "VOID") {
+                setToast("Market voided — unfair timing, no bets taken");
               }
+              if (pointsMode) setPointsPool(null);
               setMarket(null);
               break;
             }
+            case "points_state":
+              // Our cross-mode score — keyed by pointsId (pointsUserId in paper,
+              // USER_ID in real), so it updates in both modes.
+              if (msg.userId === pointsId) {
+                store.setPointsState(msg.balance, msg.rank);
+              }
+              break;
+            case "points_leaderboard":
+              store.setPointsLeaderboard(msg.players);
+              break;
+            case "points_market_update":
+              setPointsPool(msg.snapshot);
+              setMarket((prev) =>
+                prev && prev.id === msg.snapshot.marketId
+                  ? {
+                      ...prev,
+                      oddsYes: msg.snapshot.oddsYes,
+                      oddsNo: msg.snapshot.oddsNo,
+                      pool: msg.snapshot.poolYes + msg.snapshot.poolNo,
+                      yesShare: msg.snapshot.yesShare,
+                      participants: msg.snapshot.participants,
+                    }
+                  : prev,
+              );
+              break;
+            case "points_settle": {
+              if (msg.userId !== pointsId) break;
+              // Cross-mode score update — applies in BOTH modes.
+              store.setPointsState(msg.balance, pointsRank);
+              // The paper-pool reveal is driven by points_settle (the paper bet's
+              // payout). In REAL mode the reveal/pending is owned by market_resolve
+              // (real-$ settlement) — points_settle there only adjusts the score,
+              // so leave the real-money pending bet alone.
+              if (!pointsMode) break;
+              const p = pendingRef.current;
+              if (p && p.marketId === msg.marketId) {
+                const won =
+                  msg.outcome !== "VOID" && msg.payout > p.stake;
+                const payout =
+                  msg.outcome === "VOID" ? p.stake : msg.payout;
+                enqueueReveal({
+                  marketId: msg.marketId,
+                  question: pendingMarketQuestionRef.current || "Play moment",
+                  team: undefined,
+                  side: p.side,
+                  stake: p.stake,
+                  payoutMult: p.stake > 0 ? payout / p.stake : 0,
+                  outcome: msg.outcome,
+                  won,
+                  payout,
+                });
+                setPending(null);
+                pendingRef.current = null;
+              }
+              break;
+            }
             case "bet_rejected": {
-              // Held bet not accepted (play resolved inside the bet-delay, or the
-              // market closed). Refund the optimistic debit.
               const p = pendingRef.current;
               if (msg.userId === USER_ID && p && p.marketId === msg.marketId) {
                 store.credit(msg.stake);
                 setPending(null);
                 pendingRef.current = null;
-                setToast("Too close to the action — bet refunded");
+                const reason = msg.reason ?? "";
+                setToast(
+                  /window|closing/i.test(reason)
+                    ? "Betting closed — stake refunded"
+                    : "Too close to the action — bet refunded",
+                );
+              }
+              break;
+            }
+            case "points_bet_rejected": {
+              const p = pendingRef.current;
+              if (msg.userId === pointsUserId && p && p.marketId === msg.marketId) {
+                store.setPointsState(store.pointsBalance + msg.stake, store.pointsRank);
+                setPending(null);
+                pendingRef.current = null;
+                const reason = msg.reason ?? "";
+                setToast(
+                  /window|closing/i.test(reason)
+                    ? "Betting closed — stake refunded"
+                    : "Too close to the action — bet refunded",
+                );
               }
               break;
             }
@@ -456,7 +660,7 @@ export function useGameFeed(): GameFeedApi {
       liveSocketRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, liveUrl]);
+  }, [mode, liveUrl, pointsMode, pointsUserId]);
 
   // ================================================================
   // placeBet — shared by both modes. Odds shown here are indicative only.
@@ -465,9 +669,11 @@ export function useGameFeed(): GameFeedApi {
     (side: Side, stake: number): number | null => {
       const m = market;
       if (!m || m.phase !== "open") return null; // window closed
+      if (Date.now() >= bettingClosesAt(m.lockAt, m.windowMs)) return null;
       if (pendingRef.current?.marketId === m.id) return null; // one bet per market
-      if (stake > store.balance) {
-        setToast("Not enough balance");
+      const spendable = pointsMode ? pointsBalance : store.balance;
+      if (stake > spendable) {
+        setToast(pointsMode ? "Not enough points" : "Not enough balance");
         return null;
       }
 
@@ -490,30 +696,39 @@ export function useGameFeed(): GameFeedApi {
         // LIVE: the server owns the pool. The multiple the user sees is only an
         // estimate; authoritative payout comes back in market_resolve.
         estimatedMult = side === "YES" ? m.oddsYes : m.oddsNo;
-        // Only debit if the bet frame was actually transmitted — never take a
-        // stake for a bet the server never received.
-        const sent =
-          liveSocketRef.current?.send({
-            t: "bet",
-            marketId: m.id,
-            side,
-            stake,
-            userId: USER_ID,
-          }) ?? false;
+        const sent = pointsMode
+          ? (liveSocketRef.current?.send({
+              t: "points_bet",
+              marketId: m.id,
+              side,
+              stake,
+              userId: pointsUserId,
+            }) ?? false)
+          : (liveSocketRef.current?.send({
+              t: "bet",
+              marketId: m.id,
+              side,
+              stake,
+              userId: USER_ID,
+            }) ?? false);
         if (!sent) {
           setToast("Connection lost — bet not placed");
           return null;
         }
+        if (pointsMode) {
+          store.setPointsState(pointsBalance - stake, pointsRank);
+        } else {
+          store.debit(stake);
+        }
       }
 
-      store.debit(stake); // stake taken only after a confirmed placement (offline engine / live send)
       const bet: PendingBet = { marketId: m.id, side, stake, estimatedMult };
       setPending(bet);
       pendingRef.current = bet;
       setToast(`Bet ${side} · est. ${multiple(estimatedMult)}`);
       return estimatedMult;
     },
-    [market, effectiveMode, store],
+    [market, effectiveMode, store, pointsMode, pointsBalance, pointsRank, pointsUserId],
   );
 
   // ================================================================
@@ -523,7 +738,7 @@ export function useGameFeed(): GameFeedApi {
     const reveal = reveals.find((item) => item.marketId === marketId);
     if (!reveal) return;
     if (reveal.won || reveal.outcome === "VOID") {
-      store.credit(reveal.payout); // capped winnings OR full VOID refund
+      if (!pointsMode) store.credit(reveal.payout);
     }
     // Write a full BetRow (payout multiple + question) into the unified ledger, so the
     // Profile screen reads the real bet, not the lossy legacy HistoryRow shape.
@@ -553,14 +768,24 @@ export function useGameFeed(): GameFeedApi {
       setPending(null);
       pendingRef.current = null;
     }
-  }, [reveals, store, teamWord, game]);
+  }, [reveals, store, teamWord, game, pointsMode]);
+
+  acknowledgeRevealRef.current = acknowledgeReveal;
+
+  const activeReveal = catchingUp ? null : (reveals[0] ?? null);
+  const historicMarkets = closedMarkets.filter(
+    (m) => m.marketId !== activeReveal?.marketId,
+  );
 
   return {
     game,
     commentary,
+    momentum,
     market,
     pending,
-    reveals,
+    activeReveal,
+    historicMarkets,
+    catchingUp,
     effectiveMode,
     fallbackNotice,
     placeBet,
