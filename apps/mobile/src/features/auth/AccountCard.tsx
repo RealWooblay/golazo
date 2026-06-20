@@ -17,7 +17,7 @@ function shortAddr(a: string): string {
  * handle + the embedded Solana wallet address and a sign-out. Renders nothing
  * when Privy isn't configured/available (native), so the legacy wallet stands.
  */
-export function AccountCard() {
+export function AccountCard({ noTopMargin }: { noTopMargin?: boolean } = {}) {
   const account = useAccount();
 
   // Privy off (native or no app id) — fall back to the legacy embedded wallet.
@@ -25,9 +25,11 @@ export function AccountCard() {
   // Privy still booting — hold the space quietly rather than flash the CTA.
   if (!account.ready) return null;
 
+  const sectionStyle = noTopMargin ? styles.sectionFlush : styles.section;
+
   if (!account.authenticated) {
     return (
-      <View style={styles.section}>
+      <View style={sectionStyle}>
         <Surface glow="cyan" style={styles.card}>
           <Text preset="overline" style={styles.over}>
             ACCOUNT
@@ -50,7 +52,7 @@ export function AccountCard() {
   }
 
   return (
-    <View style={styles.section}>
+    <View style={sectionStyle}>
       <Surface glow="yes" style={styles.card}>
         <View style={styles.headRow}>
           <Text preset="overline" style={styles.over}>
@@ -90,6 +92,7 @@ export function AccountCard() {
 
 const styles = StyleSheet.create({
   section: { marginTop: spacing.xxl },
+  sectionFlush: { marginTop: 0 },
   card: { padding: spacing.lg, borderRadius: radius.lg, gap: spacing.sm },
   over: { color: colors.textFaint },
   body: { marginBottom: spacing.xs },

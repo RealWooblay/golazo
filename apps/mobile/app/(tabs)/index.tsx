@@ -5,7 +5,7 @@
 // rich tappable rows, and a trending-parlay teaser for flair. Brief skeleton on
 // first paint + pull-to-refresh, a thoughtful empty state if nothing's live.
 // Everything is play-data (src/features/lobby/fixtures) and web-safe.
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { RefreshControl, ScrollView, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
@@ -28,6 +28,8 @@ import { usePointsLeaderboardSync } from "@/features/points/usePointsLeaderboard
 import { usePointsRefill } from "@/features/points/usePointsRefill";
 import { useLobbyFixtures } from "@/features/lobby/useEspnFixtures";
 import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
+import { useAccount } from "@/features/auth/useAccount";
+import type { MoneyMode } from "@/state/types";
 import {
   Entrance,
   EmptyLobby,
@@ -52,7 +54,32 @@ export default function PlayTab() {
     }, [store]),
   );
   const bal = useDisplayBalance();
+  const account = useAccount();
   const playMode = store.session.moneyMode === "points";
+
+  // Seamless real-money entry: tapping "Real" while signed out opens the Privy
+  // login (which silently mints the Solana wallet) instead of switching into a
+  // walletless real mode. Once signed in, finish the switch — the chain layer
+  // wires up the Privy wallet automatically.
+  const [wantsReal, setWantsReal] = useState(false);
+  useEffect(() => {
+    if (wantsReal && account.authenticated) {
+      store.setMoneyMode("real");
+      setWantsReal(false);
+    }
+  }, [wantsReal, account.authenticated, store]);
+  const onModeChange = useCallback(
+    (mode: MoneyMode) => {
+      if (mode === "real" && account.enabled && !account.authenticated) {
+        setWantsReal(true);
+        account.login();
+        return;
+      }
+      store.setMoneyMode(mode);
+    },
+    [account, store],
+  );
+
   usePointsLeaderboardSync(playMode);
   const pointsRefill = usePointsRefill();
   const { fixtures, loading, refresh } = useLobbyFixtures();
@@ -145,7 +172,7 @@ export default function PlayTab() {
           <View style={styles.modePickerWrap}>
             <MoneyModePicker
               value={store.session.moneyMode}
-              onChange={store.setMoneyMode}
+              onChange={onModeChange}
               hapticsEnabled={hx}
             />
           </View>

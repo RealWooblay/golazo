@@ -28,6 +28,7 @@ import { Entrance } from "@/features/_shared/primitives";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
 import { AccountCard } from "@/features/auth/AccountCard";
+import { useAccount } from "@/features/auth/useAccount";
 
 const FILTERS: { value: LedgerFilter; label: string }[] = [
   { value: "all", label: "All" },
@@ -37,8 +38,21 @@ const FILTERS: { value: LedgerFilter; label: string }[] = [
 
 export default function ProfileTab() {
   const router = useRouter();
+  const account = useAccount();
   const store = useStore();
   const hx = store.session.hapticsOn;
+
+  const needsSignIn =
+    account.enabled && account.ready && !account.authenticated;
+
+  if (needsSignIn) {
+    return (
+      <Screen vignette="gold">
+        <UnifiedHeader variant="screen" title="Profile" />
+        <AccountCard noTopMargin />
+      </Screen>
+    );
+  }
 
   const bal = useDisplayBalance(); // real SOL in chain mode, play $ otherwise
   const stats = useMemo(() => lifetimeStats(store.bets), [store.bets]);
