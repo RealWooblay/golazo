@@ -25,7 +25,7 @@ export function useAccount() {
   const { ready, authenticated, user, logout } = usePrivy();
   const { login } = useLogin();
   const { wallets } = useSolanaWallets();
-  const solanaAddress = wallets?.[0]?.address ?? null;
+  const solanaAddress: string | null = wallets?.[0]?.address ?? null;
 
   return {
     enabled,

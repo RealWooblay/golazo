@@ -13,8 +13,10 @@ import type { PrivySignerState } from "./provider";
  *                 login; the chain layer stays disconnected (never falls back to
  *                 the fragile local keypair on web).
  *
- * Deliberately imports NO `@solana/web3.js` — it only forwards `Uint8Array`s, so
- * the heavy chain code stays behind the lazy `import()` in `connect()`.
+ * Imports none of GOLAZO's heavy chain libs (`@solana/web3.js` / anchor) — it
+ * only forwards `Uint8Array`s, so OUR chain code stays behind the lazy `import()`
+ * in `connect()`. (Privy's own deps — @solana/kit, viem — are already in the web
+ * bundle via PrivyProvider regardless.)
  */
 export function usePrivyChainSigner(): PrivySignerState {
   const { authenticated, ready: privyReady } = usePrivy();
