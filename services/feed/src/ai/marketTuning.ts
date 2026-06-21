@@ -172,6 +172,9 @@ export function resolveDeadlineMs(kind: string): number {
       // Trimmed 180s→120s so one score market can't monopolise the window slot for
       // 3 minutes (more momentum-market throughput).
       return 120_000;
+    case 'player_to_score':
+      // "Will <player> score in the next ~2.5 min?" — a player-specific window.
+      return 150_000;
     case 'goal_in_stoppage':
       return STOPPAGE_EXTEND_MS;
     case 'goal_in_extra_time':
@@ -202,6 +205,7 @@ export const MAX_CONCURRENT_MARKETS = 1;
 export function marketSlot(kind: string): MarketSlot {
   if (kind === 'shot_in_window' || kind === 'score_in_window') return 'window';
   if (kind === 'goal_in_stoppage' || kind === 'goal_in_extra_time') return 'period';
+  if (kind === 'player_to_score') return 'player';
   return 'moment';
 }
 
