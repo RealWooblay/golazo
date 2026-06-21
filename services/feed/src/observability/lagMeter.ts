@@ -2,7 +2,10 @@ import type { FeedEvent, GameState } from '@golazo/core';
 import { feedLagMinutes } from '../ai/marketTuning';
 
 /** Max acceptable ESPN wall-clock lag before VOIDing open markets (seconds). */
-export const MAX_WALLCLOCK_LAG_SEC = 90;
+// 150s (was 90): the wallclock signal is attached to ESPN keyEvents only (commentary
+// omits it), so a single old keyEvent could latch the gate shut and silently kill
+// set-piece opens. 150s tolerates the ~2-min feed without opening genuinely stale play.
+export const MAX_WALLCLOCK_LAG_SEC = 150;
 
 /** Max match-clock lag (minutes) before refusing to open. */
 export const MAX_OPEN_LAG_MIN = 1.5;

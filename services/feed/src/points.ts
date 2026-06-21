@@ -42,6 +42,43 @@ export class PointsManager {
   private readonly players = new Map<string, PointsPlayer>();
   private readonly markets = new Map<string, PointsMarket>();
   private readonly lastRefill = new Map<string, number>();
+  /** Stakes reserved during the anti-latency hold (deducted, not yet in pool). */
+  private readonly heldStakes = new Map<string, { userId: string; side: Side; stake: number }>();
+
+  private holdKey(marketId: string, userId: string): string {
+    return `${marketId}:${userId}`;
+  }
+
+  private betPlacementError(
+    userId: string,
+    marketId: string,
+    stake: number,
+    player: PointsPlayer | undefined,
+    pm: PointsMarket | undefined,
+  ): PointsEffects['rejected'] | undefined {
+    if (!player) {
+      return { userId, marketId, stake, reason: 'join play mode first' };
+    }
+    if (!pm || pm.status !== 'open') {
+      return { userId, marketId, stake, reason: 'market not open' };
+    }
+    if (Date.now() >= bettingClosesAt(pm.lockAt, pm.windowMs)) {
+      return { userId, marketId, stake, reason: 'betting window closing' };
+    }
+    if (stake <= 0 || !Number.isFinite(stake)) {
+      return { userId, marketId, stake, reason: 'invalid stake' };
+    }
+    if (pm.bets.some((b) => b.userId === userId)) {
+      return { userId, marketId, stake, reason: 'one bet per market' };
+    }
+    if (this.heldStakes.has(this.holdKey(marketId, userId))) {
+      return { userId, marketId, stake, reason: 'bet already pending' };
+    }
+    if (stake > player.balance) {
+      return { userId, marketId, stake, reason: 'not enough points' };
+    }
+    return undefined;
+  }
 
   register(userId: string, name: string): PointsEffects {
     const existing = this.players.get(userId);
@@ -186,38 +223,71 @@ export class PointsManager {
     return this.effectsFor(userId, true);
   }
 
-  placeBet(userId: string, marketId: string, side: Side, stake: number): PointsEffects {
+  /** Reserve stake during the bet-delay hold (balance deducted immediately). */
+  holdBet(userId: string, marketId: string, side: Side, stake: number): PointsEffects {
     const player = this.players.get(userId);
-    if (!player) {
-      return {
-        rejected: { userId, marketId, stake, reason: 'join play mode first' },
-      };
-    }
     const pm = this.markets.get(marketId);
-    if (!pm || pm.status !== 'open') {
-      return { rejected: { userId, marketId, stake, reason: 'market not open' } };
+    const err = this.betPlacementError(userId, marketId, stake, player, pm);
+    if (err) return { rejected: err };
+
+    player!.balance -= stake;
+    this.heldStakes.set(this.holdKey(marketId, userId), { userId, side, stake });
+    return this.effectsFor(userId, true);
+  }
+
+  /** Bet-delay elapsed — move the held stake into the parimutuel pool. */
+  confirmHeldBet(userId: string, marketId: string): PointsEffects {
+    const key = this.holdKey(marketId, userId);
+    const held = this.heldStakes.get(key);
+    const pm = this.markets.get(marketId);
+    if (!held || !pm || pm.status !== 'open') {
+      return held ? this.releaseHeldBet(userId, marketId, 'market not open') : {};
     }
     if (Date.now() >= bettingClosesAt(pm.lockAt, pm.windowMs)) {
-      return { rejected: { userId, marketId, stake, reason: 'betting window closing' } };
-    }
-    if (stake <= 0 || !Number.isFinite(stake)) {
-      return { rejected: { userId, marketId, stake, reason: 'invalid stake' } };
-    }
-    if (pm.bets.some((b) => b.userId === userId)) {
-      return { rejected: { userId, marketId, stake, reason: 'one bet per market' } };
-    }
-    if (stake > player.balance) {
-      return { rejected: { userId, marketId, stake, reason: 'not enough points' } };
+      return this.releaseHeldBet(userId, marketId, 'betting window closing');
     }
 
-    player.balance -= stake;
-    pm.bets.push({ userId, side, stake });
-    if (side === 'YES') pm.pool.yes += stake;
-    else pm.pool.no += stake;
+    this.heldStakes.delete(key);
+    pm.bets.push({ userId: held.userId, side: held.side, stake: held.stake });
+    if (held.side === 'YES') pm.pool.yes += held.stake;
+    else pm.pool.no += held.stake;
 
     return {
       ...this.effectsFor(userId, true),
       marketUpdate: snapshotPointsMarket(pm),
+    };
+  }
+
+  /** Held bet could not land — refund the reserved stake. */
+  releaseHeldBet(userId: string, marketId: string, reason: string): PointsEffects {
+    const key = this.holdKey(marketId, userId);
+    const held = this.heldStakes.get(key);
+    if (!held) return {};
+
+    this.heldStakes.delete(key);
+    const player = this.players.get(userId);
+    if (player) player.balance += held.stake;
+
+    return {
+      rejected: { userId, marketId, stake: held.stake, reason },
+      ...this.effectsFor(userId, true),
+    };
+  }
+
+  placeBet(userId: string, marketId: string, side: Side, stake: number): PointsEffects {
+    const player = this.players.get(userId);
+    const pm = this.markets.get(marketId);
+    const err = this.betPlacementError(userId, marketId, stake, player, pm);
+    if (err) return { rejected: err };
+
+    player!.balance -= stake;
+    pm!.bets.push({ userId, side, stake });
+    if (side === 'YES') pm!.pool.yes += stake;
+    else pm!.pool.no += stake;
+
+    return {
+      ...this.effectsFor(userId, true),
+      marketUpdate: snapshotPointsMarket(pm!),
     };
   }
 

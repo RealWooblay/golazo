@@ -142,9 +142,9 @@ export function useGameFeed(): GameFeedApi {
   const [toast, setToast] = useState<string | null>(null);
   const [effectiveMode, setEffectiveMode] = useState<FeedMode>(mode);
   const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
-  const [pointsPool, setPointsPool] = useState<PointsMarketSnapshot | null>(
-    null,
-  );
+  const [pointsPools, setPointsPools] = useState<
+    Record<string, PointsMarketSnapshot>
+  >({});
 
   // ---- refs that must survive re-renders / be read inside async callbacks ----
   const pendingByMarketRef = useRef<Record<string, PendingBet | undefined>>({});
@@ -186,19 +186,18 @@ export function useGameFeed(): GameFeedApi {
   }, []);
 
   const setPendingForMarket = useCallback((bet: PendingBet | null) => {
-    setPendingByMarket((prev) => {
-      if (!bet) return prev;
-      return { ...prev, [bet.marketId]: bet };
-    });
+    if (!bet) return;
+    const next = { ...pendingByMarketRef.current, [bet.marketId]: bet };
+    pendingByMarketRef.current = next;
+    setPendingByMarket(next);
   }, []);
 
   const clearPendingForMarket = useCallback((marketId: string) => {
-    setPendingByMarket((prev) => {
-      if (!prev[marketId]) return prev;
-      const next = { ...prev };
-      delete next[marketId];
-      return next;
-    });
+    if (!pendingByMarketRef.current[marketId]) return;
+    const next = { ...pendingByMarketRef.current };
+    delete next[marketId];
+    pendingByMarketRef.current = next;
+    setPendingByMarket(next);
   }, []);
 
   /** Flatten an engine Market into the UI's MarketVM (odds recomputed from pool). */
@@ -232,21 +231,23 @@ export function useGameFeed(): GameFeedApi {
       resolveAt: m.resolveAt,
       ...(m.onChain && !pointsMode ? { onChain: m.onChain } : {}),
     };
-    if (pointsMode && pointsPool?.marketId === m.id) {
-      const snap = pointsPool;
-      const pg = snap.poolYes + snap.poolNo;
-      return {
-        ...vm,
-        oddsYes: snap.oddsYes,
-        oddsNo: snap.oddsNo,
-        pool: pg,
-        yesShare: snap.yesShare,
-        participants: snap.participants,
-        onChain: undefined,
-      };
+    if (pointsMode) {
+      const snap = pointsPools[m.id];
+      if (snap) {
+        const pg = snap.poolYes + snap.poolNo;
+        return {
+          ...vm,
+          oddsYes: snap.oddsYes,
+          oddsNo: snap.oddsNo,
+          pool: pg,
+          yesShare: snap.yesShare,
+          participants: snap.participants,
+          onChain: undefined,
+        };
+      }
     }
     return vm;
-  }, [pointsMode, pointsPool]);
+  }, [pointsMode, pointsPools]);
 
   const teamWord = useCallback((team: Market["team"]): string => {
     const g = gameRef.current;
@@ -494,13 +495,13 @@ export function useGameFeed(): GameFeedApi {
         (p): p is PendingBet => !!p,
       );
       if (pendingBets.length > 0) {
-        const refund = pendingBets.reduce((sum, p) => sum + p.stake, 0);
         if (pointsMode) {
-          store.setPointsState(store.pointsBalance + refund, store.pointsRank);
+          setPendingByMarket({});
         } else {
+          const refund = pendingBets.reduce((sum, p) => sum + p.stake, 0);
           store.credit(refund);
+          setPendingByMarket({});
         }
-        setPendingByMarket({});
         setToast("Connection lost — bet refunded");
       }
       // Stay in LIVE and RETRY the real feed (the user chose live) — do NOT drop
@@ -572,15 +573,18 @@ export function useGameFeed(): GameFeedApi {
               catchingUpRef.current = false;
               setCatchingUp(false);
               if (pointsMode) {
-                setPointsPool({
-                  marketId: msg.market.id,
-                  poolYes: 0,
-                  poolNo: 0,
-                  oddsYes: 1,
-                  oddsNo: 1,
-                  yesShare: 50,
-                  participants: 0,
-                });
+                setPointsPools((prev) => ({
+                  ...prev,
+                  [msg.market.id]: {
+                    marketId: msg.market.id,
+                    poolYes: 0,
+                    poolNo: 0,
+                    oddsYes: 1,
+                    oddsNo: 1,
+                    yesShare: 50,
+                    participants: 0,
+                  },
+                }));
               }
               upsertMarket({ ...toVM(msg.market), subtitle: msg.market.question });
               break;
@@ -605,7 +609,13 @@ export function useGameFeed(): GameFeedApi {
               } else if (!hadBet && settlement?.outcome === "VOID") {
                 setToast("Market voided — unfair timing, no bets taken");
               }
-              if (pointsMode) setPointsPool(null);
+              if (pointsMode) {
+                setPointsPools((prev) => {
+                  const next = { ...prev };
+                  delete next[msg.market.id];
+                  return next;
+                });
+              }
               removeMarket(msg.market.id);
               break;
             }
@@ -620,7 +630,10 @@ export function useGameFeed(): GameFeedApi {
               store.setPointsLeaderboard(msg.players);
               break;
             case "points_market_update":
-              setPointsPool(msg.snapshot);
+              setPointsPools((prev) => ({
+                ...prev,
+                [msg.snapshot.marketId]: msg.snapshot,
+              }));
               patchMarket(msg.snapshot.marketId, {
                 oddsYes: msg.snapshot.oddsYes,
                 oddsNo: msg.snapshot.oddsNo,
@@ -676,13 +689,14 @@ export function useGameFeed(): GameFeedApi {
             case "points_bet_rejected": {
               const p = pendingByMarketRef.current[msg.marketId];
               if (msg.userId === pointsUserId && p && p.marketId === msg.marketId) {
-                store.setPointsState(store.pointsBalance + msg.stake, store.pointsRank);
                 clearPendingForMarket(msg.marketId);
                 const reason = msg.reason ?? "";
                 setToast(
-                  /window|closing/i.test(reason)
-                    ? "Betting closed — stake refunded"
-                    : "Too close to the action — bet refunded",
+                  /not enough/i.test(reason)
+                    ? "Not enough points"
+                    : /window|closing/i.test(reason)
+                      ? "Betting closed — stake refunded"
+                      : "Too close to the action — bet refunded",
                 );
               }
               break;
@@ -715,7 +729,13 @@ export function useGameFeed(): GameFeedApi {
       if (!m || m.phase !== "open") return null; // window closed
       if (Date.now() >= bettingClosesAt(m.lockAt, m.windowMs)) return null;
       if (pendingByMarketRef.current[m.id]) return null; // one bet per market
-      const spendable = pointsMode ? pointsBalance : store.balance;
+      const pendingStake = Object.values(pendingByMarketRef.current).reduce(
+        (sum, p) => sum + (p?.stake ?? 0),
+        0,
+      );
+      const spendable = pointsMode
+        ? store.pointsBalance - pendingStake
+        : store.balance;
       if (stake > spendable) {
         setToast(pointsMode ? "Not enough points" : "Not enough balance");
         return null;
@@ -736,10 +756,26 @@ export function useGameFeed(): GameFeedApi {
         } catch {
           return null; // locked between render and tap — reject cleanly
         }
+        setPendingForMarket({
+          marketId: m.id,
+          side,
+          stake,
+          estimatedMult,
+        });
       } else {
         // LIVE: the server owns the pool. The multiple the user sees is only an
         // estimate; authoritative payout comes back in market_resolve.
         estimatedMult = side === "YES" ? m.oddsYes : m.oddsNo;
+        const bet: PendingBet = {
+          marketId: m.id,
+          side,
+          stake,
+          estimatedMult,
+        };
+        pendingByMarketRef.current = {
+          ...pendingByMarketRef.current,
+          [m.id]: bet,
+        };
         const sent = pointsMode
           ? (liveSocketRef.current?.send({
               t: "points_bet",
@@ -756,18 +792,16 @@ export function useGameFeed(): GameFeedApi {
               userId: USER_ID,
             }) ?? false);
         if (!sent) {
+          clearPendingForMarket(m.id);
           setToast("Connection lost — bet not placed");
           return null;
         }
-        if (pointsMode) {
-          store.setPointsState(pointsBalance - stake, pointsRank);
-        } else {
+        if (!pointsMode) {
           store.debit(stake);
         }
+        setPendingForMarket(bet);
       }
 
-      const bet: PendingBet = { marketId: m.id, side, stake, estimatedMult };
-      setPendingForMarket(bet);
       setToast(`Bet ${side} · est. ${multiple(estimatedMult)}`);
       return estimatedMult;
     },
@@ -777,8 +811,6 @@ export function useGameFeed(): GameFeedApi {
       effectiveMode,
       store,
       pointsMode,
-      pointsBalance,
-      pointsRank,
       pointsUserId,
       setPendingForMarket,
     ],

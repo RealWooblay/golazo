@@ -89,7 +89,7 @@ const MOMENTUM_BET_WINDOW_MS = 10_000;
  * (momentum time-boxed markets are now the main opener path) — this just stops ONE
  * spell printing the same line back-to-back.
  */
-const MOMENTUM_OPEN_COOLDOWN_MS = 25_000;
+const MOMENTUM_OPEN_COOLDOWN_MS = 12_000;
 /** Per-market bookkeeping the orchestrator keeps alongside the engine's Market. */
 interface TrackedMarket {
   marketId: string;
@@ -116,6 +116,17 @@ interface TrackedMarket {
   openClockMin?: number;
   /** Feed event type that opened this market (free_kick, corner, …). */
   openerType?: FeedEvent['type'];
+  /**
+   * Monotonic event index at open. A market may ONLY be resolved by events strictly
+   * after this — the event that opens "a shot this spell?" can never be its own YES.
+   */
+  openSeq?: number;
+  /**
+   * An outcome decided while betting was still OPEN. Held here and applied the moment
+   * the market locks, so a market can never open and resolve in the same breath —
+   * there is always a real window to bet in. A later YES overrides a held miss/NO.
+   */
+  pendingOutcome?: OutcomeDecision;
 }
 
 /** A user bet held for the bet-delay window before it enters the pool. */
@@ -163,6 +174,8 @@ export class Orchestrator {
   /** Resolver keys from the current poll batch; opener twins in same batch are skipped. */
   private samePollResolverSeqs = new Set<string>();
   private samePollResolverKeys = new Set<string>();
+  /** Teams with an outcome event in the current poll batch (open-side snipe guard). */
+  private samePollResolverTeams = new Set<Team>();
   /** Latest goal/miss clock per team — drives the deadline late-goal rescue. */
   private readonly lastResolverByTeam = new Map<Team, number>();
   /** True once we've seen the clock enter extra time this match. */
@@ -181,6 +194,12 @@ export class Orchestrator {
   private readonly lastMomentumOpenAt = new Map<Team, number>();
   /** Rotates momentum-market phrasing so a long spell doesn't repeat one line. */
   private momentumCounter = 0;
+  /**
+   * Monotonic counter bumped once per processed feed event. Stamped onto each market
+   * at open (openSeq) so resolution can require events strictly AFTER the open — the
+   * triggering event can never resolve the market it just opened.
+   */
+  private eventCounter = 0;
   /** Sim/test only: every momentum bar value broadcast this run (for assertions). */
   private readonly momentumLog: Array<{ bar: Team | null; home: number; away: number }> = [];
 
@@ -323,6 +342,10 @@ export class Orchestrator {
     this.server.roomManager.lockExpiredMarkets();
     await this.checkPeriodMarkets(game);
 
+    // HEARTBEAT: push a momentum frame every tick (not just on events) so the bar
+    // keeps breathing through quiet spells instead of freezing between sparse polls.
+    this.broadcastMomentum();
+
     const ordered = sortFeedEvents(events);
     this.samePollResolverSeqs = new Set(
       ordered
@@ -336,6 +359,14 @@ export class Orchestrator {
         .map(resolverBatchKey)
         .filter((key): key is string => !!key),
     );
+    // Teams that already have an outcome (shot/goal/miss/…) in THIS batch — used by
+    // the momentum opener so it won't open a market whose result is already in-batch.
+    this.samePollResolverTeams = new Set(
+      ordered
+        .filter(isOutcomeEvent)
+        .map((e) => e.team)
+        .filter((t): t is Team => !!t),
+    );
 
     this.metrics.recordPoll(Date.now() - t0, ordered.length);
     this.audit.record('feed_poll', { events: ordered.length, ms: Date.now() - t0 });
@@ -347,6 +378,7 @@ export class Orchestrator {
     } finally {
       this.samePollResolverSeqs.clear();
       this.samePollResolverKeys.clear();
+      this.samePollResolverTeams.clear();
     }
 
     // THE ONE NO-WRITER: a single per-tick deadline sweep. Any locked market past
@@ -355,6 +387,7 @@ export class Orchestrator {
   }
 
   private async processEvent(ev: FeedEvent): Promise<void> {
+    this.eventCounter++;
     this.server.broadcast({ t: 'commentary', text: ev.text, ts: ev.ts });
 
     this.lagMeter.observe(ev, this.feed.state());
@@ -366,14 +399,13 @@ export class Orchestrator {
     this.recent.push(ev);
     if (this.recent.length > 30) this.recent.shift();
 
-    // The agent reads momentum off every event, then pushes it to the bar.
+    // The agent reads momentum off every event, then pushes it to the bar. Markets
+    // are NOT opened here — an OUTCOME (shot/goal/miss) must never open a market, only
+    // resolve one. Momentum markets are opened from BUILD-UP events on the opener path
+    // below (after the resolver branch), so the pressure opens "a shot this spell?" and
+    // the shot that follows is what settles it.
     this.momentum.observe(ev);
     this.broadcastMomentum();
-
-    // Momentum time-boxed markets — the volume driver. Driven off the momentum
-    // READ on ANY weighted event (not just shot/miss), opened for the leader when
-    // the read clears threshold. Pure wall-clock windows → reliable under feed lag.
-    await this.maybeOpenMomentumMarket(this.momentum.read());
 
     // RESOLVER branch — an event can only ever cause YES (NO comes from the
     // per-tick deadline sweep). Resolver-ish events route here and never reach the
@@ -406,8 +438,11 @@ export class Orchestrator {
       return;
     }
 
-    // Otherwise this might be a bettable "set moment". The watcher decides (rules
-    // for set-pieces) — and returns null for calm/non-bettable events.
+    // BUILD-UP path — only non-resolver events reach here (resolvers returned above).
+    // First let momentum open a time-boxed WINDOW market for the pressing side, then
+    // let the set-piece watcher open a MOMENT market. Both are opened by the build-up,
+    // never by an outcome — that's the whole point of moments betting.
+    await this.maybeOpenMomentumMarket(this.momentum.read());
     await this.maybeOpenMarket(ev);
   }
 
@@ -491,6 +526,9 @@ export class Orchestrator {
   private broadcastMomentum(): void {
     const r = this.momentum.read();
     this.momentumLog.push({ bar: r.bar, home: r.home, away: r.away });
+    // The per-tick heartbeat makes this grow over a long match — cap it (the sim reads
+    // the tail for assertions; production never needs the full history).
+    if (this.momentumLog.length > 10_000) this.momentumLog.shift();
     this.server.broadcast({ t: 'momentum', bar: r.bar, home: r.home, away: r.away });
   }
 
@@ -523,9 +561,19 @@ export class Orchestrator {
     if (this.hasOpenMomentumMarketFor(team)) return;
     if (this.hasBlockingMarket('window')) return;
 
+    // OPEN-SIDE same-poll guard: if the pressing team already has a shot/goal/miss in
+    // THIS poll batch, the outcome is effectively known — don't open a market that
+    // would just resolve off the same batch (mirrors the set-piece opener's guard).
+    if (this.samePollResolverTeams.has(team)) return;
+
     const game = this.feed.state();
     const name = team === 'home' ? game.home.name : game.away.name;
     if (!name) return;
+    // Stamp the open clock so the deadline late-goal rescue works for momentum
+    // markets too (a goal/shot the team got at/after open settles YES even if it
+    // was reported in a later poll than the resolve window).
+    const oc = parseClockKey(game.clock);
+    const openClockMin = oc.base + oc.stopp / 100;
 
     const spec = momentumMarketSpec(name, read.intensity, this.momentumCounter++);
     const trigger: MarketTrigger = {
@@ -542,6 +590,7 @@ export class Orchestrator {
     await this.openTriggeredMarket(trigger, {
       team,
       slot: 'window',
+      openClockMin,
       logLabel: `momentum kind=${spec.kind} team=${team} intensity=${read.intensity.toFixed(1)}`,
     });
   }
@@ -672,6 +721,7 @@ export class Orchestrator {
       pending: new Map(),
       marketSeed,
       slot,
+      openSeq: this.eventCounter,
       ...(opts.openClockMin !== undefined ? { openClockMin: opts.openClockMin } : {}),
       ...(opts.openerType ? { openerType: opts.openerType } : {}),
       ...(opts.isPeriod ? { isPeriod: true } : {}),
@@ -699,6 +749,18 @@ export class Orchestrator {
 
     // Mirror the lock on-chain (best-effort, fire-and-forget — never blocks).
     if (t.marketSeed !== undefined) void this.chain.lockMarket(t.marketSeed);
+
+    // An outcome that landed DURING the betting window was held — apply it now that
+    // betting has closed. This is the guaranteed-window settlement: a real bet window
+    // always elapsed first. (finalizeMarket cleans up the tracked entry + timers.)
+    if (t.pendingOutcome) {
+      const decision = t.pendingOutcome;
+      t.pendingOutcome = undefined;
+      this.finalizeMarket(t, decision.outcome, {
+        voidCause: decision.voidCause,
+        voidReason: decision.voidReason,
+      });
+    }
   }
 
   /**
@@ -758,6 +820,20 @@ export class Orchestrator {
       if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
       const decision = this.outcomeForTarget(ev, target, m);
       if (!decision) continue;
+
+      // GUARANTEED BETTING WINDOW: an outcome that lands while betting is still OPEN
+      // is HELD, not applied — it settles the moment the market locks (see lockMarket).
+      // So a market can never open and resolve in the same breath; there is always a
+      // real window to bet in. A later YES overrides a held miss/NO; first wins otherwise.
+      if (m.status === 'open') {
+        const prev = target.pendingOutcome;
+        if (!prev || (decision.outcome === 'YES' && prev.outcome !== 'YES')) {
+          target.pendingOutcome = decision;
+        }
+        settled = true;
+        continue;
+      }
+
       this.finalizeMarket(target, decision.outcome, {
         voidCause: decision.voidCause,
         voidReason: decision.voidReason,
@@ -832,6 +908,10 @@ export class Orchestrator {
       if (targets.includes(t)) continue;
       const m = this.engine.get(t.marketId);
       if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
+      // OPEN-BOUNDARY: only events that occur strictly AFTER a market opened may
+      // resolve it. The build-up event that opened "a shot this spell?" can't be its
+      // own YES — it has to wait for the NEXT shot.
+      if (t.openSeq !== undefined && t.openSeq >= this.eventCounter) continue;
       if (this.marketMatchesEvent(t, m, ev)) targets.push(t);
     }
     return targets;
@@ -1126,6 +1206,18 @@ export class Orchestrator {
     }
     if (pending.has(msg.userId)) return;
 
+    const holdFx = this.server.pointsManager.holdBet(
+      msg.userId,
+      msg.marketId,
+      msg.side,
+      msg.stake,
+    );
+    if (holdFx.rejected) {
+      this.server.emitPoints(holdFx);
+      return;
+    }
+    this.server.emitPoints(holdFx);
+
     const held: HeldBet = {
       userId: msg.userId,
       side: msg.side,
@@ -1146,12 +1238,7 @@ export class Orchestrator {
     const m = this.engine.get(marketId);
     const now = Date.now();
     if (m && m.status === 'open' && now < bettingClosesAt(m.lockAt, m.windowMs)) {
-      const effects = this.server.pointsManager.placeBet(
-        userId,
-        marketId,
-        held.side,
-        held.stake,
-      );
+      const effects = this.server.pointsManager.confirmHeldBet(userId, marketId);
       if (effects.rejected) {
         this.server.emitPoints(effects);
         return;
@@ -1173,9 +1260,9 @@ export class Orchestrator {
     held: { userId: string; stake: number },
     reason: string,
   ): void {
-    this.server.emitPoints({
-      rejected: { userId: held.userId, marketId, stake: held.stake, reason },
-    });
+    this.server.emitPoints(
+      this.server.pointsManager.releaseHeldBet(held.userId, marketId, reason),
+    );
   }
 
   /** Remember goal/miss clocks so a late corner/penalty dup doesn't open. */
@@ -1241,6 +1328,10 @@ function isWindowOrPlayKind(kind: string): boolean {
 function anyTeamGoalCountsYes(kind: string): boolean {
   return (
     kind === 'score_in_window' ||
+    // "a shot this spell?" — a goal or shot the team recorded at/after open is a
+    // YES even if it landed in a later poll than the resolve window (lastResolverByTeam
+    // records goal+miss, both of which qualify as a shot attempt).
+    kind === 'shot_in_window' ||
     kind === 'chance_from_play' ||
     kind === 'goal_from_open_play' ||
     kind === 'goal_in_stoppage' ||
