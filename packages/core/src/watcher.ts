@@ -91,6 +91,11 @@ export function requiresTeam(kind: string): boolean {
   return !TEAMLESS_KINDS.has(kind);
 }
 
+/** Goal-scoring set-piece / penalty markets (YES on goal, NO on miss in offline sim). */
+export function isGoalQuestionKind(kind: string): boolean {
+  return kind === 'penalty_scored' || kind.startsWith('goal_from');
+}
+
 /** Pure mapping FeedEvent -> MarketTrigger | null. */
 export function triggerFromEvent(ev: FeedEvent, ctx: WatcherContext = {}): MarketTrigger | null {
   // VAR reviews choose their market by subject (red card vs penalty), teamless.
