@@ -77,6 +77,45 @@ describe('PointsManager', () => {
     expect(fx.state?.balance).toBe(POINTS_START_BALANCE);
   });
 
+  it('holds stake during bet delay then confirms into the pool', () => {
+    const pm = new PointsManager();
+    pm.register('u1', 'Alice');
+    pm.onMarketOpen(fakeMarket('m1'));
+
+    const hold = pm.holdBet('u1', 'm1', 'YES', 100);
+    expect(hold.state?.balance).toBe(POINTS_START_BALANCE - 100);
+    expect(hold.marketUpdate).toBeUndefined();
+
+    const confirm = pm.confirmHeldBet('u1', 'm1');
+    expect(confirm.marketUpdate?.poolYes).toBe(100);
+    expect(confirm.state?.balance).toBe(POINTS_START_BALANCE - 100);
+  });
+
+  it('refunds a held stake when the bet is released', () => {
+    const pm = new PointsManager();
+    pm.register('u1', 'Alice');
+    pm.onMarketOpen(fakeMarket('m1'));
+    pm.holdBet('u1', 'm1', 'NO', 80);
+    const fx = pm.releaseHeldBet('u1', 'm1', 'play resolved before your bet cleared');
+    expect(fx.rejected?.stake).toBe(80);
+    expect(fx.state?.balance).toBe(POINTS_START_BALANCE);
+  });
+
+  it('allows concurrent holds on different markets', () => {
+    const pm = new PointsManager();
+    pm.register('u1', 'Alice');
+    pm.onMarketOpen(fakeMarket('m1'));
+    pm.onMarketOpen(fakeMarket('m2'));
+
+    pm.holdBet('u1', 'm1', 'YES', 100);
+    const hold2 = pm.holdBet('u1', 'm2', 'NO', 100);
+    expect(hold2.state?.balance).toBe(POINTS_START_BALANCE - 200);
+
+    pm.confirmHeldBet('u1', 'm1');
+    const confirm2 = pm.confirmHeldBet('u1', 'm2');
+    expect(confirm2.marketUpdate?.poolNo).toBe(100);
+  });
+
   it('moves cross-mode points on a settled REAL bet (win + loss)', () => {
     const pm = new PointsManager();
     pm.register('u1', 'Alice'); // a real-mode bettor who joined the points system

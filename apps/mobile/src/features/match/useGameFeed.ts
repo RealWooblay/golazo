@@ -70,6 +70,9 @@ import type {
 export interface GameFeedVM {
   game: GameState | null;
   commentary: string;
+  /** Last few play-by-play lines (newest last) — powers the live ticker on the
+   *  between-moments idle card so the wait never feels dead. */
+  commentaryLog: string[];
   /** The agent's live read of who's pressing — drives the momentum bar. */
   momentum: "home" | "away" | null;
   /** Continuous lean toward a side in [0..1] (0 = home/left, 1 = away/right, 0.5 =
@@ -125,6 +128,14 @@ export function useGameFeed(): GameFeedApi {
   // ---- view-model state (what the screen draws) ----
   const [game, setGame] = useState<GameState | null>(null);
   const [commentary, setCommentary] = useState("Connecting to the match…");
+  // A rolling buffer of the last few real play-by-play lines (not status messages),
+  // de-duped, for the idle card's live ticker.
+  const [commentaryLog, setCommentaryLog] = useState<string[]>([]);
+  const recordPlay = useCallback((text: string) => {
+    const t = text?.trim();
+    if (!t) return;
+    setCommentaryLog((log) => (log[log.length - 1] === t ? log : [...log, t].slice(-6)));
+  }, []);
   const [momentum, setMomentum] = useState<"home" | "away" | null>(null);
   // CONTINUOUS lean toward a side in [0..1]: 0 = all home (left), 1 = all away
   // (right), 0.5 = even. Derived from the server's home/away pressure values so the
@@ -383,6 +394,7 @@ export function useGameFeed(): GameFeedApi {
     const handleEvent = (ev: FeedEvent) => {
       if (cancelled) return;
       setCommentary(ev.text);
+      recordPlay(ev.text);
 
       // Goal -> scoreboard. (The clock is advanced by the tick loop below.)
       if (ev.type === "goal" && ev.team) {
@@ -559,6 +571,7 @@ export function useGameFeed(): GameFeedApi {
               break;
             case "commentary":
               setCommentary(msg.text);
+              recordPlay(msg.text);
               break;
             case "momentum":
               setMomentum(msg.bar);
@@ -729,13 +742,7 @@ export function useGameFeed(): GameFeedApi {
       if (!m || m.phase !== "open") return null; // window closed
       if (Date.now() >= bettingClosesAt(m.lockAt, m.windowMs)) return null;
       if (pendingByMarketRef.current[m.id]) return null; // one bet per market
-      const pendingStake = Object.values(pendingByMarketRef.current).reduce(
-        (sum, p) => sum + (p?.stake ?? 0),
-        0,
-      );
-      const spendable = pointsMode
-        ? store.pointsBalance - pendingStake
-        : store.balance;
+      const spendable = pointsMode ? store.pointsBalance : store.balance;
       if (stake > spendable) {
         setToast(pointsMode ? "Not enough points" : "Not enough balance");
         return null;
@@ -813,6 +820,7 @@ export function useGameFeed(): GameFeedApi {
       pointsMode,
       pointsUserId,
       setPendingForMarket,
+      clearPendingForMarket,
     ],
   );
 
@@ -860,6 +868,7 @@ export function useGameFeed(): GameFeedApi {
   return {
     game,
     commentary,
+    commentaryLog,
     momentum,
     momentumLean,
     markets,

@@ -15,32 +15,88 @@ import { Surface, Text } from "@/ui";
 import { GlowWash } from "./GlowWash";
 
 /**
- * WaitingCard — the between-moments idle state. NOT a dead empty box: a soft
- * "scanning the pitch" radar with concentric pulse rings + a sweeping line, an
- * on-brand line of copy, and a hint that the next attack opens a market any
- * second. Keeps the stage feeling live while the sim builds the next moment.
+ * WaitingCard — the between-moments idle state. NOT a dead empty box.
+ *
+ * In LIVE mode (a commentaryLog is supplied) it shows the match breathing: the live
+ * clock, a who's-pressing pressure bar, a "next market any second" teaser, and a
+ * rolling play-by-play ticker — so the wait between markets feels alive. With no live
+ * data it falls back to the ambient "scanning the pitch" radar + a line of copy.
  */
 export function WaitingCard({
   title = "Reading the game…",
   body = "A market pops the second something kicks off. Stay sharp.",
+  clock,
+  commentaryLog,
+  momentumLean,
+  momentum,
+  homeName,
+  awayName,
 }: {
   title?: string;
   body?: string;
+  clock?: string;
+  commentaryLog?: string[];
+  momentumLean?: number | null;
+  momentum?: "home" | "away" | null;
+  homeName?: string;
+  awayName?: string;
 }) {
+  const plays = (commentaryLog ?? []).slice(-3).reverse();
+  const live = plays.length > 0;
+
+  if (!live) {
+    return (
+      <Surface radius={radius.xl} style={styles.card}>
+        <GlowWash color={colors.raw.cyan} opacity={0.08} cx="50%" cy="38%" r="60%" />
+        <Radar />
+        <Text style={styles.title}>{title}</Text>
+        <Text style={styles.body} center>
+          {body}
+        </Text>
+      </Surface>
+    );
+  }
+
+  const pressingName =
+    momentum === "home" ? homeName : momentum === "away" ? awayName : undefined;
+  const lean = typeof momentumLean === "number" ? momentumLean : null;
+
   return (
-    <Surface radius={radius.xl} style={styles.card}>
-      <GlowWash
-        color={colors.raw.cyan}
-        opacity={0.08}
-        cx="50%"
-        cy="38%"
-        r="60%"
-      />
-      <Radar />
-      <Text style={styles.title}>{title}</Text>
-      <Text style={styles.body} center>
-        {body}
-      </Text>
+    <Surface radius={radius.xl} style={styles.liveCard}>
+      <GlowWash color={colors.raw.cyan} opacity={0.07} cx="50%" cy="22%" r="70%" />
+
+      <View style={styles.headRow}>
+        {clock ? (
+          <View style={styles.clockPill}>
+            <View style={styles.liveDot} />
+            <Text style={styles.clockText}>{clock}</Text>
+          </View>
+        ) : null}
+        <Text style={styles.teaser} numberOfLines={1}>
+          {pressingName
+            ? `${pressingName} pressing — next market any second`
+            : "Scanning the pitch for the next moment…"}
+        </Text>
+      </View>
+
+      {lean !== null ? (
+        <View style={styles.pressureTrack}>
+          <View style={[styles.pressureHome, { flex: Math.max(0.001, 1 - lean) }]} />
+          <View style={[styles.pressureAway, { flex: Math.max(0.001, lean) }]} />
+        </View>
+      ) : null}
+
+      <View style={styles.ticker}>
+        {plays.map((line, i) => (
+          <Text
+            key={`${i}-${line.slice(0, 12)}`}
+            style={[styles.play, i === 0 && styles.playLatest]}
+            numberOfLines={2}
+          >
+            {line}
+          </Text>
+        ))}
+      </View>
     </Surface>
   );
 }
@@ -105,6 +161,59 @@ const styles = StyleSheet.create({
     minHeight: 220,
     justifyContent: "center",
   },
+  liveCard: {
+    padding: spacing.lg,
+    gap: spacing.md,
+    minHeight: 180,
+    justifyContent: "center",
+  },
+  headRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  clockPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    backgroundColor: colors.alpha.white06,
+  },
+  liveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.yes,
+  },
+  clockText: { ...type.mono, fontSize: 13, color: colors.textPrimary },
+  teaser: {
+    ...type.body,
+    flex: 1,
+    fontSize: 13,
+    color: colors.textMuted,
+  },
+  pressureTrack: {
+    flexDirection: "row",
+    height: 4,
+    borderRadius: 2,
+    overflow: "hidden",
+    backgroundColor: colors.alpha.white06,
+  },
+  pressureHome: { backgroundColor: colors.yes, opacity: 0.7 },
+  pressureAway: { backgroundColor: colors.cyan, opacity: 0.7 },
+  ticker: { gap: 4 },
+  play: {
+    ...type.body,
+    fontSize: 12.5,
+    color: colors.textMuted,
+    opacity: 0.6,
+  },
+  playLatest: {
+    color: colors.textPrimary,
+    opacity: 1,
+  },
   radar: {
     width: RADAR,
     height: RADAR,
@@ -128,8 +237,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  // a half-width bar offset to the right of center, so it sweeps like a radar arm
-  // about the radar's center as the wrapper rotates (no transformOrigin needed).
   sweepArm: {
     position: "absolute",
     left: RADAR / 2,

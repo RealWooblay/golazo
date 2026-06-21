@@ -22,6 +22,7 @@ export function usePointsLeaderboardSync(enabled = true): void {
 
     let cancelled = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
+    let balanceSynced = false;
 
     const connect = () => {
       if (cancelled) return;
@@ -44,7 +45,14 @@ export function usePointsLeaderboardSync(enabled = true): void {
           if (msg.t === "points_leaderboard") {
             store.setPointsLeaderboard(msg.players);
           }
-          if (msg.t === "points_state" && msg.userId === userId) {
+          // Seed balance once on first connect; match feed owns live updates so
+          // reconnects here don't snap points back to the server register value.
+          if (
+            !balanceSynced &&
+            msg.t === "points_state" &&
+            msg.userId === userId
+          ) {
+            balanceSynced = true;
             store.setPointsState(msg.balance, msg.rank);
           }
         },

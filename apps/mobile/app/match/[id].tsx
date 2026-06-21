@@ -47,6 +47,7 @@ export default function MatchScreen() {
   const {
     game,
     commentary,
+    commentaryLog,
     momentum,
     momentumLean,
     markets,
@@ -308,7 +309,14 @@ export default function MatchScreen() {
           })
         ) : reveals.length === 0 ? (
           <View style={styles.gutter}>
-            <WaitingCard />
+            <WaitingCard
+              clock={game?.clock}
+              commentaryLog={commentaryLog}
+              momentumLean={momentumLean}
+              momentum={momentumTeam}
+              homeName={game?.home?.name}
+              awayName={game?.away?.name}
+            />
           </View>
         ) : null}
 
