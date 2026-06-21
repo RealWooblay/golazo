@@ -4,7 +4,14 @@
 // classifier, the AI watcher, the orchestrator's timers) reads from here, so
 // tuning the product is editing this file and nothing else.
 // ───────────────────────────────────────────────────────────────────────────
-import type { FeedEvent, FeedEventType, GameState, MarketTrigger, Team } from '@golazo/core';
+import type {
+  FeedEvent,
+  FeedEventType,
+  GameState,
+  MarketSlot,
+  MarketTrigger,
+  Team,
+} from '@golazo/core';
 import { parseClockKey } from '../feed/espn';
 
 export type MarketTier = 'set_piece';
@@ -160,6 +167,8 @@ export function resolveDeadlineMs(kind: string): number {
     case 'score_in_window':
       // Momentum time-box: "to score in the next N minutes?" — a longer window.
       return 180_000;
+    case 'goal_in_stoppage':
+      return STOPPAGE_EXTEND_MS;
     case 'goal_in_extra_time':
       return 25 * 60_000;
     default:
@@ -182,7 +191,14 @@ export const KEY_EVENT_ONLY_OPENERS = new Set<FeedEvent['type']>(['penalty']);
  * behind it. A moment that occurs while a market is live is IGNORED — never
  * queued and replayed later (that path only breeds stale, wrong markets).
  */
+/** @deprecated Kept for old tests/docs. Runtime concurrency is now one per slot. */
 export const MAX_CONCURRENT_MARKETS = 1;
+
+export function marketSlot(kind: string): MarketSlot {
+  if (kind === 'shot_in_window' || kind === 'score_in_window') return 'window';
+  if (kind === 'goal_in_stoppage' || kind === 'goal_in_extra_time') return 'period';
+  return 'moment';
+}
 
 /** True for instant rule-based open: structured ESPN keyEvent set-pieces. */
 export function isStructuredSetPiece(ev: FeedEvent): boolean {
@@ -434,28 +450,69 @@ export const PERIOD_MARKET = {
   maxMargin: 1,
 };
 
-/** Dedupe key so a feed restart mid-ET doesn't open a second period market. */
-export function periodMarketKey(gameId: string): string {
-  return `period:et:${gameId}`;
+export type PeriodMarketPhase = 'stoppage_1h' | 'stoppage_2h' | 'extra_time';
+
+/** Dedupe key so a feed restart does not open a second before-whistle market. */
+export function periodMarketKey(gameId: string, phase: PeriodMarketPhase): string {
+  return `period:${phase}:${gameId}`;
+}
+
+export function periodMarketKeyForGame(game: GameState): string | undefined {
+  const phase = periodMarketPhase(game);
+  return phase ? periodMarketKey(game.gameId, phase) : undefined;
+}
+
+export function periodMarketPhase(game: GameState): PeriodMarketPhase | undefined {
+  const ctx = parseGameContext(game);
+  if (ctx.isExtraTime) return 'extra_time';
+  if (!ctx.isStoppage) return undefined;
+  if (ctx.period === '1H') return 'stoppage_1h';
+  if (ctx.period === '2H') return 'stoppage_2h';
+  return undefined;
 }
 
 /**
- * Build the extra-time period market trigger when conditions are met, or null.
- * Called on ET entry (and retried after a blocking moment market closes).
+ * Build the before-whistle period market trigger when conditions are met, or null.
+ * Stoppage questions resolve on HT/FT whistle, never on an announced X-minute timer.
  */
 export function buildPeriodMarketTrigger(game: GameState): MarketTrigger | null {
   if (!PERIOD_MARKET.enabled) return null;
   const ctx = parseGameContext(game);
-  if (!ctx.isExtraTime || !ctx.isClose) return null;
+  if (!ctx.isClose) return null;
 
   const margin = game.scoreHome - game.scoreAway;
   if (Math.abs(margin) > PERIOD_MARKET.maxMargin) return null;
+
+  if (ctx.isStoppage && ctx.period === '1H') {
+    return {
+      gameId: game.gameId,
+      question: 'Goal before half-time?',
+      kind: 'goal_in_stoppage',
+      slot: 'period',
+      windowMs: PERIOD_MARKET.betWindowMs,
+      trueProb: 0.28,
+    };
+  }
+
+  if (ctx.isStoppage && ctx.period === '2H') {
+    return {
+      gameId: game.gameId,
+      question: 'Goal before full-time?',
+      kind: 'goal_in_stoppage',
+      slot: 'period',
+      windowMs: PERIOD_MARKET.betWindowMs,
+      trueProb: 0.34,
+    };
+  }
+
+  if (!ctx.isExtraTime) return null;
 
   if (margin < 0) {
     return {
       gameId: game.gameId,
       question: `Will ${game.home.name} score in extra time?`,
       kind: 'goal_in_extra_time',
+      slot: 'period',
       team: 'home',
       windowMs: PERIOD_MARKET.betWindowMs,
       trueProb: 0.32,
@@ -466,6 +523,7 @@ export function buildPeriodMarketTrigger(game: GameState): MarketTrigger | null 
       gameId: game.gameId,
       question: `Will ${game.away.name} score in extra time?`,
       kind: 'goal_in_extra_time',
+      slot: 'period',
       team: 'away',
       windowMs: PERIOD_MARKET.betWindowMs,
       trueProb: 0.32,
@@ -475,6 +533,7 @@ export function buildPeriodMarketTrigger(game: GameState): MarketTrigger | null 
     gameId: game.gameId,
     question: `Will there be a goal in extra time?`,
     kind: 'goal_in_extra_time',
+    slot: 'period',
     windowMs: PERIOD_MARKET.betWindowMs,
     trueProb: 0.45,
   };

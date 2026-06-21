@@ -78,7 +78,14 @@ export interface EspnCompetitor {
   team?: { id?: string; displayName?: string; abbreviation?: string; color?: string };
 }
 export interface EspnStatus {
-  type?: { state?: 'pre' | 'in' | 'post'; completed?: boolean };
+  type?: {
+    state?: 'pre' | 'in' | 'post';
+    completed?: boolean;
+    name?: string;
+    shortDetail?: string;
+    detail?: string;
+    description?: string;
+  };
   displayClock?: string;
   clock?: number;
 }
@@ -516,7 +523,7 @@ const OPENER_TYPES: ReadonlySet<FeedEvent['type']> = new Set([
 /** Parse an ESPN clock ("45'" or "45+2'") into {base, stopp} for chronological sort. */
 export function parseClockKey(display: string | undefined): { base: number; stopp: number } {
   if (!display) return { base: 0, stopp: 0 };
-  const m = /(\d+)(?:\s*\+\s*(\d+))?/.exec(display);
+  const m = /(\d+)\s*'?\s*(?:\+\s*(\d+))?/.exec(display);
   return { base: m ? Number.parseInt(m[1]!, 10) : 0, stopp: m && m[2] ? Number.parseInt(m[2], 10) : 0 };
 }
 
@@ -547,7 +554,7 @@ export function parseGameState(
     scoreHome: toInt(home.score),
     scoreAway: toInt(away.score),
     clock: ev.status?.displayClock ?? "0'",
-    status: mapStatus(ev.status?.type?.state),
+    status: mapStatus(ev.status),
   };
   return { state, homeTeamId: home.team?.id, awayTeamId: away.team?.id };
 }
@@ -562,9 +569,21 @@ function teamRef(c: EspnCompetitor): TeamRef {
   };
 }
 
-export function mapStatus(state: 'pre' | 'in' | 'post' | undefined): GameState['status'] {
-  if (state === 'in') return 'live';
+export function mapStatus(status: EspnStatus | undefined): GameState['status'] {
+  const state = status?.type?.state;
+  const text = [
+    status?.displayClock,
+    status?.type?.name,
+    status?.type?.shortDetail,
+    status?.type?.detail,
+    status?.type?.description,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
   if (state === 'post') return 'final';
+  if (/\b(half[- ]?time|halftime|medio tiempo|descanso|ht)\b/.test(text)) return 'halftime';
+  if (state === 'in') return 'live';
   return 'pre';
 }
 
@@ -580,6 +599,7 @@ export function mapKeyEventType(ke: EspnKeyEvent): FeedEventType | undefined {
   if (ke.scoringPlay) return 'goal';
 
   const text = `${ke.type?.text ?? ''} ${ke.text ?? ''}`.toLowerCase();
+  if (/\b(half[- ]?time|halftime|medio tiempo|descanso)\b/.test(text)) return 'halftime';
 
   if (/\b(penalty|penalti)\b/.test(text)) {
     if (/(scored|converted|goal|gol|anotad)/.test(text)) return 'goal';
@@ -682,15 +702,15 @@ export function parseAwardedTeamFromCommentary(
 ): Team | undefined {
   const raw = text.trim();
   let m = /^corner,\s*([^.]+)/i.exec(raw);
-  if (m) return matchTeamFragment(m[1], homeName, awayName, homeAbbr, awayAbbr);
+  if (m) return matchTeamFragment(m[1]!, homeName, awayName, homeAbbr, awayAbbr);
   m = /^(?:saque|tiro)\s+de\s+esquina[,\s-]+(?:para\s+|de\s+)?([^.]+)/i.exec(raw);
-  if (m) return matchTeamFragment(m[1], homeName, awayName, homeAbbr, awayAbbr);
+  if (m) return matchTeamFragment(m[1]!, homeName, awayName, homeAbbr, awayAbbr);
   m = /^penalty(?:\s+awarded)?(?:\s+to)?\s+([^.!]+)/i.exec(raw);
-  if (m) return matchTeamFragment(m[1], homeName, awayName, homeAbbr, awayAbbr);
+  if (m) return matchTeamFragment(m[1]!, homeName, awayName, homeAbbr, awayAbbr);
   m = /\(([^)]+)\)\s+wins a free kick/i.exec(raw);
-  if (m) return matchTeamFragment(m[1], homeName, awayName, homeAbbr, awayAbbr);
+  if (m) return matchTeamFragment(m[1]!, homeName, awayName, homeAbbr, awayAbbr);
   m = /\(([^)]+)\)\s+ha recibido una falta/i.exec(raw);
-  if (m) return matchTeamFragment(m[1], homeName, awayName, homeAbbr, awayAbbr);
+  if (m) return matchTeamFragment(m[1]!, homeName, awayName, homeAbbr, awayAbbr);
   return undefined;
 }
 

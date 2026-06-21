@@ -1,4 +1,4 @@
-import type { Outcome, Side } from "@golazo/core";
+import type { MarketSlot, Outcome, Side } from "@golazo/core";
 
 /**
  * STATE TYPES — the typed contract every feature imports.
@@ -25,11 +25,12 @@ export type MoneyMode = "real" | "points";
 /** Phase of the on-screen market card. */
 export type MarketPhase = "idle" | "open" | "locked" | "resolved";
 
-/** The single market the user is currently looking at, flattened for the UI. */
+/** One active or recently-settled market, flattened for the UI. */
 export interface MarketVM {
   id: string;
   question: string; // "Argentina on the attack — GOAL?"
   subtitle: string; // the raw commentary line that opened it
+  slot?: MarketSlot;
   team: "home" | "away" | undefined;
   phase: MarketPhase;
   /** Live implied multiples from the pool (move as money comes in). */
@@ -54,7 +55,7 @@ export interface MarketVM {
   onChain?: { marketSeed: number; authority: string };
 }
 
-/** The user's bet on the current market, with a non-guaranteed tap-time estimate. */
+/** The user's bet on a market, with a non-guaranteed tap-time estimate. */
 export interface PendingBet {
   marketId: string;
   side: Side;

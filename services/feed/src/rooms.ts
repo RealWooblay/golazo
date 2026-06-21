@@ -86,6 +86,9 @@ export interface RoomManagerDeps {
   matchId: () => string;
   isLive: () => boolean;
   isFinal: () => boolean;
+  getOpenGlobalMarkets?: () => Market[];
+  /** @deprecated use getOpenGlobalMarkets. */
+  getOpenGlobalMarket?: () => Market | undefined;
   now?: () => number;
   rand?: () => number;
   /** When set, room markets get on-chain twins and balances track session PnL. */
@@ -287,8 +290,8 @@ export class RoomManager {
     if (!room.players.has(userId)) return errorEffect('You are not in this room', room.code);
     const q = cleanQuestion(question);
     if (!q) return errorEffect('Question cannot be empty', room.code);
-    if (this.hasActiveMarket(room)) {
-      return errorEffect('Finish the current market first', room.code);
+    if (this.hasActiveMarketInSlot(room, 'moment')) {
+      return errorEffect('Finish the current moment market first', room.code);
     }
 
     const openedAt = this.now();
@@ -296,6 +299,7 @@ export class RoomManager {
     const market: RoomMarket = {
       id: this.nextMarketId(),
       source: 'friend',
+      slot: 'moment',
       authorId: userId,
       question: q,
       ...(team ? { team } : {}),
@@ -441,16 +445,21 @@ export class RoomManager {
   // Internals
   // -------------------------------------------------------------------------
 
-  /** True when the room already has an open or locked market (one at a time). */
-  private hasActiveMarket(room: Room): boolean {
-    return room.markets.some((m) => m.status === 'open' || m.status === 'locked');
+  /** True when the room already has an open or locked market in this slot. */
+  private hasActiveMarketInSlot(room: Room, slot: RoomMarket['slot']): boolean {
+    return room.markets.some(
+      (m) => (m.status === 'open' || m.status === 'locked') && m.slot === slot,
+    );
   }
 
-  /** Late join / create: copy the current global AI market if the room is idle. */
+  /** Late join / create: copy current global AI markets into any free room slots. */
   private backfillGlobalMarket(room: Room): void {
-    const global = this.deps.getOpenGlobalMarket?.();
-    if (!global) return;
-    this.mirrorGlobalMarket(room, global);
+    const globals =
+      this.deps.getOpenGlobalMarkets?.() ??
+      (this.deps.getOpenGlobalMarket ? [this.deps.getOpenGlobalMarket()].filter(Boolean) : []);
+    for (const global of globals) {
+      if (global) this.mirrorGlobalMarket(room, global);
+    }
   }
 
   /**
@@ -458,11 +467,12 @@ export class RoomManager {
    * has this global id — friend markets are never overwritten.
    */
   private mirrorGlobalMarket(room: Room, global: Market): void {
-    if (this.hasActiveMarket(room)) return;
+    if (this.hasActiveMarketInSlot(room, global.slot)) return;
     if (room.markets.some((m) => m.sourceMarketId === global.id)) return;
     const market: RoomMarket = {
       id: this.nextMarketId(),
       source: 'ai',
+      slot: global.slot,
       question: global.question,
       ...(global.team ? { team: global.team } : {}),
       status: global.status === 'locked' ? 'locked' : 'open',

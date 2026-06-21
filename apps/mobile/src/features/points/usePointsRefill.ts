@@ -2,10 +2,12 @@ import { useCallback, useRef, useState } from "react";
 import { useStore } from "@/state/store";
 import { connectFeed, type FeedSocket } from "@/lib/ws";
 import { POINTS_REFILL_THRESHOLD } from "@golazo/core";
+import { usePointsIdentity } from "./usePointsIdentity";
 
 /** Send a paper-trade points refill when balance is low. */
 export function usePointsRefill() {
   const store = useStore();
+  const { pointsUserId, name } = usePointsIdentity();
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const socketRef = useRef<FeedSocket | null>(null);
@@ -14,7 +16,7 @@ export function usePointsRefill() {
     store.pointsBalance < POINTS_REFILL_THRESHOLD;
 
   const refill = useCallback(() => {
-    const userId = store.session.pointsUserId;
+    const userId = pointsUserId;
     if (!userId || loading) return;
     setLoading(true);
     setMessage(null);
@@ -22,7 +24,7 @@ export function usePointsRefill() {
     const socket = connectFeed(store.liveUrl, {
       onOpen: () => {
         socket.send({ t: "hello", userId: "refill" });
-        socket.send({ t: "points_hello", userId, name: store.session.displayName ?? "Player" });
+        socket.send({ t: "points_hello", userId, name });
         socket.send({ t: "points_refill", userId });
       },
       onMessage: (msg) => {
@@ -43,7 +45,7 @@ export function usePointsRefill() {
       },
     });
     socketRef.current = socket;
-  }, [store, loading]);
+  }, [store, loading, pointsUserId, name]);
 
   return { needsRefill, refill, loading, message, clearMessage: () => setMessage(null) };
 }

@@ -65,7 +65,6 @@ export function PointsLeaderboard({
                   {p.name || "Player"}
                 </Text>
                 {isMe ? <Chip label="YOU" tone="info" /> : null}
-                {!p.connected ? <Chip label="AWAY" tone="neutral" /> : null}
               </View>
               {isLeader ? (
                 <Text style={styles.leadCaption}>

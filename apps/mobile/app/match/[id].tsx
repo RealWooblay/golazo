@@ -7,18 +7,19 @@
 // for the next moment" state that still feels alive. All engine wiring lives in
 // src/features/match/useGameFeed.ts; visuals are composed from '@/ui' + the
 // match components.
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { colors, spacing, type } from "@/theme";
 import { AnimatedNumber, Banner, Chip, Confetti, Screen, Text, Toast } from "@/ui";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useStore } from "@/state/store";
-import { BET_SAFETY_BUFFER_MS, bettingSafetyBufferMs } from "@/lib/config";
+import { bettingSafetyBufferMs } from "@/lib/config";
 import { useTick } from "@/hooks";
 import { useGameFeed } from "@/features/match/useGameFeed";
-import { useChainBet } from "@/features/match/useChainBet";
 import { useChain } from "@/features/chain/useChain";
+import { useRoomChainBets } from "@/features/friends/useRoomChainBets";
+import { FriendsChainPanel } from "@/features/friends/components";
 import {
   useDisplayBalance,
   makeStakeFormatter,
@@ -26,7 +27,6 @@ import {
 } from "@/features/chain/useDisplayBalance";
 import { resolveTeams } from "@/features/match/teams";
 import {
-  ChainBetPanel,
   ClosedMarketsList,
   CommentaryTicker,
   FullTimeCard,
@@ -48,9 +48,11 @@ export default function MatchScreen() {
     game,
     commentary,
     momentum,
+    momentumLean,
+    markets,
     market,
-    pending,
-    activeReveal,
+    pendingByMarket,
+    reveals,
     historicMarkets,
     catchingUp,
     effectiveMode,
@@ -75,8 +77,7 @@ export default function MatchScreen() {
   // static number (the "countdown not counting down" bug).
   const ticking =
     focused &&
-    !!market &&
-    (market.phase === "open" || market.phase === "locked");
+    markets.some((m) => m.phase === "open" || m.phase === "locked");
   const now = useTick(80, ticking);
 
   // Team identity (crests + colors) — from the lobby fixture we came through, or
@@ -93,57 +94,36 @@ export default function MatchScreen() {
   const momentumTeam =
     finished || halftime ? undefined : (momentum ?? market?.team ?? undefined);
 
-  // On-chain layer. When the feed runs in chain mode, the current market carries
-  // `onChain` and the embedded wallet places REAL bets on it (cb.active). Otherwise
-  // this stays inert and the play-money flow below runs unchanged.
+  // On-chain layer. Each live market can carry its own on-chain twin; bets and
+  // claims are tracked per market so new cards never hide old receipts.
   const chain = useChain();
-  const cb = useChainBet(market, chain);
-  const chainMode = cb.active;
+  const chainMode =
+    chain.ready && store.mode === "live" && store.session.moneyMode === "real";
+  const chainBets = useRoomChainBets(chain, store.stake, chainMode, markets);
   // Money is real SOL in chain mode, play $ in sandbox — for the header balance
   // AND the stake chips / over-balance check (so nothing reads "$" while you bet SOL).
   const bal = useDisplayBalance();
   const stakeFormat = makeStakeFormatter(bal.points);
-  // Once a real bet is placed (or is mid-flight) on this market, lock the card so
-  // the program's one-bet-per-market rule isn't tripped by a double tap.
-  const chainLocked =
-    chainMode &&
-    (cb.placing || cb.bet?.offChainMarketId === market?.id);
-  const chainPreparing = chainMode && market && !cb.chainTwinReady && !cb.bet;
-  const marketClosing =
-    !!market &&
-    market.phase === "open" &&
-    now >= market.lockAt - bettingSafetyBufferMs(market.windowMs);
-  const chainPending =
-    chainLocked && market
-      ? {
-          marketId: market.id,
-          side: cb.bet?.side ?? "YES",
-          stake: store.stake,
-          estimatedMult: cb.bet?.estimatedMultiple ?? 0,
-        }
-      : null;
-  // In chain mode show the REAL on-chain pool estimate, not the bot-inflated
-  // off-chain odds, so the card matches the bet receipt.
-  const displayMarket =
-    chainMode && cb.liveOdds && market
-      ? {
-          ...market,
-          oddsYes: cb.liveOdds.oddsYes,
-          oddsNo: cb.liveOdds.oddsNo,
-          pool: cb.liveOdds.poolSol / SOL_PER_UNIT,
-          yesShare: cb.liveOdds.yesShare,
-        }
-      : market;
+  const resolvedMarketIds = useMemo(
+    () => new Set(historicMarkets.map((m) => m.marketId)),
+    [historicMarkets],
+  );
+  useEffect(() => {
+    if (chainMode) chainBets.markResolved(resolvedMarketIds);
+  }, [chainMode, chainBets.markResolved, resolvedMarketIds]);
 
   // ── Win confetti: fire when a reveal is acknowledged as a win ───────────────
   const [confettiTrigger, setConfettiTrigger] = useState(0);
 
-  const onBet = (side: "YES" | "NO") => {
+  const onBet = async (m: typeof markets[number], side: "YES" | "NO") => {
     // Chain mode → REAL on-chain place_bet with the embedded wallet. Play mode →
     // the local play-money engine. The market card's bet UI is identical; only the
     // money rail differs.
-    if (chainMode) void cb.placeChainBet(side, store.stake);
-    else placeBet(side, store.stake);
+    if (chainMode && m.onChain) {
+      await chainBets.placeBet(m, side, store.stake);
+    } else {
+      placeBet(side, store.stake, m.id);
+    }
   };
 
   const onReveal = (marketId: string, won: boolean) => {
@@ -210,6 +190,7 @@ export default function MatchScreen() {
             scoreAway={game?.scoreAway ?? 0}
             clock={finished ? "FT" : halftime ? "HT" : (game?.clock ?? "0'")}
             momentum={momentumTeam}
+            momentumLean={finished || halftime ? null : momentumLean}
             live={!finished && !halftime}
           />
         </View>
@@ -239,7 +220,11 @@ export default function MatchScreen() {
         {/* On-chain wallet + real-bet receipt (only when chain mode is live). */}
         {chain.configured ? (
           <View style={styles.gutter}>
-            <ChainBetPanel chain={chain} cb={cb} />
+            <FriendsChainPanel
+              bets={chainBets.bets}
+              error={chainBets.error}
+              onClaim={chainBets.claim}
+            />
           </View>
         ) : null}
 
@@ -263,42 +248,79 @@ export default function MatchScreen() {
               body="Grab a breather — second-half markets are moments away."
             />
           </View>
-        ) : market ? (
-          <View style={styles.gutter}>
-            {chainPreparing ? (
-              <Banner
-                tone="info"
-                message="On-chain market preparing — bet buttons unlock in a moment."
-              />
-            ) : null}
-            <MarketCard
-              market={displayMarket ?? market}
-              now={now}
-              stake={store.stake}
-              onStakeChange={store.setStake}
-              pending={chainMode ? chainPending : pending}
-              balance={bal.balanceInUnits}
-              formatStake={stakeFormat}
-              onBet={onBet}
-              hapticsEnabled={hapticsOn}
-              betDisabled={chainPreparing || chainLocked || marketClosing}
-            />
-          </View>
-        ) : !activeReveal ? (
+        ) : markets.length > 0 ? (
+          markets.map((m) => {
+            const chainBet = chainBets.getBet(m.id);
+            const liveOdds = chainBets.getLiveOdds(m.id);
+            const displayMarket =
+              chainMode && liveOdds
+                ? {
+                    ...m,
+                    oddsYes: liveOdds.oddsYes,
+                    oddsNo: liveOdds.oddsNo,
+                    pool: liveOdds.poolSol / SOL_PER_UNIT,
+                    yesShare: liveOdds.yesShare,
+                  }
+                : m;
+            const chainPreparing =
+              chainMode &&
+              !!m.onChain &&
+              !chainBets.isTwinReady(m.id) &&
+              !chainBet;
+            const chainLocked = chainMode && (chainBets.placing || !!chainBet);
+            const marketClosing =
+              m.phase === "open" &&
+              now >= m.lockAt - bettingSafetyBufferMs(m.windowMs);
+            const cardPending =
+              chainMode && chainBet
+                ? {
+                    marketId: m.id,
+                    side: chainBet.side,
+                    stake: store.stake,
+                    estimatedMult: chainBet.estimatedMultiple,
+                  }
+                : (pendingByMarket[m.id] ?? null);
+            return (
+              <View key={m.id} style={styles.gutter}>
+                {chainPreparing ? (
+                  <Banner
+                    tone="info"
+                    message="On-chain market preparing — bet buttons unlock in a moment."
+                  />
+                ) : null}
+                <MarketCard
+                  market={displayMarket}
+                  now={now}
+                  stake={store.stake}
+                  onStakeChange={store.setStake}
+                  pending={cardPending}
+                  balance={bal.balanceInUnits}
+                  formatStake={stakeFormat}
+                  onBet={(side) => void onBet(m, side)}
+                  hapticsEnabled={hapticsOn}
+                  betDisabled={
+                    (chainMode && (!m.onChain || chainPreparing || chainLocked)) ||
+                    marketClosing
+                  }
+                />
+              </View>
+            );
+          })
+        ) : reveals.length === 0 ? (
           <View style={styles.gutter}>
             <WaitingCard />
           </View>
         ) : null}
 
-        {activeReveal ? (
-          <View style={styles.gutter}>
+        {reveals.map((reveal) => (
+          <View key={reveal.marketId} style={styles.gutter}>
             <RevealCard
-              reveal={activeReveal}
-              onAcknowledge={() => onReveal(activeReveal.marketId, activeReveal.won)}
+              reveal={reveal}
+              onAcknowledge={() => onReveal(reveal.marketId, reveal.won)}
               hapticsEnabled={hapticsOn}
             />
           </View>
-        ) : null}
+        ))}
 
         <View style={styles.gutter}>
           <ClosedMarketsList markets={historicMarkets} catchingUp={catchingUp} />

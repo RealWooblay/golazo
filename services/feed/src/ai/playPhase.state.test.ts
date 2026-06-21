@@ -5,11 +5,12 @@ import {
   goalCorroborated,
   parseGoalSource,
 } from './playPhase';
+import type { PlayPhaseState } from './playPhase';
 import type { FeedEvent } from '@golazo/core';
 
 describe('play phase state machine', () => {
   it('transitions buildup → shooting → calm on goal', () => {
-    let phase = 'calm' as const;
+    let phase: PlayPhaseState = 'calm';
     phase = transitionPlayPhase(phase, {
       gameId: 'g',
       ts: 1,

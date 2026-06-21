@@ -156,7 +156,7 @@ describe('EspnFeed.poll — dedupes commentary/keyEvent twins', () => {
     const events = await feed.poll(Date.now());
     const corners = events.filter((e) => e.type === 'corner');
     expect(corners).toHaveLength(1);
-    expect(corners[0].meta?.source).toBe('espn.keyEvent');
+    expect(corners[0]!.meta?.source).toBe('espn.keyEvent');
   });
 });
 
@@ -183,7 +183,7 @@ describe('EspnFeed.rotateToNextLive — game-to-game handoff', () => {
         {
           id: 'old',
           status: { type: { state: 'post', completed: true }, displayClock: "90'" },
-          competitions: liveOld.events[0].competitions,
+          competitions: liveOld.events[0]!.competitions,
         },
         {
           id: 'new',
@@ -295,6 +295,7 @@ describe('parseClockKey — stoppage-aware', () => {
   it('parses regulation and stoppage clocks', () => {
     expect(parseClockKey("45'")).toEqual({ base: 45, stopp: 0 });
     expect(parseClockKey("45+2'")).toEqual({ base: 45, stopp: 2 });
+    expect(parseClockKey("14'+1'")).toEqual({ base: 14, stopp: 1 });
     expect(parseClockKey("90+5'")).toEqual({ base: 90, stopp: 5 });
     expect(parseClockKey(undefined)).toEqual({ base: 0, stopp: 0 });
   });

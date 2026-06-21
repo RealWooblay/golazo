@@ -31,6 +31,10 @@ export function useAccount() {
     enabled,
     ready,
     authenticated,
+    // Privy DID — a stable, cross-device account id (same on phone + laptop for
+    // the same login). Used to key the points identity so one account is ONE
+    // leaderboard player everywhere.
+    id: user?.id ?? null,
     handle: loginLabel(user),
     solanaAddress,
     login: () => login(),

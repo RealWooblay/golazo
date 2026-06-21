@@ -95,6 +95,7 @@ function toMarketVM(m: RoomMarket, now?: number): MarketVM {
     id: m.id,
     question: m.question,
     subtitle,
+    slot: m.slot,
     team: m.team,
     phase,
     oddsYes: odds.yes,

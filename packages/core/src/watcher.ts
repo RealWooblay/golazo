@@ -138,7 +138,7 @@ export function outcomeFromEvent(ev: FeedEvent, marketKind?: string): 'YES' | nu
     if (ev.type === 'goal') return 'YES';
     return null;
   }
-  if (marketKind === 'goal_in_extra_time') {
+  if (marketKind === 'goal_in_stoppage' || marketKind === 'goal_in_extra_time') {
     if (ev.type === 'goal') return 'YES';
     return null;
   }

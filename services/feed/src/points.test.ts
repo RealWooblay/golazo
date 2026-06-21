@@ -9,14 +9,19 @@ function fakeMarket(id: string, status: Market['status'] = 'open'): Market {
     id,
     gameId: 'g1',
     kind: 'attack',
+    slot: 'moment',
     question: 'Test?',
+    team: 'home',
+    trueProb: 0.5,
     status,
     pool: { yes: 100, no: 50 },
+    seedAmount: 0,
     bets: [],
     openedAt: now,
     lockAt: now + 30_000,
     windowMs: 10_000,
-    rake: 0,
+    resolveWindowMs: 60_000,
+    resolveAt: now + 90_000,
   };
 }
 
@@ -25,7 +30,7 @@ describe('PointsManager', () => {
     const pm = new PointsManager();
     const fx = pm.register('u1', 'Alice');
     expect(fx.state?.balance).toBe(POINTS_START_BALANCE);
-    expect(fx.leaderboard?.[0].name).toBe('Alice');
+    expect(fx.leaderboard?.[0]!.name).toBe('Alice');
   });
 
   it('places bets into a separate pool and settles winners', () => {
@@ -42,6 +47,9 @@ describe('PointsManager', () => {
     resolved.settlement = {
       outcome: 'YES',
       rakeTaken: 0,
+      distributable: 0,
+      totalPayouts: 0,
+      operatorPnl: 0,
       payouts: [],
     };
     const fx = pm.onMarketResolve(resolved);

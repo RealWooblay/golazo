@@ -22,6 +22,7 @@ describe('buildPeriodMarketTrigger', () => {
     expect(t!.question).toBe('Will Scotland score in extra time?');
     expect(t!.team).toBe('home');
     expect(t!.kind).toBe('goal_in_extra_time');
+    expect(t!.slot).toBe('period');
   });
 
   it('opens a comeback market for the trailing away side', () => {
@@ -40,8 +41,20 @@ describe('buildPeriodMarketTrigger', () => {
     expect(t?.team).toBeUndefined();
   });
 
-  it('skips outside extra time', () => {
-    expect(buildPeriodMarketTrigger(baseGame({ clock: "90+2'" }))).toBeNull();
+  it('opens a before-full-time market in second-half stoppage', () => {
+    const t = buildPeriodMarketTrigger(baseGame({ clock: "90+2'" }));
+    expect(t?.question).toBe('Goal before full-time?');
+    expect(t?.kind).toBe('goal_in_stoppage');
+    expect(t?.slot).toBe('period');
+  });
+
+  it('opens a before-half-time market in first-half stoppage', () => {
+    const t = buildPeriodMarketTrigger(baseGame({ clock: "45+1'" }));
+    expect(t?.question).toBe('Goal before half-time?');
+    expect(t?.kind).toBe('goal_in_stoppage');
+  });
+
+  it('skips regular time outside added/extra time', () => {
     expect(buildPeriodMarketTrigger(baseGame({ clock: "88'" }))).toBeNull();
   });
 

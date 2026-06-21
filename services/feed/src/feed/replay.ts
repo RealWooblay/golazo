@@ -175,26 +175,39 @@ export class EspnReplayFeed implements FeedSource {
       if (!type) type = classifyResolverCommentary(text);
       if (!type && isAiCommentaryProbe(text)) type = 'attack';
       if (!type) return;
-      const { key, minute } = keyOf(c.time?.displayValue);
+      const clock = c.time?.displayValue;
+      const { key, minute } = keyOf(clock);
       raws.push({
         key,
         minute,
         rank: rankOf(type),
         order: i,
-        ev: this.feedEvent(type, (c.text ?? '').slice(0, 100), this.teamFromText(c.text)),
+        // Tag as commentary (NOT keyEvent), preserving the real clock, so the
+        // orchestrator's source-gating (penalty keyEvent-only), the late-goal
+        // rescue, and moment dedupe all behave EXACTLY as on the live feed.
+        ev: this.feedEvent(type, (c.text ?? '').slice(0, 100), this.teamFromText(c.text), 'espn.commentary', clock),
       });
     });
 
     (summary.keyEvents ?? []).forEach((ke: EspnKeyEvent, i) => {
       const type = mapKeyEventType(ke);
       if (!type) return;
-      const { key, minute } = keyOf(ke.clock?.displayValue);
+      const clock = ke.clock?.displayValue;
+      const { key, minute } = keyOf(clock);
       raws.push({
         key,
         minute,
         rank: rankOf(type),
         order: 1000 + i,
-        ev: this.feedEvent(type, ke.text || ke.type?.text || type, this.teamSide(ke.team?.id)),
+        // Structured keyEvents carry the authoritative source tag the live feed
+        // uses — this is what lets penalty/keyEvent-only openers fire in replay.
+        ev: this.feedEvent(
+          type,
+          ke.text || ke.type?.text || type,
+          this.teamSide(ke.team?.id),
+          'espn.keyEvent',
+          clock,
+        ),
       });
     });
 
@@ -209,14 +222,20 @@ export class EspnReplayFeed implements FeedSource {
     }));
   }
 
-  private feedEvent(type: FeedEvent['type'], text: string, team: Team | undefined): FeedEvent {
+  private feedEvent(
+    type: FeedEvent['type'],
+    text: string,
+    team: Team | undefined,
+    source: 'espn.keyEvent' | 'espn.commentary' = 'espn.commentary',
+    clock?: string,
+  ): FeedEvent {
     return {
       gameId: this.eventId,
       ts: 0,
       type,
       ...(team ? { team } : {}),
       text,
-      meta: { source: 'espn.replay', noLookahead: true },
+      meta: { source, noLookahead: true, ...(clock ? { clock } : {}) },
     };
   }
 
