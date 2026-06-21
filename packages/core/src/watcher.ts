@@ -117,30 +117,25 @@ export function triggerFromEvent(ev: FeedEvent, ctx: WatcherContext = {}): Marke
 }
 
 /**
- * Does this event RESOLVE an open market (and to what)?
- * Kind-aware: a goal only settles goal markets; a yellow card only settles card markets.
+ * Does a feed event resolve an open market YES?
+ *
+ * THE ONE RULE: an event can ONLY ever cause YES. NO is written in exactly one
+ * place — the per-tick deadline sweep (`settleExpired`) — never from an event.
+ * So this returns 'YES' for a qualifying event, else null (no opinion). It never
+ * returns NO: a `miss` / `play_end` / opponent attack can no longer pre-empt a
+ * genuinely-late YES that arrives in a later poll on the ~2-min ESPN feed.
+ *
+ * Kind-aware: a goal only settles goal markets; a red card only settles card markets.
  */
-export function outcomeFromEvent(ev: FeedEvent, marketKind?: string): 'YES' | 'NO' | null {
+export function outcomeFromEvent(ev: FeedEvent, marketKind?: string): 'YES' | null {
   if (!marketKind) {
     if (ev.type === 'goal') return 'YES';
-    if (ev.type === 'miss') return 'NO';
     return null;
   }
 
-  // Goal-scoring markets — resolve on real feed evidence, never on a blind timer.
+  // Goal-scoring markets — YES only on a real goal (attribution via parseGoalSource).
   if (marketKind === 'penalty_scored' || marketKind.startsWith('goal_from')) {
     if (ev.type === 'goal') return 'YES';
-    if (ev.type === 'miss') return 'NO';
-    if (ev.type === 'play_end') return 'NO';
-    // Set-piece shot taken with no goal → NO (FK/corner/penalty only).
-    if (
-      ev.type === 'shot' &&
-      (marketKind === 'goal_from_free_kick' ||
-        marketKind === 'goal_from_corner' ||
-        marketKind === 'penalty_scored')
-    ) {
-      return 'NO';
-    }
     return null;
   }
   if (marketKind === 'goal_in_extra_time') {
@@ -148,46 +143,41 @@ export function outcomeFromEvent(ev: FeedEvent, marketKind?: string): 'YES' | 'N
     return null;
   }
 
-  // "On this play" possession markets — the bet is whether the MOVE comes to
-  // something. A shot or goal during the move = YES; the play breaking down
-  // (possession lost / cleared / timer expiry → play_end) = NO. This is the
-  // fast-cycling open-play market, NOT a strict goal question.
+  // "On this play" possession market — YES on a shot/goal during the move.
+  // A fizzled move (no qualifying event by the deadline) settles NO via the sweep.
   if (marketKind === 'chance_from_play') {
     if (ev.type === 'goal') return 'YES';
     if (ev.type === 'shot') return 'YES';
     if (ev.type === 'miss') return 'YES';
-    if (ev.type === 'play_end') return 'NO';
     return null;
   }
 
-  // VAR → penalty decision (award, not scored)
+  // Momentum time-boxed markets — pure wall-clock windows. YES if the team gets a
+  // shot/goal (shot_in_window) or scores (score_in_window) before resolveAt; NO via
+  // the deadline sweep otherwise. These never track a play phase.
+  if (marketKind === 'shot_in_window') {
+    if (ev.type === 'goal' || ev.type === 'shot' || ev.type === 'miss') return 'YES';
+    return null;
+  }
+  if (marketKind === 'score_in_window') {
+    if (ev.type === 'goal') return 'YES';
+    return null;
+  }
+
+  // VAR → penalty decision (award, not scored). YES on a real penalty; NO via sweep.
   if (marketKind === 'penalty_awarded') {
     if (ev.type === 'penalty') return 'YES';
-    if (ev.type === 'var_penalty_denied') return 'NO';
     return null;
   }
 
-  // VAR → possible RED card. Resolves YES only when a red card is actually shown
-  // (a second yellow maps to red upstream). NEVER a blind early NO — the review
-  // takes time, so we wait for the real card event (else the long window times out).
+  // VAR → possible RED card. YES only when a red card is actually shown (a second
+  // yellow maps to red upstream). NO via the deadline sweep if the review passes.
   if (marketKind === 'red_card_given') {
     if (ev.type === 'red_card') return 'YES';
     return null;
   }
 
   return null;
-}
-
-/** Market kinds that may settle NO when a short resolve window expires without a YES event. */
-export function kindSettlesNoOnTimeout(kind: string): boolean {
-  // Goal-question markets NEVER auto-NO on a timer — only goal/miss/play_end/shot.
-  // "On this play" markets DO settle NO on timer: a fizzled move = no shot = NO.
-  return (
-    kind === 'chance_from_play' ||
-    kind === 'goal_in_extra_time' ||
-    kind === 'penalty_awarded' ||
-    kind === 'red_card_given'
-  );
 }
 
 function nameFor(team: Team | undefined, ctx: WatcherContext): string {

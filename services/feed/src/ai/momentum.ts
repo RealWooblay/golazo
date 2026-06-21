@@ -33,11 +33,11 @@ const DECAY = 0.8;
  * genuinely relentless siege pressure and let lighter spells ask the answerable
  * "— SHOT?" instead. This stops the board filling with un-winnable "GOAL next?" spam.
  */
-export const MOMENTUM_SHOT_THRESHOLD = 3.5; // "— SHOT?" (chance_from_play)
-export const MOMENTUM_GOAL_THRESHOLD = 7.5; // "— GOAL?" (goal_from_open_play)
+export const MOMENTUM_SHOT_THRESHOLD = 3.0; // legacy alias → see MOMENTUM_OPEN_THRESHOLD
+export const MOMENTUM_GOAL_THRESHOLD = 5.5; // sustained siege → "to score in N min?"
 
 /** Lean past this (0..1 toward a side) lights up the client momentum bar. */
-const BAR_LEAN_MIN = 0.6;
+const BAR_LEAN_MIN = 0.58;
 
 export interface MomentumRead {
   /** Raw decaying pressure per side. */
@@ -82,47 +82,45 @@ function round(n: number): number {
 }
 
 export interface MomentumMarketSpec {
-  kind: 'goal_from_open_play' | 'chance_from_play';
+  kind: 'shot_in_window' | 'score_in_window';
   question: string;
   trueProb: number;
 }
 
 /**
- * Turn a momentum read into the market to open — VARIED so a relentless spell
- * doesn't print the same line 18 times. The harder the press, the bigger the ask
- * (GOAL vs SHOT); phrasing rotates by a counter and nods to what just happened.
+ * Turn a momentum read into a TIME-BOXED market — the bet is on a wall-clock
+ * window ("this spell" / "the next few minutes"), not a play phase, which is what
+ * makes it resolve reliably under feed lag. The harder the press, the bigger the
+ * ask: sustained siege opens a "to score in the next N minutes?" (score_in_window);
+ * lighter pressure asks the answerable "a shot this spell?" (shot_in_window).
+ * Phrasing rotates by a counter so a long spell never repeats one line.
  */
 export function momentumMarketSpec(
   teamName: string,
   intensity: number,
-  trigger: 'shot' | 'miss' | 'other',
   counter: number,
 ): MomentumMarketSpec {
   if (intensity >= MOMENTUM_GOAL_THRESHOLD) {
-    const goalLines = [
-      `${teamName} all over them — GOAL next?`,
-      `${teamName} pressing hard — GOAL incoming?`,
-      `${teamName} piling it on — do they SCORE?`,
-      `${teamName} laying siege — GOAL this spell?`,
+    const scoreLines = [
+      `${teamName} all over them — to SCORE in the next few minutes?`,
+      `${teamName} laying siege — do they SCORE this spell?`,
+      `${teamName} piling it on — GOAL in the next few minutes?`,
+      `${teamName} relentless — to SCORE before this spell ends?`,
     ];
     return {
-      kind: 'goal_from_open_play',
-      question: goalLines[counter % goalLines.length]!,
+      kind: 'score_in_window',
+      question: scoreLines[counter % scoreLines.length]!,
       trueProb: 0.22,
     };
   }
-  const shotLines =
-    trigger === 'miss'
-      ? [
-          `${teamName} keep coming — another SHOT?`,
-          `${teamName} on top — SHOT next?`,
-        ]
-      : [
-          `${teamName} building — SHOT this move?`,
-          `${teamName} pushing forward — get a SHOT away?`,
-        ];
+  const shotLines = [
+    `${teamName} on top — a SHOT this spell?`,
+    `${teamName} building — get a SHOT away soon?`,
+    `${teamName} pushing forward — a SHOT this spell?`,
+    `${teamName} pressing — another SHOT incoming?`,
+  ];
   return {
-    kind: 'chance_from_play',
+    kind: 'shot_in_window',
     question: shotLines[counter % shotLines.length]!,
     trueProb: 0.4,
   };

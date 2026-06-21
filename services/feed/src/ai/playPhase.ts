@@ -1,14 +1,11 @@
 /**
- * Play-phase logic — when does a set-piece / chance START and END, and does a
- * goal count for the market we opened?
- *
- * No hardcoded commentary keywords for OPENING. For RESOLUTION we use:
- *   • Structured ESPN event TYPES (miss, shot, new set-piece, open-play attack)
- *   • Commentary-derived resolver events (classifyResolverCommentary)
- *   • ESPN goal keyEvent TEXT (how they describe the score)
- *   • AI phase resolver (phaseResolver.ts) reading the commentary stream
+ * Play-phase helpers — phase inference (for metrics / the momentum bar context),
+ * goal attribution from ESPN's own keyEvent text, and the kind predicates the
+ * resolver uses. Goal attribution reads ESPN's structured goal text (parseGoalSource)
+ * rather than arbitrary commentary, so a set-piece market only settles YES on a goal
+ * that ESPN itself describes as coming from that set piece.
  */
-import type { FeedEvent, Team } from '@golazo/core';
+import type { FeedEvent } from '@golazo/core';
 
 export type GoalSourceVerdict = 'yes' | 'no' | 'ambiguous';
 
@@ -73,76 +70,6 @@ export function isPlayMarketKind(kind: string): boolean {
 }
 
 /**
- * A structured feed event that ends the current play phase (FK taken & cleared,
- * open play resumed, new set-piece, commentary resolver, etc.).
- */
-export function endsPlayPhase(
-  ev: FeedEvent,
-  marketTeam: Team | undefined,
-  openerType: FeedEvent['type'] | undefined,
-): boolean {
-  // Stoppage pauses the match — does not end the phase.
-  if (ev.meta?.delay === 'start') return false;
-  // Play resumes after a structured delay — the set-piece phase is over.
-  if (ev.type === 'calm' && ev.meta?.delay === 'end') {
-    return openerType === 'free_kick' || openerType === 'corner' || openerType === 'penalty';
-  }
-
-  switch (ev.type) {
-    case 'miss':
-    case 'shot':
-    case 'play_end':
-      return true;
-    case 'corner':
-    case 'free_kick':
-    case 'penalty':
-      return true;
-    case 'dangerous_attack':
-    case 'attack':
-      // Open play has resumed — a parked FK phase is over even if ESPN never
-      // emitted a "wall" keyEvent.
-      if (openerType === 'free_kick' || openerType === 'corner') return true;
-      // "On this play" possession market: the OTHER team now has the ball, so our
-      // move is over (possession lost → NO). A same-team attack continues the move.
-      if (marketTeam && ev.team !== undefined && ev.team !== marketTeam) return true;
-      return false;
-    case 'goal':
-      // Opponent goal ends our phase; same-team goal is handled as resolution.
-      return !!marketTeam && ev.team !== undefined && ev.team !== marketTeam;
-    default:
-      return false;
-  }
-}
-
-/** Wall-clock ms a locked moment market may block new opens before force-settle. */
-export const STALE_LOCKED_BLOCK_MS = 75_000;
-
-/**
- * True when a locked goal-question should settle NO even without a resolver event
- * (clock moved on, or locked too long — never leave users hanging).
- */
-export function shouldForceSettleLockedNo(
-  kind: string,
-  lockedAgeMs: number,
-  resolveWindowMs: number,
-  openClockMin: number | undefined,
-  liveClockMin: number,
-  phaseActive: boolean,
-): boolean {
-  if (!phaseActive || !isPlayMarketKind(kind)) return false;
-  if (
-    openClockMin !== undefined &&
-    liveClockMin > openClockMin + maxGoalClockDrift(kind)
-  ) {
-    return true;
-  }
-  const maxLockWait = Math.max(resolveWindowMs * 2, 60_000);
-  if (lockedAgeMs > maxLockWait) return true;
-  if (lockedAgeMs > STALE_LOCKED_BLOCK_MS) return true;
-  return false;
-}
-
-/**
  * Parse ESPN's structured goal keyEvent text to see if it scores FROM the moment
  * we bet on. This reads ESPN's own description, not arbitrary commentary.
  */
@@ -179,12 +106,4 @@ export function parseGoalSource(goalText: string, marketKind: string): GoalSourc
   }
 
   return 'ambiguous';
-}
-
-/** Max match-clock drift (minutes) for a goal to still belong to the opener. */
-export function maxGoalClockDrift(kind: string): number {
-  if (kind === 'goal_from_free_kick') return 1.5;
-  if (kind === 'goal_from_corner') return 1.25;
-  if (kind === 'penalty_scored') return 2;
-  return 1.5;
 }

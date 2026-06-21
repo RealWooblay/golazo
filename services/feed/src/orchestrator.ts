@@ -27,7 +27,6 @@
 
 import {
   MarketEngine,
-  kindSettlesNoOnTimeout,
   outcomeFromEvent,
   requiresTeam,
   type ClientMessage,
@@ -47,48 +46,32 @@ import { aiTriggerFromEvents } from './ai/watcher';
 import {
   buildPeriodMarketTrigger,
   clockMinutes,
-  feedLagMinutes,
   goalAlreadyHappenedForChance,
-  isAwardedFreeKick,
-  isStructuredSetPiece,
+  isDefensiveSetPiece,
   isStalePlay,
   KEY_EVENT_ONLY_OPENERS,
   bettingClosesAt,
   isGoalMomentKind,
-  liveClockMinutes,
+  MOMENTUM_OPEN_THRESHOLD,
   openerPriority,
   knobFor,
   MAX_CONCURRENT_MARKETS,
-  maxPendingMs,
   PERIOD_MARKET,
   periodMarketKey,
-  resolvePolicyFor,
   resolveDeadlineMs,
-  SET_PIECE_OPEN_COOLDOWN_MIN,
-  STOPPAGE_EXTEND_MS,
-  staleLagThreshold,
 } from './ai/marketTuning';
 import {
-  endsPlayPhase,
   isGoalQuestionKind,
   isPlayMarketKind,
-  shouldForceSettleLockedNo,
-  STALE_LOCKED_BLOCK_MS,
+  parseGoalSource,
   transitionPlayPhase,
   type PlayPhaseState,
 } from './ai/playPhase';
-import { resolveGoalForMarket } from './ai/resolver';
-import {
-  commentaryEndsSetPiecePhase,
-  defaultPhaseResolver,
-} from './ai/phaseResolver';
-import { CommentaryBuffer } from './ai/commentaryBuffer';
 import {
   MomentumTracker,
   momentumMarketSpec,
-  MOMENTUM_SHOT_THRESHOLD,
+  type MomentumRead,
 } from './ai/momentum';
-import { fuzzyCandidates, runBatchJudge, seqKey } from './ai/batchJudge';
 import { AuditLog } from './observability/auditLog';
 import { FeedMetrics } from './observability/metrics';
 import { LagMeter } from './observability/lagMeter';
@@ -101,15 +84,16 @@ import { momentKey, parseClockKey } from './feed/espn';
 /** Betting window for a momentum-opened market (short — the play is live). */
 const MOMENTUM_BET_WINDOW_MS = 10_000;
 /**
- * Min gap between momentum-opened markets for the SAME team. Generous on purpose:
- * momentum markets are the open-play "is this spell going somewhere?" sideshow —
- * NOT the main event. The headline markets are set-pieces (corners, free kicks,
- * penalties) and clear chances. A short cooldown made one pressing team flood the
- * single market slot with a dozen near-identical "— GOAL?" lines, drowning out the
- * set-pieces (which then never got a slot to open in). Keep momentum rare so the
- * variety the product wants — corners, free kicks, penalties, VAR — comes through.
+ * Min gap between momentum-opened markets for the SAME team. Tuned DOWN for volume
+ * (momentum time-boxed markets are now the main opener path) — this just stops ONE
+ * spell printing the same line back-to-back.
  */
-const MOMENTUM_OPEN_COOLDOWN_MS = 75_000;
+const MOMENTUM_OPEN_COOLDOWN_MS = 25_000;
+/**
+ * A locked moment market blocks new opens until its resolveAt (the deadline sweep
+ * settles it). Past that, the sweep has settled it, so it no longer blocks.
+ */
+const LOCKED_BLOCK_MS = 75_000;
 
 /** Per-market bookkeeping the orchestrator keeps alongside the engine's Market. */
 interface TrackedMarket {
@@ -120,8 +104,7 @@ interface TrackedMarket {
   team: Team | undefined;
   bots: BotSwarm;
   lockTimer: ReturnType<typeof setTimeout>;
-  voidTimer?: ReturnType<typeof setTimeout>;
-  /** Per-type window (ms) to wait after lock for a goal/miss before settling NO. */
+  /** Per-type window (ms) after lock — the deadline the per-tick sweep settles on. */
   resolveWindowMs: number;
   /** User bets being HELD for the bet-delay, keyed by userId (one in flight per user). */
   pending: Map<string, HeldBet>;
@@ -132,20 +115,10 @@ interface TrackedMarket {
   marketSeed?: number;
   /** Long-lived period market (e.g. extra-time comeback) — different resolve rules. */
   isPeriod?: boolean;
-  /** Feed lag (minutes) when the market opened — used to VOID late/stale opens. */
-  feedLagMin?: number;
-  /** Max feed lag that was acceptable when this market opened. */
-  staleLagLimit?: number;
-  /** Match-clock (fractional min) when the chance opened. */
+  /** Match-clock (fractional min) when the chance opened — for the late-goal rescue. */
   openClockMin?: number;
-  /** Wall-clock deadline for event-only markets before VOID safety-net. */
-  pendingUntil?: number;
-  /** True while the set-piece / chance is still live (not cleared / recycled). */
-  phaseActive: boolean;
   /** Feed event type that opened this market (free_kick, corner, …). */
   openerType?: FeedEvent['type'];
-  /** Structured events since open — fed to the AI resolver for context. */
-  eventsSinceOpen: FeedEvent[];
 }
 
 /** A user bet held for the bet-delay window before it enters the pool. */
@@ -184,24 +157,14 @@ export class Orchestrator {
   private seedCounter = 0;
   /** Belt-and-braces dedupe across commentary/keyEvent edge cases + feed restarts. */
   private readonly openedMoments = new Set<string>();
-  /** Goals/misses in the current poll batch — skip openers for plays already decided. */
-  private batchResolvers: FeedEvent[] = [];
-  /** Latest goal/miss clock per team — blocks late duplicate set-piece opens. */
+  /** Latest goal/miss clock per team — drives the deadline late-goal rescue. */
   private readonly lastResolverByTeam = new Map<Team, number>();
-  /** Match-clock when we last opened a set-piece market per kind+team. */
-  private readonly lastSetPieceOpenClock = new Map<string, number>();
   /** True once we've seen the clock enter extra time this match. */
   private extraTimeEntered = false;
   /** Period market wanted but blocked by an active moment market — retry when clear. */
   private periodMarketPending = false;
   /** Throttle ESPN re-probes when waiting for a live game (empty/sim fallback). */
   private feedProbeAt = 0;
-  /** Batch AI decisions keyed by sequence id — cleared each tick. */
-  private batchDecisions = new Map<string, import('./ai/watcher').MarketDecision>();
-  private readonly commentaryBuffer = new CommentaryBuffer();
-  /** One AI phase-resolve in flight per market. */
-  private readonly phaseResolveInFlight = new Set<string>();
-  private readonly phaseAiLastAt = new Map<string, number>();
   private readonly audit = new AuditLog();
   readonly metrics = new FeedMetrics();
   private readonly lagMeter = new LagMeter();
@@ -212,6 +175,8 @@ export class Orchestrator {
   private readonly lastMomentumOpenAt = new Map<Team, number>();
   /** Rotates momentum-market phrasing so a long spell doesn't repeat one line. */
   private momentumCounter = 0;
+  /** Sim/test only: every momentum bar value broadcast this run (for assertions). */
+  private readonly momentumLog: Array<{ bar: Team | null }> = [];
 
   constructor(
     private readonly config: Config,
@@ -308,13 +273,17 @@ export class Orchestrator {
     return this.engine.list();
   }
 
+  /** Sim/test hook: every momentum bar value broadcast this run (proves the bar fires + moves). */
+  simMomentum(): ReadonlyArray<{ bar: Team | null }> {
+    return this.momentumLog;
+  }
+
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.tickTimer) clearInterval(this.tickTimer);
     for (const t of this.tracked.values()) {
       t.bots.cancel();
       clearTimeout(t.lockTimer);
-      if (t.voidTimer) clearTimeout(t.voidTimer);
     }
     this.tracked.clear();
     await this.feed.close();
@@ -343,48 +312,23 @@ export class Orchestrator {
     this.server.roomManager.lockExpiredMarkets();
     await this.checkPeriodMarkets(game);
 
-    this.batchResolvers = events.filter((e) => e.type === 'goal' || e.type === 'miss');
     const ordered = sortFeedEvents(events);
-
-    // Batch AI: one call per tick for all fuzzy candidates in this poll.
-    this.batchDecisions.clear();
-    const candidates = fuzzyCandidates(ordered);
-    if (candidates.length > 0 && this.config.anthropicApiKey) {
-      const decisions = await runBatchJudge(
-        candidates,
-        this.commentaryBuffer,
-        game,
-        game.home.name,
-        game.away.name,
-      );
-      this.batchDecisions = decisions;
-      this.metrics.aiBatchCalls++;
-      this.audit.record('batch_judge', {
-        candidates: candidates.length,
-        decided: decisions.size,
-      });
-    }
 
     this.metrics.recordPoll(Date.now() - t0, ordered.length);
     this.audit.record('feed_poll', { events: ordered.length, ms: Date.now() - t0 });
 
-    try {
-      for (const ev of ordered) {
-        await this.processEvent(ev);
-      }
-    } finally {
-      this.batchResolvers = [];
-      this.batchDecisions.clear();
+    for (const ev of ordered) {
+      await this.processEvent(ev);
     }
 
-    await this.tryCommentaryResolution(this.feed.state());
-    this.sweepStaleLockedMarkets(this.feed.state());
+    // THE ONE NO-WRITER: a single per-tick deadline sweep. Any locked market past
+    // its resolveAt with no qualifying YES settles NO (after the late-goal rescue).
+    this.settleExpired(Date.now());
   }
 
   private async processEvent(ev: FeedEvent): Promise<void> {
     this.server.broadcast({ t: 'commentary', text: ev.text, ts: ev.ts });
 
-    this.commentaryBuffer.push(ev);
     this.lagMeter.observe(ev, this.feed.state());
     this.metrics.recordLag(this.lagMeter.clockLagMin());
     this.metrics.wallclockLagSec = this.lagMeter.wallclockLagSec();
@@ -394,25 +338,25 @@ export class Orchestrator {
     this.recent.push(ev);
     if (this.recent.length > 30) this.recent.shift();
 
-    this.updatePlayPhases(ev);
-
     // The agent reads momentum off every event, then pushes it to the bar.
     this.momentum.observe(ev);
     this.broadcastMomentum();
 
-    const outcome = outcomeFromEvent(ev); // quick gate — might resolve something
+    // Momentum time-boxed markets — the volume driver. Driven off the momentum
+    // READ on ANY weighted event (not just shot/miss), opened for the leader when
+    // the read clears threshold. Pure wall-clock windows → reliable under feed lag.
+    await this.maybeOpenMomentumMarket(this.momentum.read());
+
+    // RESOLVER branch — an event can only ever cause YES (NO comes from the
+    // per-tick deadline sweep). Resolver-ish events route here and never reach the
+    // opener path below. `shot`/`miss` are YES signals for play/window markets.
     if (
-      outcome !== null ||
+      outcomeFromEvent(ev) !== null ||
       this.isResolverEvent(ev) ||
       ev.type === 'shot' ||
-      ev.type === 'miss' ||
-      ev.type === 'play_end'
+      ev.type === 'miss'
     ) {
       await this.resolveFromEvent(ev);
-      // A shot/miss under sustained pressure is itself a market signal: open a
-      // forward "pressing — GOAL? / building — SHOT?" market AFTER resolving the
-      // play this event just settled (so it isn't its own resolver).
-      if (ev.type === 'shot' || ev.type === 'miss') await this.maybeOpenMomentumMarket(ev);
       return;
     }
 
@@ -421,8 +365,8 @@ export class Orchestrator {
       return;
     }
 
-    // Otherwise this might be a bettable "set moment". The watcher (AI, then
-    // rules) decides — and returns null for calm/non-bettable events.
+    // Otherwise this might be a bettable "set moment". The watcher decides (rules
+    // for set-pieces) — and returns null for calm/non-bettable events.
     await this.maybeOpenMarket(ev);
   }
 
@@ -435,10 +379,8 @@ export class Orchestrator {
     return this.bootSalt * 10000 + ++this.seedCounter;
   }
 
-  /** Ask the watcher; if it returns a trigger, open + seed + bot-fill a market. */
+  /** Rules opener (set-pieces only now): if it yields a trigger, open the market. */
   private async maybeOpenMarket(ev: FeedEvent): Promise<void> {
-    this.supersedeLowPriorityMarkets(ev);
-
     // One market on the table at a time — except a LOCKED period market (ET comeback)
     // doesn't block new moment markets; only an open betting window does.
     if (this.hasBlockingMarket(false, ev)) return;
@@ -449,16 +391,7 @@ export class Orchestrator {
     // for a moment that's already several minutes in the past.
     if (isStalePlay(ev, game)) {
       this.metrics.marketsSkipped++;
-      this.audit.record('market_skip', {
-        reason: 'stale_clock',
-        lag: feedLagMinutes(ev, game),
-        type: ev.type,
-        text: ev.text.slice(0, 80),
-      });
-      console.log(
-        `[golazo/feed] market_skip_stale type=${ev.type} lag=${feedLagMinutes(ev, game).toFixed(2)} ` +
-          `ev=${String(ev.meta?.clock)} live=${game.clock} text="${ev.text.slice(0, 50)}"`,
-      );
+      this.audit.record('market_skip', { reason: 'stale_clock', type: ev.type });
       return;
     }
 
@@ -473,87 +406,38 @@ export class Orchestrator {
     }
 
     if (KEY_EVENT_ONLY_OPENERS.has(ev.type) && ev.meta?.source !== 'espn.keyEvent') {
-      console.log(
-        `[golazo/feed] market_skip_source type=${ev.type} source=${String(ev.meta?.source)} ` +
-          `text="${ev.text.slice(0, 50)}"`,
-      );
-      return;
-    }
-
-    if (playAlreadyResolved(ev, this.batchResolvers, this.lastResolverByTeam)) {
-      console.log(
-        `[golazo/feed] market_skip_resolved type=${ev.type} team=${ev.team ?? 'n/a'} ` +
-          `clock=${String(ev.meta?.clock)} text="${ev.text.slice(0, 50)}"`,
-      );
       return;
     }
 
     const mk = momentKey(ev);
-    if (mk && this.openedMoments.has(mk)) {
-      console.log(`[golazo/feed] market_skip_dup moment=${mk}`);
-      return;
-    }
+    if (mk && this.openedMoments.has(mk)) return;
 
-    const batchDecision = this.batchDecisions.get(seqKey(ev)) ?? null;
     const trigger = await aiTriggerFromEvents([...this.recent], game, {
       homeName: game.home.name,
       awayName: game.away.name,
-    }, { batchDecision });
+    });
     if (!trigger) return;
 
     // Final safety: never open a team-bound market without a team (no "They …").
-    if (!trigger.team && requiresTeam(trigger.kind)) {
-      console.log(
-        `[golazo/feed] market_skip_no_team kind=${trigger.kind} q="${trigger.question.slice(0, 40)}"`,
-      );
-      return;
-    }
-
-    if (isGoalMomentKind(trigger.kind) && trigger.team) {
-      const openMin = clockMinutes(ev);
-      const sk = `${trigger.kind}:${trigger.team}`;
-      const lastOpen = this.lastSetPieceOpenClock.get(sk);
-      if (
-        lastOpen !== undefined &&
-        openMin !== undefined &&
-        openMin - lastOpen < SET_PIECE_OPEN_COOLDOWN_MIN
-      ) {
-        console.log(
-          `[golazo/feed] market_skip_set_piece_cooldown kind=${trigger.kind} ` +
-            `team=${trigger.team} open=${openMin} last=${lastOpen}`,
-        );
-        return;
-      }
-    }
+    if (!trigger.team && requiresTeam(trigger.kind)) return;
 
     if (mk) this.openedMoments.add(mk);
 
-    const lag = feedLagMinutes(ev, game);
-    const via = batchDecision ? 'batch_ai' : 'rules_or_single';
-    if (batchDecision && !batchDecision.bettable) this.metrics.aiSkips++;
-    this.audit.record(batchDecision ? 'watcher_ai' : 'watcher_rules', {
-      type: ev.type,
-      conf: batchDecision?.confidence ?? null,
-      via,
-      text: ev.text.slice(0, 80),
-    });
+    this.audit.record('watcher_rules', { type: ev.type, text: ev.text.slice(0, 80) });
 
     await this.openTriggeredMarket(trigger, {
       sequenceId: seqIdOf(ev),
       team: ev.team,
-      feedLagMin: lag,
-      staleLagLimit: staleLagThreshold(ev.type),
       openClockMin: clockMinutes(ev),
       openerType: ev.type,
-      logLabel:
-        `type=${ev.type} team=${ev.team ?? 'n/a'} clock=${String(ev.meta?.clock ?? game.clock)} ` +
-        `lag=${lag.toFixed(2)}`,
+      logLabel: `type=${ev.type} team=${ev.team ?? 'n/a'} clock=${String(ev.meta?.clock ?? game.clock)}`,
     });
   }
 
   /** Push the agent's momentum read to clients (drives the session momentum bar). */
   private broadcastMomentum(): void {
     const r = this.momentum.read();
+    this.momentumLog.push({ bar: r.bar });
     this.server.broadcast({ t: 'momentum', bar: r.bar, home: r.home, away: r.away });
   }
 
@@ -562,7 +446,7 @@ export class Orchestrator {
     for (const t of this.tracked.values()) {
       const m = this.engine.get(t.marketId);
       if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
-      if (t.team === team && (m.kind === 'chance_from_play' || m.kind === 'goal_from_open_play')) {
+      if (t.team === team && (m.kind === 'shot_in_window' || m.kind === 'score_in_window')) {
         return true;
       }
     }
@@ -570,29 +454,27 @@ export class Orchestrator {
   }
 
   /**
-   * Momentum-DRIVEN market: when a team is genuinely on top (a shot/miss lands
-   * during sustained pressure), open a forward-looking chance. The harder they're
-   * pressing, the bigger the ask — high momentum opens a "— GOAL?" (goal-only),
-   * lighter pressure a "— SHOT?" (chance_from_play). This is the agent letting the
-   * run of play decide what markets exist.
+   * Momentum-DRIVEN time-boxed market — the volume engine. Driven off the momentum
+   * READ on ANY weighted event: when a side leads the press past threshold, open a
+   * wall-clock window market ("a shot this spell?" / "to score in N minutes?"). The
+   * window is pure wall-clock, so it resolves deterministically under feed lag —
+   * a real shot/goal before resolveAt = YES, else the deadline sweep settles NO.
    */
-  private async maybeOpenMomentumMarket(ev: FeedEvent): Promise<void> {
-    const team = ev.team;
+  private async maybeOpenMomentumMarket(read: MomentumRead): Promise<void> {
+    const team = read.leader;
     if (!team) return;
-    const read = this.momentum.read();
-    if (read.leader !== team || read.intensity < MOMENTUM_SHOT_THRESHOLD) return;
+    if (read.intensity < MOMENTUM_OPEN_THRESHOLD) return;
 
     const last = this.lastMomentumOpenAt.get(team) ?? 0;
     if (Date.now() - last < MOMENTUM_OPEN_COOLDOWN_MS) return;
     if (this.hasOpenMomentumMarketFor(team)) return;
-    if (this.hasBlockingMarket(false, ev)) return;
+    if (this.hasBlockingMarket(false)) return;
 
     const game = this.feed.state();
     const name = team === 'home' ? game.home.name : game.away.name;
     if (!name) return;
-    const triggerKind = ev.type === 'shot' ? 'shot' : ev.type === 'miss' ? 'miss' : 'other';
-    const spec = momentumMarketSpec(name, read.intensity, triggerKind, this.momentumCounter++);
 
+    const spec = momentumMarketSpec(name, read.intensity, this.momentumCounter++);
     const trigger: MarketTrigger = {
       gameId: game.gameId,
       question: spec.question,
@@ -605,8 +487,6 @@ export class Orchestrator {
     this.lastMomentumOpenAt.set(team, Date.now());
     await this.openTriggeredMarket(trigger, {
       team,
-      openerType: ev.type,
-      openClockMin: clockMinutes(ev),
       logLabel: `momentum kind=${spec.kind} team=${team} intensity=${read.intensity.toFixed(1)}`,
     });
   }
@@ -682,45 +562,15 @@ export class Orchestrator {
       if (m.status === 'open') {
         active++;
       } else if (m.status === 'locked' && !t.isPeriod) {
-        const lockedAge = Date.now() - m.lockAt;
-        if (lockedAge < STALE_LOCKED_BLOCK_MS) active++;
+        // A locked market blocks until its deadline sweep settles it. Past resolveAt
+        // it's effectively settled (the next tick's settleExpired will finalize it),
+        // so it no longer blocks a new open.
+        if (Date.now() < m.resolveAt && Date.now() - m.lockAt < LOCKED_BLOCK_MS) active++;
       }
     }
     if (forPeriod) return false;
     // Serial feed — only one open (or freshly locked) market at a time.
     return active >= MAX_CONCURRENT_MARKETS;
-  }
-
-  /**
-   * Force-settle locked goal markets that ESPN never closed out — clock moved on,
-   * or locked too long. Unblocks new markets and stops duplicate/session clutter.
-   */
-  private sweepStaleLockedMarkets(game: GameState): void {
-    const liveMin = liveClockMinutes(game);
-    const now = Date.now();
-    for (const t of [...this.tracked.values()]) {
-      const m = this.engine.get(t.marketId);
-      if (!m || m.status !== 'locked' || t.isPeriod || !isPlayMarketKind(m.kind)) continue;
-      const lockedAge = now - m.lockAt;
-      if (
-        !shouldForceSettleLockedNo(
-          m.kind,
-          lockedAge,
-          t.resolveWindowMs,
-          t.openClockMin,
-          liveMin,
-          t.phaseActive,
-        )
-      ) {
-        continue;
-      }
-      t.phaseActive = false;
-      console.log(
-        `[golazo/feed] market_force_no_stale id=${m.id} kind=${m.kind} ` +
-          `lockedAge=${lockedAge} open=${t.openClockMin ?? 'n/a'} live=${liveMin}`,
-      );
-      this.finalizeMarket(t, 'NO');
-    }
   }
 
   /** Open a market from a validated trigger — shared by moment + period paths. */
@@ -730,8 +580,6 @@ export class Orchestrator {
       sequenceId?: string;
       team?: Team;
       isPeriod?: boolean;
-      feedLagMin?: number;
-      staleLagLimit?: number;
       openClockMin?: number;
       openerType?: FeedEvent['type'];
       logLabel: string;
@@ -788,18 +636,10 @@ export class Orchestrator {
       resolveWindowMs: deadline,
       pending: new Map(),
       marketSeed,
-      ...(opts.feedLagMin !== undefined ? { feedLagMin: opts.feedLagMin } : {}),
-      ...(opts.staleLagLimit !== undefined ? { staleLagLimit: opts.staleLagLimit } : {}),
       ...(opts.openClockMin !== undefined ? { openClockMin: opts.openClockMin } : {}),
-      phaseActive: true,
-      eventsSinceOpen: [],
       ...(opts.openerType ? { openerType: opts.openerType } : {}),
       ...(opts.isPeriod ? { isPeriod: true } : {}),
     });
-
-    if (isGoalMomentKind(trigger.kind) && opts.team && opts.openClockMin !== undefined) {
-      this.lastSetPieceOpenClock.set(`${trigger.kind}:${opts.team}`, opts.openClockMin);
-    }
   }
 
   /** Settle all open/locked period markets (e.g. full time with no comeback goal). */
@@ -816,7 +656,7 @@ export class Orchestrator {
     this.periodMarketPending = false;
   }
 
-  /** Lock a market: stop bots, lock the engine, and arm the void safety-net. */
+  /** Lock a market: stop bots, lock the engine. The deadline sweep handles NO. */
   private lockMarket(marketId: string): void {
     const t = this.tracked.get(marketId);
     if (!t) return;
@@ -826,149 +666,54 @@ export class Orchestrator {
 
     // Mirror the lock on-chain (best-effort, fire-and-forget — never blocks).
     if (t.marketSeed !== undefined) void this.chain.lockMarket(t.marketSeed);
-
-    const policy = m ? resolvePolicyFor(m.kind) : 'timeout_no';
-    const delayMs = m?.resolveWindowMs ?? resolveDeadlineMs(m?.kind ?? '');
-    if (policy === 'event_only') {
-      t.pendingUntil = Date.now() + delayMs;
-      console.log(
-        `[golazo/feed] market_locked_event_only id=${marketId} kind=${m?.kind} ` +
-          `pending_ms=${delayMs}`,
-      );
-    }
-    t.voidTimer = setTimeout(() => this.settleUnresolved(marketId), delayMs);
-  }
-
-  /** Push back the VOID safety-net when ESPN reports structured stoppage (Start Delay). */
-  private extendResolveTimers(extraMs = STOPPAGE_EXTEND_MS): void {
-    const now = Date.now();
-    for (const t of this.tracked.values()) {
-      const m = this.engine.get(t.marketId);
-      if (!m || m.status !== 'locked') continue;
-      if (resolvePolicyFor(m.kind) !== 'event_only') continue;
-      if (t.voidTimer) clearTimeout(t.voidTimer);
-      const base = t.pendingUntil ?? now + maxPendingMs(m.kind);
-      t.pendingUntil = base + extraMs;
-      const remaining = Math.max(1000, t.pendingUntil - now);
-      console.log(
-        `[golazo/feed] market_extend_stoppage id=${m.id} kind=${m.kind} +${extraMs}ms`,
-      );
-      t.voidTimer = setTimeout(() => this.settleUnresolved(t.marketId), remaining);
-    }
   }
 
   /**
-   * Track play phase per locked goal-question. Phase ends on structured events
-   * AND commentary-derived resolver events (miss, play_end, attack resume).
+   * THE ONE NO-WRITER. Per-tick deadline sweep: every locked market past its
+   * wall-clock `resolveAt` with no qualifying YES settles NO — after consulting the
+   * late-goal rescue (`goalAlreadyHappenedForChance`) so a goal that landed in a
+   * later poll on the ~2-min feed still settles YES. NO is written here and NOWHERE
+   * else; an event can only ever cause YES. This is what kills the "resolved NO
+   * instead of void" bug AND the "random void" bug by construction.
    */
-  private updatePlayPhases(ev: FeedEvent): void {
-    if (ev.meta?.delay === 'start') {
-      this.extendResolveTimers();
-    }
-
-    for (const t of this.tracked.values()) {
+  private settleExpired(now: number): void {
+    for (const t of [...this.tracked.values()]) {
+      if (t.isPeriod) continue; // period markets settle on their own goal / FT
       const m = this.engine.get(t.marketId);
-      if (!m || !t.phaseActive || !isPlayMarketKind(m.kind)) continue;
+      if (!m || m.status !== 'locked') continue;
+      if (now < m.resolveAt) continue;
 
-      if (m.status === 'open' || m.status === 'locked') {
-        t.eventsSinceOpen.push(ev);
-        if (t.eventsSinceOpen.length > 25) t.eventsSinceOpen.shift();
-      }
-
-      if (m.status !== 'locked') continue;
-
-      // Never settle NO on an event that actually resolves this market YES — e.g.
-      // a shot/goal by OUR team ends the play phase but a `chance_from_play` market
-      // WANTS that as a YES. Let resolveFromEvent handle the positive outcome. Only
-      // skip for our team / unattributed events; an OPPONENT goal still settles NO.
-      if (outcomeFromEvent(ev, m.kind) === 'YES' && (ev.team === undefined || ev.team === t.team)) {
+      // Late-goal rescue: for kinds where ANY goal by the team in-window counts
+      // (momentum / open-play / extra-time), if a goal was recorded at/after the
+      // market opened, settle YES instead of NO. Strict set-piece kinds require
+      // attributed evidence (handled at the goal event), so they always NO here.
+      if (
+        anyTeamGoalCountsYes(m.kind) &&
+        goalAlreadyHappenedForChance(t.team, t.openClockMin, this.lastResolverByTeam)
+      ) {
+        console.log(
+          `[golazo/feed] market_deadline_late_goal id=${m.id} kind=${m.kind} team=${t.team ?? 'n/a'}`,
+        );
+        this.finalizeMarket(t, 'YES');
         continue;
       }
 
-      if (!endsPlayPhase(ev, t.team, t.openerType)) continue;
-      // Same-team goal is resolved via resolveFromEvent, not phase-end NO.
-      if (ev.type === 'goal' && ev.team === t.team) continue;
-
-      t.phaseActive = false;
-      console.log(
-        `[golazo/feed] market_phase_end id=${m.id} kind=${m.kind} ` +
-          `trigger=${ev.type} text="${ev.text.slice(0, 50)}"`,
-      );
+      console.log(`[golazo/feed] market_deadline_no id=${m.id} kind=${m.kind}`);
       this.finalizeMarket(t, 'NO');
-    }
-  }
-
-  /** Rules-first: settle locked markets when commentary shows the moment ended. */
-  private resolveLockedFromCommentaryRules(): void {
-    const snap = this.commentaryBuffer.snapshot();
-    for (const t of [...this.tracked.values()]) {
-      const m = this.engine.get(t.marketId);
-      if (!m || m.status !== 'locked' || !t.phaseActive || !isGoalQuestionKind(m.kind)) continue;
-      if (!commentaryEndsSetPiecePhase(snap, t.openerType, t.openClockMin)) continue;
-      t.phaseActive = false;
-      console.log(
-        `[golazo/feed] market_commentary_resolve id=${m.id} kind=${m.kind} ` +
-          `opener=${t.openerType ?? 'n/a'}`,
-      );
-      this.finalizeMarket(t, 'NO');
-    }
-  }
-
-  /** AI reads the commentary stream when rules haven't settled a locked market yet. */
-  private async tryCommentaryResolution(game: GameState): Promise<void> {
-    this.resolveLockedFromCommentaryRules();
-    if (!defaultPhaseResolver) return;
-
-    const now = Date.now();
-    let aiCalls = 0;
-    for (const t of [...this.tracked.values()]) {
-      if (aiCalls >= 1) break;
-      const m = this.engine.get(t.marketId);
-      if (!m || m.status !== 'locked' || !t.phaseActive || !isGoalQuestionKind(m.kind)) continue;
-      const lockedAge = now - m.lockAt;
-      if (lockedAge < 12_000) continue;
-      if (this.phaseResolveInFlight.has(t.marketId)) continue;
-      const last = this.phaseAiLastAt.get(t.marketId) ?? 0;
-      if (now - last < 20_000) continue;
-      if (this.commentaryBuffer.snapshot().length < 2) continue;
-
-      this.phaseResolveInFlight.add(t.marketId);
-      this.phaseAiLastAt.set(t.marketId, now);
-      aiCalls++;
-      try {
-        const verdict = await defaultPhaseResolver.resolvePhase(
-          {
-            question: m.question,
-            kind: m.kind,
-            openerType: t.openerType,
-            openClockMin: t.openClockMin,
-            eventsSinceOpen: t.eventsSinceOpen,
-          },
-          this.commentaryBuffer,
-          game,
-          game.home.name,
-          game.away.name,
-        );
-        if (verdict === 'NO' || verdict === 'YES') {
-          t.phaseActive = false;
-          this.finalizeMarket(t, verdict);
-        }
-      } catch (err) {
-        console.log(`[golazo/feed] phase_resolver_error ${String(err)}`);
-      } finally {
-        this.phaseResolveInFlight.delete(t.marketId);
-      }
     }
   }
 
   /**
-   * Resolve from a feed event. Correlates by sequenceId or active play phase,
-   * then uses ESPN goal text + AI for goal markets (never blind team matching).
+   * Resolve a market from a feed event. THE ONE RULE: an event can only ever cause
+   * YES. We find the market, and if the event qualifies it YES (goal attribution via
+   * `parseGoalSource` for goal kinds), finalize YES. Otherwise we just record the
+   * resolver clock and return — NO is the deadline sweep's job, never an event's.
    */
   private async resolveFromEvent(ev: FeedEvent): Promise<void> {
+    this.recordResolverClock(ev);
+
     const target = this.findMarketFor(ev);
     if (!target) {
-      this.recordResolverClock(ev);
       if (ev.type === 'goal' && ev.team) {
         this.feed.applyGoal(ev.team);
         this.server.broadcast({ t: 'game', game: this.feed.state() });
@@ -979,72 +724,30 @@ export class Orchestrator {
     const m = this.engine.get(target.marketId);
     if (!m) return;
 
-    this.recordResolverClock(ev);
-
-    const lag = target.feedLagMin ?? 0;
-    const lagLimit = target.staleLagLimit ?? 0.5;
-    if (lag > lagLimit) {
-      console.log(
-        `[golazo/feed] market_void_stale id=${m.id} kind=${m.kind} ` +
-          `lag=${lag.toFixed(2)} limit=${lagLimit}`,
-      );
-      this.voidMarket(target);
-      return;
-    }
-
-    // KEY SAFETY: if the play resolves before the betting window closes, VOID +
-    // refund everyone — never settle a market people couldn't fairly bet on.
-    const now = Date.now();
-    if (m.status === 'open' && now < m.lockAt) {
-      const secsEarly = Math.round((m.lockAt - now) / 1000);
-      console.log(
-        `[golazo/feed] market_void_early id=${m.id} kind=${m.kind} ` +
-          `(outcome arrived ${secsEarly}s before lock)`,
-      );
-      this.voidMarket(
-        target,
-        `Market voided — outcome arrived ${secsEarly}s before betting closed (full refund)`,
-      );
-      return;
-    }
+    // NOTE: we no longer VOID when an outcome lands while betting is still open. On a
+    // ~2-min feed that "early" condition fires constantly and refunds whole pools; the
+    // bet-delay HOLD (handleUserBet/acceptHeldBet) is the real latency-arb defense — a
+    // user bet placed after the result lands inside its hold gets rejected + refunded.
+    // The market itself simply settles YES on the qualifying event.
 
     if (target.isPeriod && ev.type === 'goal' && target.team && ev.team !== target.team) {
       return;
     }
     if (m.kind === 'penalty_awarded' && ev.type === 'goal') return;
 
-    let outcome: Outcome | null = outcomeFromEvent(ev, m.kind);
-
+    // Goal attribution for strict goal-question kinds: ESPN's own goal text decides.
+    // 'yes' → YES; 'no'/'ambiguous' → not this moment, let the deadline settle NO.
     if (ev.type === 'goal' && isGoalQuestionKind(m.kind)) {
-      const game = this.feed.state();
-      const verdict = await resolveGoalForMarket(
-        {
-          marketId: m.id,
-          question: m.question,
-          kind: m.kind,
-          team: target.team,
-          openClockMin: target.openClockMin,
-          phaseActive: target.phaseActive,
-          eventsSinceOpen: target.eventsSinceOpen,
-        },
-        ev,
-        game,
-        game.home.name,
-        game.away.name,
-        undefined,
-        this.commentaryBuffer.snapshot(),
-      );
-      if (verdict === 'PENDING') return;
-      if (verdict === 'VOID') {
-        this.voidMarket(target);
-        return;
+      if (parseGoalSource(ev.text, m.kind) === 'yes') {
+        this.finalizeMarket(target, 'YES', ev);
       }
-      outcome = verdict;
+      return;
     }
 
-    if (outcome === null) return;
-
-    this.finalizeMarket(target, outcome, ev);
+    // Everything else: an event only ever causes YES (else the deadline sweep NOs it).
+    if (outcomeFromEvent(ev, m.kind) === 'YES') {
+      this.finalizeMarket(target, 'YES', ev);
+    }
   }
 
   /** Find the tracked market this resolution event decides, if any. */
@@ -1065,9 +768,8 @@ export class Orchestrator {
         if (t.isPeriod) continue;
         const m = this.engine.get(t.marketId);
         if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
-        if (!isPlayMarketKind(m.kind)) continue;
+        if (!isWindowOrPlayKind(m.kind)) continue;
         if (!t.team || t.team !== ev.team) continue;
-        if (!t.phaseActive) continue;
         return t;
       }
       return undefined;
@@ -1106,7 +808,7 @@ export class Orchestrator {
         if (t.isPeriod) continue;
         const m = this.engine.get(t.marketId);
         if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
-        if (!isPlayMarketKind(m.kind)) continue;
+        if (!isWindowOrPlayKind(m.kind)) continue;
         best = t;
       }
       return best;
@@ -1122,9 +824,7 @@ export class Orchestrator {
       }
       if (!t.team || t.team !== ev.team) continue;
       if (t.isPeriod) bestPeriod = t;
-      else if (isPlayMarketKind(m.kind)) {
-        if (t.phaseActive) bestMoment = t;
-      }
+      else if (isWindowOrPlayKind(m.kind)) bestMoment = t;
     }
     return bestMoment ?? bestPeriod;
   }
@@ -1154,60 +854,6 @@ export class Orchestrator {
       ev.type === 'var_penalty_denied' ||
       ev.type === 'penalty'
     );
-  }
-
-  /**
-   * Settle a market whose betting window closed but no resolver arrived.
-   * Goal questions: VOID after the pending cap (never guess NO). Card/VAR: timeout NO.
-   */
-  private settleUnresolved(marketId: string): void {
-    const tracked = this.tracked.get(marketId);
-    const seed = tracked?.marketSeed;
-    const m = this.engine.get(marketId);
-    const lag = tracked?.feedLagMin ?? 0;
-    const lagLimit = tracked?.staleLagLimit ?? 0.5;
-
-    if (m && (m.status === 'open' || m.status === 'locked') && lag > lagLimit) {
-      console.log(
-        `[golazo/feed] market_void_stale_timeout id=${m.id} kind=${m.kind} ` +
-          `lag=${lag.toFixed(2)} limit=${lagLimit}`,
-      );
-      this.engine.resolve(marketId, 'VOID');
-      this.cleanupTracked(marketId);
-      if (seed !== undefined) void this.chain.settleMarket(seed, 'VOID');
-      return;
-    }
-
-    if (
-      m &&
-      (m.status === 'open' || m.status === 'locked') &&
-      kindSettlesNoOnTimeout(m.kind) &&
-      goalAlreadyHappenedForChance(tracked?.team, tracked?.openClockMin, this.lastResolverByTeam)
-    ) {
-      console.log(
-        `[golazo/feed] market_resolve_late_goal id=${m.id} kind=${m.kind} ` +
-          `team=${tracked?.team ?? 'n/a'} clock=${tracked?.openClockMin ?? 'n/a'}`,
-      );
-      this.engine.resolve(marketId, 'YES');
-      this.cleanupTracked(marketId);
-      if (seed !== undefined) void this.chain.settleMarket(seed, 'YES');
-      return;
-    }
-
-    let onChainOutcome: Outcome | undefined;
-    if (m && (m.status === 'open' || m.status === 'locked')) {
-      const outcome = kindSettlesNoOnTimeout(m.kind) ? 'NO' : 'VOID';
-      if (outcome === 'VOID' && resolvePolicyFor(m.kind) === 'event_only') {
-        console.log(
-          `[golazo/feed] market_void_pending_timeout id=${m.id} kind=${m.kind} ` +
-            `(no feed evidence — refund)`,
-        );
-      }
-      this.engine.resolve(marketId, outcome);
-      onChainOutcome = outcome;
-    }
-    this.cleanupTracked(marketId);
-    if (seed !== undefined && onChainOutcome) void this.chain.settleMarket(seed, onChainOutcome);
   }
 
   /** VOID + refund — optional commentary so the UI explains why. */
@@ -1280,7 +926,7 @@ export class Orchestrator {
   private resetForNewMatch(): void {
     this.openedMoments.clear();
     this.lastResolverByTeam.clear();
-    this.lastSetPieceOpenClock.clear();
+    this.lastMomentumOpenAt.clear();
     this.extraTimeEntered = false;
     this.periodMarketPending = false;
     this.recent.length = 0;
@@ -1294,7 +940,6 @@ export class Orchestrator {
     if (!t) return;
     t.bots.cancel();
     clearTimeout(t.lockTimer);
-    if (t.voidTimer) clearTimeout(t.voidTimer);
     // Any bet still HELD when the market goes away (resolved/voided) is a snipe
     // candidate — the result landed inside its delay. Void + refund it.
     for (const held of t.pending.values()) {
@@ -1507,62 +1152,6 @@ export class Orchestrator {
     if (prev === undefined || min >= prev) this.lastResolverByTeam.set(ev.team, min);
   }
 
-  /** Void card/VAR markets when a live set-piece or attack moment arrives. */
-  private supersedeLowPriorityMarkets(incoming: FeedEvent): void {
-    if (openerPriority(incoming.type) > 1) return;
-
-    // A real SET-PIECE (corner / penalty / awarded free kick) is the headline
-    // market — it must always get the single slot. If the slot is held by an
-    // open-play momentum market (chance_from_play / goal_from_open_play) that's
-    // still in its betting window, void + refund it so the set-piece can open.
-    // Without this, a corner that lands while an open-play market is live is lost
-    // forever (its moment key is deduped), which is exactly why the board looked
-    // like "open play only, never corners or free kicks".
-    if (incomingIsSetPiece(incoming)) {
-      for (const t of [...this.tracked.values()]) {
-        const m = this.engine.get(t.marketId);
-        if (!m || m.status !== 'open' || t.isPeriod) continue;
-        if (m.kind === 'chance_from_play' || m.kind === 'goal_from_open_play') {
-          console.log(
-            `[golazo/feed] market_supersede_open_play id=${m.id} kind=${m.kind} ` +
-              `by=${incoming.type} text="${incoming.text.slice(0, 40)}"`,
-          );
-          this.voidMarket(t, 'Superseded by a live set-piece');
-        }
-      }
-    }
-
-    for (const t of [...this.tracked.values()]) {
-      const m = this.engine.get(t.marketId);
-      if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
-      if (m.kind === 'penalty_awarded') {
-        console.log(
-          `[golazo/feed] market_supersede id=${m.id} kind=${m.kind} ` +
-            `by=${incoming.type} text="${incoming.text.slice(0, 40)}"`,
-        );
-        this.voidMarket(t, 'Superseded by live goal chance');
-        continue;
-      }
-      // Stale locked play-market superseded by a fresh set-piece / attack.
-      // Only supersede markets that are genuinely STUCK — a fast `chance_from_play`
-      // self-resolves on its short timer / shot / possession-loss, and a same-team
-      // attack often just continues that same move, so don't NO it prematurely.
-      if (
-        m.status === 'locked' &&
-        isPlayMarketKind(m.kind) &&
-        !t.isPeriod &&
-        openerPriority(incoming.type) <= 1 &&
-        Date.now() - m.lockAt > STALE_LOCKED_BLOCK_MS
-      ) {
-        console.log(
-          `[golazo/feed] market_supersede_stale_goal id=${m.id} kind=${m.kind} ` +
-            `by=${incoming.type} text="${incoming.text.slice(0, 40)}"`,
-        );
-        t.phaseActive = false;
-        this.finalizeMarket(t, 'NO');
-      }
-    }
-  }
 }
 
 /** Process goal-scoring openers before card/VAR lines at the same clock. */
@@ -1586,53 +1175,27 @@ function sortFeedEvents(events: FeedEvent[]): FeedEvent[] {
   });
 }
 
-/**
- * True when an incoming event is a real set-piece that WILL open a headline
- * market: a corner, a structured penalty award, or an attacking-half free kick.
- * (A bare/defensive free kick that only the AI might open does NOT preempt — we
- * don't void a live market for a moment that may not even open.)
- */
-function incomingIsSetPiece(ev: FeedEvent): boolean {
-  if (ev.type === 'corner') return true;
-  if (ev.type === 'penalty') return isStructuredSetPiece(ev);
-  if (ev.type === 'free_kick') return isAwardedFreeKick(ev);
-  return false;
-}
-
 /** Pull the correlation sequenceId out of an event's meta, if present. */
 function seqIdOf(ev: FeedEvent): string | undefined {
   const seq = ev.meta?.['sequenceId'];
   return typeof seq === 'string' ? seq : undefined;
 }
 
-/** True when a goal/miss already decided this set-piece in this batch or earlier. */
-function playAlreadyResolved(
-  ev: FeedEvent,
-  batchResolvers: FeedEvent[],
-  lastResolverByTeam: Map<Team, number>,
-): boolean {
-  const openerMin = clockMinutes(ev);
-  if (openerMin === undefined) return false;
+/** Kinds that resolve on a team shot/goal in their wall-clock window or play phase. */
+function isWindowOrPlayKind(kind: string): boolean {
+  return isPlayMarketKind(kind) || kind === 'shot_in_window' || kind === 'score_in_window';
+}
 
-  const seq = seqIdOf(ev);
-  if (seq) {
-    for (const r of batchResolvers) {
-      if (seqIdOf(r) === seq) return true;
-    }
-  }
-
-  const team = ev.team;
-  if (!team) return false;
-
-  for (const r of batchResolvers) {
-    if (r.team !== team || (r.type !== 'goal' && r.type !== 'miss')) continue;
-    const rMin = clockMinutes(r);
-    if (rMin === undefined) continue;
-    if (Math.abs(rMin - openerMin) <= 1.5) return true;
-  }
-
-  const last = lastResolverByTeam.get(team);
-  if (last !== undefined && openerMin <= last + 0.25) return true;
-
-  return false;
+/**
+ * True for kinds where ANY goal by the team in-window counts YES (used by the
+ * deadline late-goal rescue). Strict set-piece goal kinds need attributed evidence,
+ * so they are excluded — they only YES from `parseGoalSource` on the goal event.
+ */
+function anyTeamGoalCountsYes(kind: string): boolean {
+  return (
+    kind === 'score_in_window' ||
+    kind === 'chance_from_play' ||
+    kind === 'goal_from_open_play' ||
+    kind === 'goal_in_extra_time'
+  );
 }
