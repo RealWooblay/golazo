@@ -121,6 +121,8 @@ export interface EspnKeyEvent {
   text?: string;
   clock?: { displayValue?: string };
   team?: { id?: string };
+  /** Structured actors — participants[0].athlete is the scorer (goal) / shooter (shot). */
+  participants?: Array<{ athlete?: { id?: string | number; displayName?: string } }>;
   scoringPlay?: boolean;
   /** ISO wall-clock when ESPN received the play — used for timing, not keywords. */
   wallclock?: string;
@@ -128,6 +130,15 @@ export interface EspnKeyEvent {
 export interface EspnSummary {
   commentary?: EspnCommentary[];
   keyEvents?: EspnKeyEvent[];
+}
+
+/** The primary actor of a keyEvent from ESPN's structured participants:
+ *  participants[0].athlete is the scorer on a goal / the shooter on a shot. Used to
+ *  power per-player form + resolve "will <player> score?" markets by athlete id. */
+function playerOf(ke: EspnKeyEvent): { id: string; name: string } | undefined {
+  const a = ke.participants?.[0]?.athlete;
+  if (!a?.id || !a.displayName) return undefined;
+  return { id: String(a.id), name: a.displayName };
 }
 
 /** A live game we've locked onto: its id plus the resolved team identities. */
@@ -372,6 +383,7 @@ export class EspnFeed implements FeedSource {
     }
 
     this.seen.add(seqId);
+    const player = playerOf(ke);
     return {
       gameId: this.game!.eventId,
       ts: Date.now(),
@@ -383,6 +395,7 @@ export class EspnFeed implements FeedSource {
         source: 'espn.keyEvent',
         clock: ke.clock?.displayValue,
         ...(ke.wallclock ? { wallclock: ke.wallclock } : {}),
+        ...(player ? { player } : {}),
       },
     };
   }

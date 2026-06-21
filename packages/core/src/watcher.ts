@@ -164,6 +164,13 @@ export function outcomeFromEvent(ev: FeedEvent, marketKind?: string): 'YES' | nu
     return null;
   }
 
+  // Player market — "will <player> score?". The SPECIFIC-player match (by athlete id)
+  // is enforced in the orchestrator; here a goal is the only YES signal.
+  if (marketKind === 'player_to_score') {
+    if (ev.type === 'goal') return 'YES';
+    return null;
+  }
+
   // VAR → penalty decision (award, not scored). YES on a real penalty; NO via sweep.
   if (marketKind === 'penalty_awarded') {
     if (ev.type === 'penalty') return 'YES';

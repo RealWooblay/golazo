@@ -96,6 +96,13 @@ const MOMENTUM_OPEN_COOLDOWN_MS = 12_000;
  * late-goal rescue could even settle it YES off the goal that just happened).
  */
 const SCORE_COOLOFF_MS = 25_000;
+/** Per-player FORM tracking (mirrors team momentum, keyed by ESPN athlete id). */
+const PLAYER_DECAY = 0.85;
+const PLAYER_HOT_THRESHOLD = 3.0; // a shot (3) or two involvements opens a player market
+const PLAYER_OPEN_COOLDOWN_MS = 90_000; // per-player, so one player doesn't spam the slot
+/** Hydration/cooling break can't run longer than this — auto-resume so a missed ESPN
+ *  "end delay" marker never freezes the board for the rest of the match. */
+const MAX_BREAK_MS = 180_000;
 /** Per-market bookkeeping the orchestrator keeps alongside the engine's Market. */
 interface TrackedMarket {
   marketId: string;
@@ -130,6 +137,9 @@ interface TrackedMarket {
   openClockMin?: number;
   /** Feed event type that opened this market (free_kick, corner, …). */
   openerType?: FeedEvent['type'];
+  /** Player market (kind 'player_to_score'): the ESPN athlete id that must score for
+   *  YES — resolution matches a goal's scorer participant by this id. */
+  playerId?: string;
   /**
    * Monotonic event index at open. A market may ONLY be resolved by events strictly
    * after this — the event that opens "a shot this spell?" can never be its own YES.
@@ -208,6 +218,15 @@ export class Orchestrator {
   private readonly lastMomentumOpenAt = new Map<Team, number>();
   /** Wall-clock of each team's last goal — gates the post-goal score-market cool-off. */
   private readonly lastGoalAt = new Map<Team, number>();
+  /** Per-player decaying FORM (keyed by ESPN athlete id) — drives player markets. */
+  private readonly playerForm = new Map<
+    string,
+    { name: string; team: Team; score: number; lastOpenAt: number }
+  >();
+  /** True during a hydration/cooling break — openers + the NO sweep pause. */
+  private breakPaused = false;
+  /** Wall-clock the current break started (for the MAX_BREAK_MS auto-resume). */
+  private breakStartedAt = 0;
   /** Rotates momentum-market phrasing so a long spell doesn't repeat one line. */
   private momentumCounter = 0;
   /**
@@ -357,6 +376,9 @@ export class Orchestrator {
     }
 
     const game = this.feed.state();
+    // Auto-resume a hydration break if ESPN's "end delay" was missed — the board must
+    // never freeze for the rest of the match on a dropped marker.
+    if (this.breakPaused && Date.now() - this.breakStartedAt > MAX_BREAK_MS) this.endBreak();
     this.server.broadcast({ t: 'game', game });
     this.server.roomManager.lockExpiredMarkets();
     await this.checkPeriodMarkets(game);
@@ -424,7 +446,13 @@ export class Orchestrator {
     // below (after the resolver branch), so the pressure opens "a shot this spell?" and
     // the shot that follows is what settles it.
     this.momentum.observe(ev);
+    this.observePlayer(ev);
     this.broadcastMomentum();
+
+    // HYDRATION/COOLING break: ESPN emits start/end "delay" as a calm event carrying
+    // meta.delay. Pause openers + the NO sweep for the break (auto-resumes in tick()).
+    if (ev.meta?.delay === 'start') this.beginBreak();
+    else if (ev.meta?.delay === 'end') this.endBreak();
 
     // RESOLVER branch — an event can only ever cause YES (NO comes from the
     // per-tick deadline sweep). Resolver-ish events route here and never reach the
@@ -458,10 +486,15 @@ export class Orchestrator {
     }
 
     // BUILD-UP path — only non-resolver events reach here (resolvers returned above).
-    // First let momentum open a time-boxed WINDOW market for the pressing side, then
-    // let the set-piece watcher open a MOMENT market. Both are opened by the build-up,
-    // never by an outcome — that's the whole point of moments betting.
-    await this.maybeOpenMomentumMarket(this.momentum.read());
+    // Momentum (WINDOW) + a PLAYER market for the hottest in-form player open in
+    // PARALLEL lanes, off flowing play — so they PAUSE during a hydration/cooling break.
+    if (!this.breakPaused) {
+      await this.maybeOpenMomentumMarket(this.momentum.read());
+      await this.maybeOpenPlayerMarket();
+    }
+    // Set-piece / VAR markets are event-driven (a free kick, a VAR review — which is
+    // itself often the cause of a delay), so they open even during a break; the
+    // stale-lag gates inside maybeOpenMarket still prevent dead-ball opens.
     await this.maybeOpenMarket(ev);
   }
 
@@ -625,6 +658,82 @@ export class Orchestrator {
   }
 
   /**
+   * Per-PLAYER form, read off ESPN's structured actor (meta.player). A shot/goal/miss
+   * by a named player builds their form and decays every other player's — so the
+   * "hottest" player is whoever's been most threatening lately.
+   */
+  private observePlayer(ev: FeedEvent): void {
+    const p = ev.meta?.player as { id?: string; name?: string } | undefined;
+    const w = ev.type === 'goal' ? 4 : ev.type === 'shot' ? 3 : ev.type === 'miss' ? 2.5 : 0;
+    if (!p?.id || !p.name || !ev.team || w === 0) return;
+    for (const f of this.playerForm.values()) f.score *= PLAYER_DECAY;
+    const prev = this.playerForm.get(p.id);
+    this.playerForm.set(p.id, {
+      name: p.name,
+      team: ev.team,
+      score: (prev?.score ?? 0) + w,
+      lastOpenAt: prev?.lastOpenAt ?? 0,
+    });
+  }
+
+  /**
+   * PLAYER market — "Will <player> SCORE in the next few minutes?" for the hottest
+   * in-form player. A PARALLEL lane (slot 'player') so it co-exists with the
+   * moment/window/period markets. Opened off FORM (never an outcome); resolved YES
+   * only by a goal whose scorer participant matches this athlete id, else NO via the
+   * deadline sweep.
+   */
+  private async maybeOpenPlayerMarket(): Promise<void> {
+    if (this.hasBlockingMarket('player')) return;
+    let best: { id: string; name: string; team: Team; score: number } | undefined;
+    for (const [id, f] of this.playerForm) {
+      if (f.score < PLAYER_HOT_THRESHOLD) continue;
+      if (Date.now() - f.lastOpenAt < PLAYER_OPEN_COOLDOWN_MS) continue;
+      if (!best || f.score > best.score) best = { id, name: f.name, team: f.team, score: f.score };
+    }
+    if (!best) return;
+    // (No post-goal cool-off here: "will the in-form scorer strike again?" is a fair,
+    // player-specific market — the per-player cooldown above already prevents spam.)
+
+    const game = this.feed.state();
+    const oc = parseClockKey(game.clock);
+    const openClockMin = oc.base + oc.stopp / 100;
+    const trigger: MarketTrigger = {
+      gameId: game.gameId,
+      question: `${best.name} — to SCORE in the next few minutes?`,
+      kind: 'player_to_score',
+      slot: 'player',
+      team: best.team,
+      windowMs: MOMENTUM_BET_WINDOW_MS,
+      trueProb: 0.12,
+    };
+    const f = this.playerForm.get(best.id);
+    if (f) f.lastOpenAt = Date.now();
+    await this.openTriggeredMarket(trigger, {
+      team: best.team,
+      slot: 'player',
+      openClockMin,
+      playerId: best.id,
+      logLabel: `player who=${best.name} score=${best.score.toFixed(1)}`,
+    });
+  }
+
+  /** Enter a hydration/cooling break: pause openers + the NO sweep until it ends. */
+  private beginBreak(): void {
+    if (this.breakPaused) return;
+    this.breakPaused = true;
+    this.breakStartedAt = Date.now();
+    console.log('[golazo/feed] break_start — markets paused (cooling/hydration)');
+  }
+
+  /** Resume after a break (ESPN "end delay", or the MAX_BREAK_MS auto-resume). */
+  private endBreak(): void {
+    if (!this.breakPaused) return;
+    this.breakPaused = false;
+    console.log('[golazo/feed] break_end — markets resumed');
+  }
+
+  /**
    * Period markets — state-triggered, not tied to a single play.
    * Opens in stoppage/extra time and resolves on goal or whistle.
    */
@@ -633,6 +742,7 @@ export class Orchestrator {
       this.resolveOpenPeriodMarkets('NO');
       return;
     }
+    if (this.breakPaused) return; // don't open period markets mid-break
 
     const pk = periodMarketKeyForGame(game);
     if (!pk) {
@@ -694,6 +804,7 @@ export class Orchestrator {
       isPeriod?: boolean;
       openClockMin?: number;
       openerType?: FeedEvent['type'];
+      playerId?: string;
       logLabel: string;
     },
   ): Promise<void> {
@@ -753,6 +864,7 @@ export class Orchestrator {
       openSeq: this.eventCounter,
       ...(opts.openClockMin !== undefined ? { openClockMin: opts.openClockMin } : {}),
       ...(opts.openerType ? { openerType: opts.openerType } : {}),
+      ...(opts.playerId ? { playerId: opts.playerId } : {}),
       ...(opts.isPeriod ? { isPeriod: true } : {}),
     });
   }
@@ -839,6 +951,9 @@ export class Orchestrator {
    * instead of void" bug AND the "random void" bug by construction.
    */
   private settleExpired(now: number): void {
+    // During a hydration/cooling break there's no play — don't let markets time out to
+    // NO. Their deadlines simply wait; the NO sweep resumes when the break ends.
+    if (this.breakPaused) return;
     for (const t of [...this.tracked.values()]) {
       if (t.isPeriod) continue; // period markets settle on their own goal / FT
       const m = this.engine.get(t.marketId);
@@ -994,6 +1109,10 @@ export class Orchestrator {
     if (m.kind === 'red_card_given') return ev.type === 'red_card';
     if (t.team && ev.team && t.team !== ev.team) return false;
     if (ev.team && t.team !== ev.team) return false;
+    if (m.kind === 'player_to_score') {
+      // Resolves YES only on a goal whose scorer (participants[0]) is THIS player.
+      return ev.type === 'goal' && playerIdOf(ev) === t.playerId;
+    }
     if (m.kind === 'shot_in_window') return ev.type === 'goal' || ev.type === 'shot' || ev.type === 'miss';
     if (m.kind === 'score_in_window') return ev.type === 'goal';
     if (isGoalQuestionKind(m.kind)) return ev.type === 'goal' || ev.type === 'miss' || ev.type === 'play_end';
@@ -1401,6 +1520,12 @@ function sortFeedEvents(events: FeedEvent[]): FeedEvent[] {
     if (ra !== rb) return ra - rb;
     return openerPriority(a.type) - openerPriority(b.type);
   });
+}
+
+/** The ESPN athlete id of an event's primary actor (the scorer on a goal). */
+function playerIdOf(ev: FeedEvent): string | undefined {
+  const p = ev.meta?.player as { id?: string } | undefined;
+  return p?.id;
 }
 
 function isOutcomeEvent(ev: FeedEvent): boolean {
