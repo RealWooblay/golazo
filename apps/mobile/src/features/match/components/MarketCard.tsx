@@ -8,101 +8,66 @@ import Animated, {
   withSpring,
 } from "react-native-reanimated";
 import { colors, radius, spacing, spring, type } from "@/theme";
-import { Chip, Surface, Text } from "@/ui";
+import { Surface, Text } from "@/ui";
 import { money, multiple } from "@/lib/format";
-import { RAKE } from "@/lib/config";
-import { bettingClosesAt, bettingSafetyBufferMs } from "@/lib/config";
+import { RAKE, bettingClosesAt, bettingSafetyBufferMs } from "@/lib/config";
 import type { MarketVM, PendingBet } from "@/state/types";
-import { CountdownRing } from "./CountdownRing";
-import { PoolMeter } from "./PoolMeter";
-import { StakeRow } from "./StakeRow";
 import { BetButton } from "./BetButton";
+import { betLabels, laneOf, withAlpha } from "../marketMeta";
 
 /**
- * MarketCard — the heart of the loop. Renders one in-play market through its
- * lifecycle:
+ * MarketCard — the compact, one-tap betting card. A short window made catchable:
+ * a draining countdown bar across the top (red in the last seconds), a lane tag,
+ * the bold question, and two big honest-verdict buttons (Shot / No shot, Goal / No
+ * goal, Scores / Doesn't…). No per-card stake row — the stake is global. Locked
+ * markets are rendered as thin strips by the parent, so this is the OPEN state.
  *
- *   OPEN   → phase chip (LIVE, pulsing), the bold question, the countdown ring,
- *            the live PoolMeter (pool/odds/split), stake chips, and the two big
- *            YES/NO buttons. Tap a side → a confirmation strip slides in with
- *            the non-guaranteed estimate and the buttons settle.
- *   LOCKED → ring shows ⏳, the card reads "Bets are in. Here it comes…", any
- *            placed bet still shows its confirmation. Tension, no actions.
- *
- * Pure presentation: the parent owns the engine + tick clock and passes the flat
- * MarketVM, the live `now`, the chosen stake, and the placeBet callback.
+ * Mode-aware: `formatStake` ($ vs points), `betDisabled` (on-chain twin preparing
+ * / window closing), and the live `quote` all flow from the parent.
  */
 export function MarketCard({
   market,
   now,
   stake,
-  onStakeChange,
   pending,
   balance,
   onBet,
   formatStake = money,
   fixedOdds = false,
-  hapticsEnabled = true,
   betDisabled = false,
 }: {
   market: MarketVM;
   now: number;
   stake: number;
-  onStakeChange: (n: number) => void;
   pending: PendingBet | null;
-  /** Balance in stake "units" ($ chips) — used only for the over-balance gate. */
   balance: number;
   onBet: (side: "YES" | "NO") => void;
-  /** Stake formatter — SOL in chain mode, $ in sandbox. Default money. */
   formatStake?: (n: number) => string;
-  /**
-   * Fixed-odds mode: show `market.oddsYes/oddsNo` as-is rather than recomputing
-   * pool-implied parimutuel odds. Used by FRIENDS MODE, where you bet POINTS vs
-   * the book at locked odds (even money / model odds) — not into a shared pool.
-   */
   fixedOdds?: boolean;
-  hapticsEnabled?: boolean;
-  /** External gate (e.g. on-chain twin still initializing). */
   betDisabled?: boolean;
 }) {
+  const lane = laneOf(market.kind, market.slot);
+  const labels = betLabels(market.kind, market.question);
+
   const locked = market.phase !== "open";
   const betCutoff = bettingClosesAt(market.lockAt, market.windowMs);
   const closing = !locked && now >= betCutoff;
   const bettingOpen = !locked && !closing && !betDisabled;
-  const resolveWindowMs = market.resolveWindowMs > 0 ? market.resolveWindowMs : 60_000;
-  const resolveAt =
-    market.resolveAt > 0 ? market.resolveAt : market.lockAt + resolveWindowMs;
-  const left = bettingOpen
-    ? Math.max(0, betCutoff - now)
-    : locked
-      ? Math.max(0, resolveAt - now)
-      : Math.max(0, market.lockAt - now);
-  const fraction =
-    market.windowMs > 0
-      ? bettingOpen
-        ? left / Math.max(1, market.windowMs - bettingSafetyBufferMs(market.windowMs))
-        : closing
-          ? (market.lockAt - now) / bettingSafetyBufferMs(market.windowMs)
-          : locked
-            ? left / Math.max(1, resolveWindowMs)
-            : 0
-      : 0;
-  const seconds = left / 1000;
-  const resolveMins = Math.floor(seconds / 60);
-  const resolveSecs = Math.floor(seconds % 60);
-  const resolveLabel =
-    resolveMins > 0
-      ? `${resolveMins}:${String(resolveSecs).padStart(2, "0")}`
-      : `${Math.ceil(seconds)}s`;
+  const left = Math.max(0, betCutoff - now);
+  const seconds = Math.ceil(left / 1000);
+  const betWindow = Math.max(1, market.windowMs - bettingSafetyBufferMs(market.windowMs));
+  const barFrac = locked || closing ? 0 : Math.max(0, Math.min(1, left / betWindow));
+  const urgent = !locked && (closing || seconds <= 3);
+  const barColor = urgent ? colors.no : lane.color;
 
   const betPlaced = pending != null && pending.marketId === market.id;
   const canBet = bettingOpen && !betPlaced;
+  const overBalance = stake > balance;
+
   const yesPool = market.pool * (market.yesShare / 100);
   const noPool = market.pool - yesPool;
   const quote = (side: "YES" | "NO") => {
-    // Fixed-odds (friends mode): the locked multiple, no pool math / no rake.
-    if (fixedOdds) return side === "YES" ? market.oddsYes : market.oddsNo;
-    if (stake <= 0) return side === "YES" ? market.oddsYes : market.oddsNo;
+    if (fixedOdds || stake <= 0) return side === "YES" ? market.oddsYes : market.oddsNo;
     const nextYes = yesPool + (side === "YES" ? stake : 0);
     const nextNo = noPool + (side === "NO" ? stake : 0);
     const nextGross = nextYes + nextNo;
@@ -112,103 +77,55 @@ export function MarketCard({
 
   return (
     <Surface
-      radius={radius.xl}
-      glow={locked ? "gold" : "yes"}
-      borderColor={locked ? colors.glow.goldSoft : colors.glow.yesSoft}
-      style={styles.card}
+      radius={radius.lg}
+      style={[styles.card, { borderColor: withAlpha(lane.color, 0.4) }]}
     >
-      {/* header: phase chip + question */}
-      <View style={styles.head}>
-        <Chip
-          label={
-            locked
-              ? `LOCKED · ${resolveLabel} left`
-              : closing
-                ? "CLOSING · no more bets"
-                : "LIVE · bet now"
-          }
-          tone={locked ? "win" : closing ? "win" : "live"}
-          dot
+      <View style={styles.barTrack}>
+        <View
+          style={[styles.barFill, { width: `${barFrac * 100}%`, backgroundColor: barColor }]}
         />
-        <Text style={styles.question}>{market.question}</Text>
-        {market.subtitle ? (
-          <Text style={styles.subtitle} numberOfLines={2}>
-            {market.subtitle}
+      </View>
+
+      <View style={styles.body}>
+        <View style={styles.head}>
+          <Text style={[styles.tag, { color: lane.color }]}>{lane.label}</Text>
+          <View style={{ flex: 1 }} />
+          <Text style={[styles.count, urgent && { color: colors.no }]}>
+            {closing ? "closing" : `${seconds}s`}
           </Text>
-        ) : null}
-      </View>
+        </View>
 
-      {/* ring + pool */}
-      <View style={styles.ringRow}>
-        <CountdownRing
-          fraction={fraction}
-          seconds={seconds}
-          locked={locked || closing}
-          urgent={bettingOpen}
-          hapticsEnabled={hapticsEnabled}
-          lockedPhase={locked}
-        />
-        <PoolMeter
-          pool={market.pool}
-          oddsYes={quote("YES")}
-          oddsNo={quote("NO")}
-          yesShare={market.yesShare}
-          live={!locked}
-          format={formatStake}
-        />
-      </View>
-
-      {/* bet confirmation OR the stake selector */}
-      {betPlaced ? (
-        <BetConfirmation pending={pending!} format={formatStake} />
-      ) : (
-        <StakeRow
-          stake={stake}
-          onChange={onStakeChange}
-          balance={balance}
-          format={formatStake}
-          disabled={!canBet}
-          hapticsEnabled={hapticsEnabled}
-        />
-      )}
-
-      {/* the two big buttons */}
-      <View style={styles.btns}>
-        <BetButton
-          side="YES"
-          odds={quote("YES")}
-          sublabel="est. goal"
-          onPress={() => onBet("YES")}
-          disabled={!canBet || stake > balance}
-          picked={betPlaced ? pending!.side : null}
-        />
-        <BetButton
-          side="NO"
-          odds={quote("NO")}
-          sublabel="est. no goal"
-          onPress={() => onBet("NO")}
-          disabled={!canBet || stake > balance}
-          picked={betPlaced ? pending!.side : null}
-        />
-      </View>
-
-      {closing && !betPlaced ? (
-        <Text style={styles.sat} center>
-          Betting closed — waiting for lock. Outcome may be imminent.
+        <Text style={styles.question} numberOfLines={2}>
+          {market.question}
         </Text>
-      ) : locked && !betPlaced ? (
-        <Text style={styles.sat} center>
-          Watching — can resolve anytime before the window ends.
-        </Text>
-      ) : null}
+
+        {betPlaced ? (
+          <BetConfirmation pending={pending!} format={formatStake} />
+        ) : (
+          <View style={styles.btns}>
+            <BetButton
+              side="YES"
+              odds={quote("YES")}
+              label={labels.yes}
+              onPress={() => onBet("YES")}
+              disabled={!canBet || overBalance}
+              picked={null}
+            />
+            <BetButton
+              side="NO"
+              odds={quote("NO")}
+              label={labels.no}
+              onPress={() => onBet("NO")}
+              disabled={!canBet || overBalance}
+              picked={null}
+            />
+          </View>
+        )}
+      </View>
     </Surface>
   );
 }
 
-/**
- * BetConfirmation — the satisfying micro-moment after you tap a side. It is an
- * estimate, not a fixed payout promise.
- */
 function BetConfirmation({
   pending,
   format = money,
@@ -221,23 +138,14 @@ function BetConfirmation({
   const fill = isYes ? colors.alpha.yes : colors.alpha.no;
   const scale = useSharedValue(0.9);
   useEffect(() => {
-    scale.value = withSequence(
-      withSpring(1.04, spring.bouncy),
-      withSpring(1, spring.smooth),
-    );
+    scale.value = withSequence(withSpring(1.04, spring.bouncy), withSpring(1, spring.smooth));
   }, [scale]);
-  const animStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
+  const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
 
   return (
     <Animated.View
-      entering={FadeIn.duration(180)}
-      style={[
-        styles.locked,
-        { backgroundColor: fill, borderColor: tint },
-        animStyle,
-      ]}
+      entering={FadeIn.duration(160)}
+      style={[styles.locked, { backgroundColor: fill, borderColor: tint }, animStyle]}
     >
       <View style={[styles.lockedDot, { backgroundColor: tint }]} />
       <Text style={[styles.lockedText, { color: tint }]}>
@@ -249,23 +157,24 @@ function BetConfirmation({
 }
 
 const styles = StyleSheet.create({
-  card: { padding: spacing.lg, gap: spacing.md },
-  head: { gap: spacing.xs },
+  card: { padding: 0, overflow: "hidden", borderWidth: 1 },
+  barTrack: { height: 3, backgroundColor: colors.surface2 },
+  barFill: { height: 3 },
+  body: { padding: spacing.md, gap: spacing.sm },
+  head: { flexDirection: "row", alignItems: "center" },
+  tag: {
+    ...type.overline,
+    fontSize: 10.5,
+    letterSpacing: 0.6,
+  },
+  count: { ...type.mono, fontSize: 13, color: colors.textMuted },
   question: {
     ...type.title,
-    fontSize: 22,
+    fontSize: 18,
+    lineHeight: 23,
     color: colors.textPrimary,
-    lineHeight: 27,
-    marginTop: 4,
   },
-  subtitle: {
-    ...type.caption,
-    fontSize: 12.5,
-    color: colors.textMuted,
-    lineHeight: 17,
-  },
-  ringRow: { flexDirection: "row", alignItems: "center", gap: spacing.lg },
-  btns: { flexDirection: "row", gap: spacing.md },
+  btns: { flexDirection: "row", gap: spacing.sm, marginTop: 2 },
   locked: {
     flexDirection: "row",
     alignItems: "center",
@@ -274,14 +183,9 @@ const styles = StyleSheet.create({
     height: 44,
     borderRadius: radius.sm,
     borderWidth: 1,
+    marginTop: 2,
   },
   lockedDot: { width: 8, height: 8, borderRadius: 4 },
   lockedText: { ...type.subtitle, fontSize: 15, flex: 1 },
   lockedStake: { ...type.mono, fontSize: 13, color: colors.textSecondary },
-  sat: {
-    ...type.caption,
-    fontSize: 12,
-    color: colors.textFaint,
-    marginTop: spacing.xs,
-  },
 });

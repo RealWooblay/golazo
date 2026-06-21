@@ -37,6 +37,8 @@ import {
   RevealCard,
   WaitingCard,
 } from "@/features/match/components";
+import { StakeBar } from "@/features/match/components/StakeBar";
+import { LockedStrip } from "@/features/match/components/LockedStrip";
 
 export default function MatchScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -84,6 +86,24 @@ export default function MatchScreen() {
   // Team identity (crests + colors) — from the lobby fixture we came through, or
   // synthesised from the live game state.
   const teams = useMemo(() => resolveTeams(id, game), [id, game]);
+  // The sticky custom stake — persists for the whole match (see StakeBar).
+  const [customStake, setCustomStake] = useState(0);
+  // Open markets are the hero, ordered closing-soonest so the most urgent sits on top;
+  // locked markets (can't bet) drop to thin strips below.
+  const openMarkets = useMemo(
+    () =>
+      markets
+        .filter((m) => m.phase === "open")
+        .sort(
+          (a, b) =>
+            bettingClosesAt(a.lockAt, a.windowMs) - bettingClosesAt(b.lockAt, b.windowMs),
+        ),
+    [markets],
+  );
+  const lockedMarkets = useMemo(
+    () => markets.filter((m) => m.phase === "locked"),
+    [markets],
+  );
   // Full time: the game has ended — there are no more markets, so the stage shows
   // a clean end state (final score + settle) instead of the idle "reading the
   // game" radar. (Friends rooms have their own full-time standings.)
@@ -249,76 +269,96 @@ export default function MatchScreen() {
               body="Grab a breather — second-half markets are moments away."
             />
           </View>
-        ) : markets.length > 0 ? (
-          markets.map((m) => {
-            const chainBet = chainBets.getBet(m.id);
-            const liveOdds = chainBets.getLiveOdds(m.id);
-            const displayMarket =
-              chainMode && liveOdds
-                ? {
-                    ...m,
-                    oddsYes: liveOdds.oddsYes,
-                    oddsNo: liveOdds.oddsNo,
-                    pool: liveOdds.poolSol / SOL_PER_UNIT,
-                    yesShare: liveOdds.yesShare,
-                  }
-                : m;
-            const chainPreparing =
-              chainMode &&
-              !!m.onChain &&
-              !chainBets.isTwinReady(m.id) &&
-              !chainBet;
-            const chainLocked = chainMode && (chainBets.placing || !!chainBet);
-            const marketClosing =
-              m.phase === "open" &&
-              now >= bettingClosesAt(m.lockAt, m.windowMs);
-            const cardPending =
-              chainMode && chainBet
-                ? {
-                    marketId: m.id,
-                    side: chainBet.side,
-                    stake: store.stake,
-                    estimatedMult: chainBet.estimatedMultiple,
-                  }
-                : (pendingByMarket[m.id] ?? null);
-            return (
-              <View key={m.id} style={styles.gutter}>
-                {chainPreparing ? (
-                  <Banner
-                    tone="info"
-                    message="On-chain market preparing — bet buttons unlock in a moment."
-                  />
-                ) : null}
-                <MarketCard
-                  market={displayMarket}
-                  now={now}
+        ) : (
+          <>
+            {openMarkets.length > 0 ? (
+              <View style={styles.gutter}>
+                <StakeBar
                   stake={store.stake}
-                  onStakeChange={store.setStake}
-                  pending={cardPending}
+                  onPick={store.setStake}
+                  customStake={customStake}
+                  onCustom={setCustomStake}
                   balance={bal.balanceInUnits}
-                  formatStake={stakeFormat}
-                  onBet={(side) => void onBet(m, side)}
+                  format={stakeFormat}
                   hapticsEnabled={hapticsOn}
-                  betDisabled={
-                    (chainMode && (!m.onChain || chainPreparing || chainLocked)) ||
-                    marketClosing
-                  }
                 />
               </View>
-            );
-          })
-        ) : reveals.length === 0 ? (
-          <View style={styles.gutter}>
-            <WaitingCard
-              clock={game?.clock}
-              commentaryLog={commentaryLog}
-              momentumLean={momentumLean}
-              momentum={momentumTeam}
-              homeName={game?.home?.name}
-              awayName={game?.away?.name}
-            />
-          </View>
-        ) : null}
+            ) : null}
+
+            {openMarkets.map((m) => {
+              const liveOdds = chainBets.getLiveOdds(m.id);
+              const displayMarket =
+                chainMode && liveOdds
+                  ? {
+                      ...m,
+                      oddsYes: liveOdds.oddsYes,
+                      oddsNo: liveOdds.oddsNo,
+                      pool: liveOdds.poolSol / SOL_PER_UNIT,
+                      yesShare: liveOdds.yesShare,
+                    }
+                  : m;
+              const chainBet = chainBets.getBet(m.id);
+              const chainPreparing =
+                chainMode && !!m.onChain && !chainBets.isTwinReady(m.id) && !chainBet;
+              const chainLocked = chainMode && (chainBets.placing || !!chainBet);
+              const marketClosing =
+                m.phase === "open" && now >= bettingClosesAt(m.lockAt, m.windowMs);
+              const cardPending =
+                chainMode && chainBet
+                  ? {
+                      marketId: m.id,
+                      side: chainBet.side,
+                      stake: store.stake,
+                      estimatedMult: chainBet.estimatedMultiple,
+                    }
+                  : (pendingByMarket[m.id] ?? null);
+              return (
+                <View key={m.id} style={styles.gutter}>
+                  {chainPreparing ? (
+                    <Banner
+                      tone="info"
+                      message="On-chain market preparing — bet unlocks in a moment."
+                    />
+                  ) : null}
+                  <MarketCard
+                    market={displayMarket}
+                    now={now}
+                    stake={store.stake}
+                    pending={cardPending}
+                    balance={bal.balanceInUnits}
+                    formatStake={stakeFormat}
+                    onBet={(side) => void onBet(m, side)}
+                    betDisabled={
+                      (chainMode && (!m.onChain || chainPreparing || chainLocked)) ||
+                      marketClosing
+                    }
+                  />
+                </View>
+              );
+            })}
+
+            {lockedMarkets.map((m) => (
+              <View key={m.id} style={styles.gutter}>
+                <LockedStrip market={m} now={now} />
+              </View>
+            ))}
+
+            {openMarkets.length === 0 &&
+            lockedMarkets.length === 0 &&
+            reveals.length === 0 ? (
+              <View style={styles.gutter}>
+                <WaitingCard
+                  clock={game?.clock}
+                  commentaryLog={commentaryLog}
+                  momentumLean={momentumLean}
+                  momentum={momentumTeam}
+                  homeName={game?.home?.name}
+                  awayName={game?.away?.name}
+                />
+              </View>
+            ) : null}
+          </>
+        )}
 
         {reveals.map((reveal) => (
           <View key={reveal.marketId} style={styles.gutter}>
