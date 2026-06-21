@@ -35,7 +35,7 @@ fi
 
 cat >/opt/golazo/services/feed/.env <<ENV
 PORT=8787
-FEED_MODE=auto
+FEED_MODE=espn
 ESPN_POLL_MS=2500
 ESPN_LEAGUE=fifa.world
 ESPN_COMMENTARY_LANG=dual
