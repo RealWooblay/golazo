@@ -150,7 +150,10 @@ export function resolveDeadlineMs(kind: string): number {
     case 'goal_from_open_play':
       return 120_000; // sustained press — up to ~2 match minutes
     case 'chance_from_play':
-      return 60_000; // next shot in the move — ~1 minute of live play
+      // "Will THIS move produce a shot?" — a move is short. Cap at 30s so it
+      // never drags; in practice it resolves earlier when the move ends (shot →
+      // YES, possession lost / phase ends → NO) via the play-phase + AI resolvers.
+      return 30_000;
     case 'penalty_awarded':
     case 'red_card_given':
       return 120_000; // VAR review
@@ -208,7 +211,7 @@ export function isStructuredSetPiece(ev: FeedEvent): boolean {
  */
 /** Attacking-half / final-third location language (EN + ES). */
 const ATTACKING_LOCATION =
-  /\b(attacking|final|opposition'?s?)\s+(half|third)\b|campo contrario|zona ofensiva|área ofensiva|area ofensiva/;
+  /\b(attacking|final|opposition'?s?)\s+(half|third)\b|\b(right|left)\s+wing\b|\bout wide\b|\bwide on the (right|left)\b|\bon the (right|left) flank\b|\bbyline\b|campo contrario|zona ofensiva|área ofensiva|area ofensiva|banda (izquierda|derecha)/;
 
 /**
  * Defensive / own-half set-piece language — these are NEVER goal-chance markets

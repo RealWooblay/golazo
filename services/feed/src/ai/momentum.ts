@@ -26,9 +26,15 @@ const WEIGHTS: Partial<Record<FeedEvent['type'], number>> = {
 /** Each observed event decays the standing reading — momentum is recency-weighted. */
 const DECAY = 0.8;
 
-/** Pressure needed before the agent will spin up a market off momentum alone. */
-export const MOMENTUM_SHOT_THRESHOLD = 3.0; // "— SHOT?" (chance_from_play)
-export const MOMENTUM_GOAL_THRESHOLD = 5.5; // "— GOAL?" (goal_from_open_play)
+/**
+ * Pressure needed before the agent will spin up a market off momentum alone.
+ * The GOAL bar sits high: a momentum "— GOAL?" market almost always resolves NO
+ * (a pressing spell rarely yields a goal inside the window), so we reserve it for
+ * genuinely relentless siege pressure and let lighter spells ask the answerable
+ * "— SHOT?" instead. This stops the board filling with un-winnable "GOAL next?" spam.
+ */
+export const MOMENTUM_SHOT_THRESHOLD = 3.5; // "— SHOT?" (chance_from_play)
+export const MOMENTUM_GOAL_THRESHOLD = 7.5; // "— GOAL?" (goal_from_open_play)
 
 /** Lean past this (0..1 toward a side) lights up the client momentum bar. */
 const BAR_LEAN_MIN = 0.6;

@@ -49,6 +49,8 @@ import {
   clockMinutes,
   feedLagMinutes,
   goalAlreadyHappenedForChance,
+  isAwardedFreeKick,
+  isStructuredSetPiece,
   isStalePlay,
   KEY_EVENT_ONLY_OPENERS,
   bettingClosesAt,
@@ -98,8 +100,16 @@ import { momentKey, parseClockKey } from './feed/espn';
 
 /** Betting window for a momentum-opened market (short — the play is live). */
 const MOMENTUM_BET_WINDOW_MS = 10_000;
-/** Min gap between momentum-opened markets for the SAME team (anti-spam-of-one-team). */
-const MOMENTUM_OPEN_COOLDOWN_MS = 15_000;
+/**
+ * Min gap between momentum-opened markets for the SAME team. Generous on purpose:
+ * momentum markets are the open-play "is this spell going somewhere?" sideshow —
+ * NOT the main event. The headline markets are set-pieces (corners, free kicks,
+ * penalties) and clear chances. A short cooldown made one pressing team flood the
+ * single market slot with a dozen near-identical "— GOAL?" lines, drowning out the
+ * set-pieces (which then never got a slot to open in). Keep momentum rare so the
+ * variety the product wants — corners, free kicks, penalties, VAR — comes through.
+ */
+const MOMENTUM_OPEN_COOLDOWN_MS = 75_000;
 
 /** Per-market bookkeeping the orchestrator keeps alongside the engine's Market. */
 interface TrackedMarket {
@@ -1500,6 +1510,28 @@ export class Orchestrator {
   /** Void card/VAR markets when a live set-piece or attack moment arrives. */
   private supersedeLowPriorityMarkets(incoming: FeedEvent): void {
     if (openerPriority(incoming.type) > 1) return;
+
+    // A real SET-PIECE (corner / penalty / awarded free kick) is the headline
+    // market — it must always get the single slot. If the slot is held by an
+    // open-play momentum market (chance_from_play / goal_from_open_play) that's
+    // still in its betting window, void + refund it so the set-piece can open.
+    // Without this, a corner that lands while an open-play market is live is lost
+    // forever (its moment key is deduped), which is exactly why the board looked
+    // like "open play only, never corners or free kicks".
+    if (incomingIsSetPiece(incoming)) {
+      for (const t of [...this.tracked.values()]) {
+        const m = this.engine.get(t.marketId);
+        if (!m || m.status !== 'open' || t.isPeriod) continue;
+        if (m.kind === 'chance_from_play' || m.kind === 'goal_from_open_play') {
+          console.log(
+            `[golazo/feed] market_supersede_open_play id=${m.id} kind=${m.kind} ` +
+              `by=${incoming.type} text="${incoming.text.slice(0, 40)}"`,
+          );
+          this.voidMarket(t, 'Superseded by a live set-piece');
+        }
+      }
+    }
+
     for (const t of [...this.tracked.values()]) {
       const m = this.engine.get(t.marketId);
       if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
@@ -1552,6 +1584,19 @@ function sortFeedEvents(events: FeedEvent[]): FeedEvent[] {
     if (ra !== rb) return ra - rb;
     return openerPriority(a.type) - openerPriority(b.type);
   });
+}
+
+/**
+ * True when an incoming event is a real set-piece that WILL open a headline
+ * market: a corner, a structured penalty award, or an attacking-half free kick.
+ * (A bare/defensive free kick that only the AI might open does NOT preempt — we
+ * don't void a live market for a moment that may not even open.)
+ */
+function incomingIsSetPiece(ev: FeedEvent): boolean {
+  if (ev.type === 'corner') return true;
+  if (ev.type === 'penalty') return isStructuredSetPiece(ev);
+  if (ev.type === 'free_kick') return isAwardedFreeKick(ev);
+  return false;
 }
 
 /** Pull the correlation sequenceId out of an event's meta, if present. */

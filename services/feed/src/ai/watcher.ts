@@ -154,8 +154,22 @@ export async function aiTriggerFromEvents(
     // When the model is slow/absent we DON'T go dark — forward-play commentary
     // already matched the attack patterns, so open the "on this play" market via
     // rules. These resolve fast (shot = YES, fizzle = NO), so a few extra are fine.
-    if (aiUnavailable && (latest.type === 'dangerous_attack' || latest.type === 'attack')) {
-      return withWindow(ruleTrigger, latest.type === 'dangerous_attack' ? 0.6 : 0.45);
+    if (
+      aiUnavailable &&
+      (latest.type === 'dangerous_attack' ||
+        latest.type === 'attack' ||
+        latest.type === 'free_kick')
+    ) {
+      // free_kick: an awarded attacking set piece is unambiguously bettable, so
+      // an AI outage must not drop it. (ruleTrigger is null without a resolvable
+      // team, so this still no-ops for an unattributable free kick.)
+      const conf =
+        latest.type === 'free_kick'
+          ? 0.7
+          : latest.type === 'dangerous_attack'
+            ? 0.6
+            : 0.45;
+      return withWindow(ruleTrigger, conf);
     }
     if (latest.type === 'attack' && isMomentumBuildUp(latest.text)) return withWindow(ruleTrigger);
     return null;

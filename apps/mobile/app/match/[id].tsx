@@ -96,7 +96,7 @@ export default function MatchScreen() {
   // Money is real SOL in chain mode, play $ in sandbox — for the header balance
   // AND the stake chips / over-balance check (so nothing reads "$" while you bet SOL).
   const bal = useDisplayBalance();
-  const stakeFormat = makeStakeFormatter(bal.chain);
+  const stakeFormat = makeStakeFormatter(bal.points);
   // Once a real bet is placed (or is mid-flight) on this market, lock the card so
   // the program's one-bet-per-market rule isn't tripped by a double tap.
   const chainLocked =
