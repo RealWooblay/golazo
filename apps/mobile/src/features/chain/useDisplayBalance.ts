@@ -6,7 +6,7 @@
 // also in $. One hook so no header can drift between units or show raw SOL.
 import { useChain } from "./useChain";
 import { useStore } from "@/state/store";
-import { money, pts } from "@/lib/format";
+import { money, pts, signedMoney, signedPts } from "@/lib/format";
 
 /** Display conversion: one $ "unit" of stake/balance = this much SOL on-chain.
  *  $1 = 0.01 SOL. Used both to turn the real SOL balance into the $ figure we
@@ -22,6 +22,10 @@ export interface DisplayBalance {
   amount: number;
   /** Formatter ($, pts, or SOL-backed $). */
   format: (n: number) => string;
+  /** Signed delta formatter (+$25 / +25 pts). */
+  signedFormat: (n: number) => string;
+  /** Zero-delta label for void/refund rows ($0 / 0 pts). */
+  zeroLabel: string;
   /** Balance in $ "units" for over-balance checks (same as `amount`). */
   balanceInUnits: number;
 }
@@ -35,6 +39,8 @@ export function useDisplayBalance(): DisplayBalance {
       points: true,
       amount: store.pointsBalance,
       format: pts,
+      signedFormat: signedPts,
+      zeroLabel: "0 pts",
       balanceInUnits: store.pointsBalance,
     };
   }
@@ -48,6 +54,8 @@ export function useDisplayBalance(): DisplayBalance {
       points: false,
       amount: dollars,
       format: money,
+      signedFormat: signedMoney,
+      zeroLabel: "$0",
       balanceInUnits: dollars,
     };
   }
@@ -56,6 +64,8 @@ export function useDisplayBalance(): DisplayBalance {
     points: false,
     amount: store.balance,
     format: money,
+    signedFormat: signedMoney,
+    zeroLabel: "$0",
     balanceInUnits: store.balance,
   };
 }
@@ -65,4 +75,9 @@ export function useDisplayBalance(): DisplayBalance {
  *  header's currency (was always `$`, which made paper mode read as money). */
 export function makeStakeFormatter(points: boolean): (units: number) => string {
   return points ? pts : money;
+}
+
+/** Signed delta formatter — matches {@link makeStakeFormatter} for history rows. */
+export function makeSignedFormatter(points: boolean): (n: number) => string {
+  return points ? signedPts : signedMoney;
 }

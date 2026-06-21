@@ -101,6 +101,38 @@ describe('PointsManager', () => {
     expect(fx.state?.balance).toBe(POINTS_START_BALANCE);
   });
 
+  it('confirms a held bet after the market locks', () => {
+    const pm = new PointsManager();
+    pm.register('u1', 'Alice');
+    const m = fakeMarket('m1');
+    pm.onMarketOpen(m);
+    pm.holdBet('u1', 'm1', 'YES', 100);
+    pm.onMarketLock('m1');
+    const fx = pm.confirmHeldBet('u1', 'm1');
+    expect(fx.marketUpdate?.poolYes).toBe(100);
+    expect(fx.state?.balance).toBe(POINTS_START_BALANCE - 100);
+  });
+
+  it('refunds held stake when the market resolves before confirm', () => {
+    const pm = new PointsManager();
+    pm.register('u1', 'Alice');
+    pm.onMarketOpen(fakeMarket('m1'));
+    pm.holdBet('u1', 'm1', 'YES', 60);
+    const resolved = fakeMarket('m1', 'resolved');
+    resolved.settlement = {
+      outcome: 'NO',
+      rakeTaken: 0,
+      distributable: 0,
+      totalPayouts: 0,
+      operatorPnl: 0,
+      payouts: [],
+    };
+    pm.onMarketResolve(resolved);
+    const fx = pm.confirmHeldBet('u1', 'm1');
+    expect(fx.rejected?.reason).toMatch(/resolved/i);
+    expect(pm.leaderboard()[0]!.balance).toBe(POINTS_START_BALANCE);
+  });
+
   it('allows concurrent holds on different markets', () => {
     const pm = new PointsManager();
     pm.register('u1', 'Alice');

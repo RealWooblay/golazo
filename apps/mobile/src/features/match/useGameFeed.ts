@@ -701,17 +701,20 @@ export function useGameFeed(): GameFeedApi {
             }
             case "points_bet_rejected": {
               const p = pendingByMarketRef.current[msg.marketId];
-              if (msg.userId === pointsUserId && p && p.marketId === msg.marketId) {
+              if (msg.userId !== pointsId) break;
+              if (p && p.marketId === msg.marketId) {
                 clearPendingForMarket(msg.marketId);
-                const reason = msg.reason ?? "";
-                setToast(
-                  /not enough/i.test(reason)
-                    ? "Not enough points"
+              }
+              const reason = msg.reason ?? "";
+              setToast(
+                /not enough/i.test(reason)
+                  ? "Not enough points"
+                  : /already pending/i.test(reason)
+                    ? "Bet still clearing — hang on"
                     : /window|closing/i.test(reason)
                       ? "Betting closed — stake refunded"
                       : "Too close to the action — bet refunded",
-                );
-              }
+              );
               break;
             }
           }

@@ -14,7 +14,7 @@ import { colors, spacing, type } from "@/theme";
 import { AnimatedNumber, Banner, Chip, Confetti, Screen, Text, Toast } from "@/ui";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useStore } from "@/state/store";
-import { bettingSafetyBufferMs } from "@/lib/config";
+import { bettingClosesAt, bettingSafetyBufferMs } from "@/lib/config";
 import { useTick } from "@/hooks";
 import { useGameFeed } from "@/features/match/useGameFeed";
 import { useChain } from "@/features/chain/useChain";
@@ -271,7 +271,7 @@ export default function MatchScreen() {
             const chainLocked = chainMode && (chainBets.placing || !!chainBet);
             const marketClosing =
               m.phase === "open" &&
-              now >= m.lockAt - bettingSafetyBufferMs(m.windowMs);
+              now >= bettingClosesAt(m.lockAt, m.windowMs);
             const cardPending =
               chainMode && chainBet
                 ? {

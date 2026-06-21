@@ -2,6 +2,7 @@ import React from "react";
 import { StyleSheet, View } from "react-native";
 import { colors, radius, spacing, type } from "@/theme";
 import { multiple, signedMoney } from "@/lib/format";
+import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
 import { Text } from "@/ui";
 import type { BetRow, HistoryItem, TransactionRow } from "@/state";
 import { relativeTime } from "./stats";
@@ -21,6 +22,7 @@ export function LedgerRow({ item }: { item: HistoryItem }) {
 }
 
 function BetLedgerRow({ row }: { row: BetRow }) {
+  const { signedFormat, zeroLabel } = useDisplayBalance();
   const isVoid = !row.won && row.delta === 0;
   const sideYes = row.side === "YES";
   const deltaColor = row.won
@@ -75,7 +77,7 @@ function BetLedgerRow({ row }: { row: BetRow }) {
         style={[styles.delta, { color: deltaColor }]}
         allowFontScaling={false}
       >
-        {isVoid ? "$0" : signedMoney(row.delta)}
+        {isVoid ? zeroLabel : signedFormat(row.delta)}
       </Text>
     </View>
   );

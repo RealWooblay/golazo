@@ -21,6 +21,9 @@ const errMsg = (e: unknown) => {
   if (/0x177[c-d]|InsufficientVaultFunds|601[23]/i.test(raw)) {
     return "Vault short on devnet — retry claim in a few seconds.";
   }
+  if (/0x1770|MarketNotOpen|\b6000\b/i.test(raw)) {
+    return "That market just closed — the next one's seconds away.";
+  }
   return raw || "On-chain action failed";
 };
 
@@ -179,6 +182,13 @@ export function useRoomChainBets(
         const om = await chain.fetchMarket(authority, marketSeed);
         if (!om) {
           setError("On-chain market not found — tap bet again in a moment.");
+          return false;
+        }
+        // Just-in-time guard: if the on-chain twin already locked (we lost the latency
+        // race despite the operator's lock grace), don't submit a place_bet that will
+        // revert MarketNotOpen — surface a clean message instead of a raw 0x1770.
+        if (om.status !== "Open") {
+          setError("That market just closed — the next one's seconds away.");
           return false;
         }
 
