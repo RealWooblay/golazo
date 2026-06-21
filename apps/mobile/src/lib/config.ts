@@ -22,10 +22,13 @@ export const USER_ID = "me"; // single local user; the engine keys bets by userI
 /** Mirror server: stop accepting bets this many ms before lockAt (base cap). */
 export const BET_SAFETY_BUFFER_MS = 2000;
 
-/** Anti-latency hold before on-chain bets land (matches server BET_DELAY_MS). */
+// Anti-latency hold before on-chain bets land. Trimmed 5000→2500: the operator now
+// keeps the on-chain market Open for a lock-grace window past the off-chain close, so
+// the real anti-arb cutoff is server-side — a shorter client hold means the place_bet
+// tx lands well inside the on-chain Open window (no more MarketNotOpen latency race).
 export const BET_DELAY_MS = Number(
   (typeof process !== "undefined" && process.env?.EXPO_PUBLIC_BET_DELAY_MS) ||
-    5000,
+    2500,
 );
 
 export function bettingSafetyBufferMs(windowMs: number): number {

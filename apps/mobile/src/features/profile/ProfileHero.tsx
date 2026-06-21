@@ -1,7 +1,7 @@
 import React from "react";
 import { StyleSheet, View } from "react-native";
 import { colors, radius, spacing, type } from "@/theme";
-import { money, signedMoney } from "@/lib/format";
+import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
 import { Text } from "@/ui";
 import {
   CountUp,
@@ -20,19 +20,22 @@ import { streakLabel, winRatePct, type LifetimeStats } from "./stats";
 export function ProfileHero({
   name,
   balance,
-  balanceFormat = money,
+  balanceFormat,
   stats,
   onEditName,
 }: {
   name: string;
   balance: number;
-  /** Formatter for the balance — SOL in chain mode, $ in sandbox. */
+  /** Formatter for the balance — pts in paper mode, $ or SOL-backed $ otherwise. */
   balanceFormat?: (n: number) => string;
   stats: LifetimeStats;
   onEditName: () => void;
 }) {
+  const currency = useDisplayBalance();
   const display = name?.trim() || "Player";
   const netPositive = stats.net >= 0;
+  const formatAmount = balanceFormat ?? currency.format;
+  const formatSigned = currency.signedFormat;
 
   return (
     <Entrance>
@@ -61,7 +64,7 @@ export function ProfileHero({
               </Text>
               <CountUp
                 value={balance}
-                format={balanceFormat}
+                format={formatAmount}
                 style={styles.balance}
               />
             </View>
@@ -71,19 +74,19 @@ export function ProfileHero({
         <View style={styles.grid}>
           <StatTile
             label="Net P/L"
-            value={signedMoney(stats.net)}
+            value={formatSigned(stats.net)}
             tone={netPositive ? "yes" : "no"}
             big
           />
           <StatTile label="Win rate" value={winRatePct(stats)} tone="cyan" />
           <StatTile
             label="Wagered"
-            value={money(stats.wagered)}
+            value={formatAmount(stats.wagered)}
             tone="neutral"
           />
           <StatTile
             label="Biggest win"
-            value={stats.biggestWin > 0 ? signedMoney(stats.biggestWin) : "—"}
+            value={stats.biggestWin > 0 ? formatSigned(stats.biggestWin) : "—"}
             tone="gold"
           />
           <StatTile

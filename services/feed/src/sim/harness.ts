@@ -58,12 +58,14 @@ export function simConfig(overrides: Partial<Config> = {}): Config {
     botCount: 8,
     resolveTimeoutMs: 30_000,
     betDelayMs: 2_000,
+    pointsBetDelayMs: 2_000,
     betSafetyBufferMs: 1_000,
     chainEnabled: false,
     operatorKeypair: undefined,
     solanaRpcUrl: 'http://localhost:8899',
     golazoProgramId: 'sim',
     chainSeedLamports: 0,
+    chainLockGraceMs: 10_000,
     ...overrides,
   };
 }

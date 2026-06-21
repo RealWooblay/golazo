@@ -178,13 +178,19 @@ function MomentumBar({
   // 0 = all home (left), 1 = all away (right), 0.5 = even. Prefer the continuous
   // lean; clamp into [0.12, 0.88] so even a total siege still shows a sliver of the
   // other side. Fall back to the binary leader's 3 fixed stops when there's no read.
+  // leanInput is the AWAY share (0 = home pressing, 1 = away pressing). But the bar
+  // fills home-colour on the LEFT proportional to lean.value (and the marker sits at
+  // the home/away seam), so lean.value must be the HOME share — invert it. Without
+  // this the colours were MIRRORED: the conceding side's colour filled the bar
+  // (the "Tunisia high when Japan's all over them" bug). WaitingCard already maps the
+  // raw away-share correctly, so only this component needed the flip.
   const continuous =
     typeof leanInput === "number"
-      ? Math.min(0.88, Math.max(0.12, leanInput))
+      ? Math.min(0.88, Math.max(0.12, 1 - leanInput))
       : undefined;
   const target =
     continuous ??
-    (momentum === "home" ? 0.18 : momentum === "away" ? 0.82 : 0.5);
+    (momentum === "home" ? 0.82 : momentum === "away" ? 0.18 : 0.5);
   // "Active" = the bar is meaningfully off-centre (someone's on top). Drives the
   // breathing glow whether we're on the continuous or the binary path.
   const active =

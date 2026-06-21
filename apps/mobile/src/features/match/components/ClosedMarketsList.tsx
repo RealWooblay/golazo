@@ -2,7 +2,7 @@ import React from "react";
 import { StyleSheet, View } from "react-native";
 import { colors, radius, spacing, type } from "@/theme";
 import { Text } from "@/ui";
-import { money } from "@/lib/format";
+import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
 import type { ClosedMarketVM } from "@/state/types";
 
 /**
@@ -17,6 +17,7 @@ export function ClosedMarketsList({
   /** Fresh session load — label as catch-up history. */
   catchingUp?: boolean;
 }) {
+  const { format } = useDisplayBalance();
   if (markets.length === 0) return null;
 
   return (
@@ -43,7 +44,7 @@ export function ClosedMarketsList({
                 <View style={[styles.badge, { backgroundColor: tint }]}>
                   <Text style={styles.badgeText}>{label}</Text>
                 </View>
-                <Text style={styles.pool}>{money(m.poolTotal)}</Text>
+                <Text style={styles.pool}>{format(m.poolTotal)}</Text>
               </View>
             </View>
           );

@@ -90,6 +90,12 @@ const MOMENTUM_BET_WINDOW_MS = 10_000;
  * spell printing the same line back-to-back.
  */
 const MOMENTUM_OPEN_COOLDOWN_MS = 12_000;
+/**
+ * After a team SCORES, suppress its momentum "to SCORE in N min?" market for this long.
+ * A score market that pops right after a goal reads as an instant open+shut (and the
+ * late-goal rescue could even settle it YES off the goal that just happened).
+ */
+const SCORE_COOLOFF_MS = 25_000;
 /** Per-market bookkeeping the orchestrator keeps alongside the engine's Market. */
 interface TrackedMarket {
   marketId: string;
@@ -99,6 +105,14 @@ interface TrackedMarket {
   team: Team | undefined;
   bots: BotSwarm;
   lockTimer: ReturnType<typeof setTimeout>;
+  /**
+   * Deferred ON-CHAIN lock timer. The engine + UI lock at `windowMs` (via lockTimer),
+   * but the chain twin's lock is held back CHAIN_LOCK_GRACE_MS so an in-flight
+   * real-money place_bet can still land before the chain market flips to Locked.
+   */
+  chainLockTimer?: ReturnType<typeof setTimeout>;
+  /** True once the on-chain lock has actually been fired (deferred timer or flush). */
+  chainLocked?: boolean;
   /** Per-type window (ms) after lock — the deadline the per-tick sweep settles on. */
   resolveWindowMs: number;
   /** User bets being HELD for the bet-delay, keyed by userId (one in flight per user). */
@@ -192,6 +206,8 @@ export class Orchestrator {
   private readonly momentum = new MomentumTracker();
   /** Wall-clock of the last momentum-opened market per team (cooldown). */
   private readonly lastMomentumOpenAt = new Map<Team, number>();
+  /** Wall-clock of each team's last goal — gates the post-goal score-market cool-off. */
+  private readonly lastGoalAt = new Map<Team, number>();
   /** Rotates momentum-market phrasing so a long spell doesn't repeat one line. */
   private momentumCounter = 0;
   /**
@@ -206,6 +222,11 @@ export class Orchestrator {
   constructor(
     private readonly config: Config,
     private feed: FeedSource,
+    // The on-chain operator reads its own config from process.env (CHAIN_ENABLED,
+    // OPERATOR_KEYPAIR, SOLANA_RPC_URL, GOLAZO_PROGRAM_ID). Inactive → every call
+    // is a no-op returning null, so the hot path never depends on Solana. Injectable
+    // so tests can assert the chain-lock timing without a live validator.
+    chain: FeedChainOperator = createChainOperator(),
   ) {
     this.engine = new MarketEngine({
       rake: config.rake,
@@ -213,10 +234,7 @@ export class Orchestrator {
       now: () => Date.now(),
     });
 
-    // The on-chain operator reads its own config from process.env (CHAIN_ENABLED,
-    // OPERATOR_KEYPAIR, SOLANA_RPC_URL, GOLAZO_PROGRAM_ID). Inactive → every call
-    // is a no-op returning null, so the hot path never depends on Solana.
-    this.chain = createChainOperator();
+    this.chain = chain;
     this.chainAuthority = this.chain.operatorPubkey?.toBase58() ?? null;
     this.bootSalt = Math.floor(Date.now() / 1000) % 100000;
 
@@ -314,6 +332,7 @@ export class Orchestrator {
     for (const t of this.tracked.values()) {
       t.bots.cancel();
       clearTimeout(t.lockTimer);
+      if (t.chainLockTimer) clearTimeout(t.chainLockTimer);
     }
     this.tracked.clear();
     await this.feed.close();
@@ -576,6 +595,16 @@ export class Orchestrator {
     const openClockMin = oc.base + oc.stopp / 100;
 
     const spec = momentumMarketSpec(name, read.intensity, this.momentumCounter++);
+    // POST-GOAL COOL-OFF: don't open a "to SCORE in N min?" right after this team
+    // scored — it reads as an instant open+shut off the goal that just happened (and
+    // the late-goal rescue could otherwise settle it YES off that same goal). A shot
+    // market can still open; only the score market is held back briefly.
+    if (
+      spec.kind === 'score_in_window' &&
+      Date.now() - (this.lastGoalAt.get(team) ?? 0) < SCORE_COOLOFF_MS
+    ) {
+      return;
+    }
     const trigger: MarketTrigger = {
       gameId: game.gameId,
       question: spec.question,
@@ -747,8 +776,11 @@ export class Orchestrator {
     const m = this.engine.get(marketId);
     if (m && m.status === 'open') this.engine.lock(marketId);
 
-    // Mirror the lock on-chain (best-effort, fire-and-forget — never blocks).
-    if (t.marketSeed !== undefined) void this.chain.lockMarket(t.marketSeed);
+    // Mirror the lock on-chain — but DEFER it by CHAIN_LOCK_GRACE_MS. The engine + UI
+    // just locked (anti-snipe unchanged); the chain twin stays Open long enough for an
+    // in-flight real-money place_bet (client BET_DELAY_MS hold + devnet confirm) to
+    // land before the chain market flips to Locked. Best-effort, fire-and-forget.
+    this.scheduleChainLock(t);
 
     // An outcome that landed DURING the betting window was held — apply it now that
     // betting has closed. This is the guaranteed-window settlement: a real bet window
@@ -760,6 +792,41 @@ export class Orchestrator {
         voidCause: decision.voidCause,
         voidReason: decision.voidReason,
       });
+    }
+  }
+
+  /**
+   * Schedule the deferred ON-CHAIN lock: fire `chain.lockMarket` CHAIN_LOCK_GRACE_MS
+   * after the off-chain engine lock, so a real-money place_bet still in flight (held
+   * client-side for BET_DELAY_MS, then a devnet confirm round-trip) can land before
+   * the chain market flips to Locked. No-op when the market has no on-chain twin or
+   * the lock has already fired. Idempotent.
+   */
+  private scheduleChainLock(t: TrackedMarket): void {
+    if (t.marketSeed === undefined || t.chainLocked || t.chainLockTimer) return;
+    const seed = t.marketSeed;
+    t.chainLockTimer = setTimeout(() => {
+      t.chainLockTimer = undefined;
+      if (t.chainLocked) return;
+      t.chainLocked = true;
+      void this.chain.lockMarket(seed);
+    }, this.config.chainLockGraceMs);
+  }
+
+  /**
+   * Land the deferred on-chain lock NOW (cancelling its grace timer), before the
+   * market is settled on-chain. resolve_market accepts Open|Locked, but the operator
+   * must never resolve while a bet could still land — so we always lock first. No-op
+   * when there is no on-chain twin or the lock already fired. Idempotent.
+   */
+  private flushChainLock(t: TrackedMarket): void {
+    if (t.chainLockTimer) {
+      clearTimeout(t.chainLockTimer);
+      t.chainLockTimer = undefined;
+    }
+    if (t.marketSeed !== undefined && !t.chainLocked) {
+      t.chainLocked = true;
+      void this.chain.lockMarket(t.marketSeed);
     }
   }
 
@@ -842,6 +909,7 @@ export class Orchestrator {
     }
 
     if (ev.type === 'goal' && ev.team) {
+      this.lastGoalAt.set(ev.team, Date.now());
       this.feed.applyGoal(ev.team);
       this.server.broadcast({ t: 'game', game: this.feed.state() });
     }
@@ -950,6 +1018,9 @@ export class Orchestrator {
         : { outcome },
       target.marketId,
     );
+    // Land the deferred chain-lock before settling: the operator must never resolve a
+    // chain market that's still Open to new bets. Fires the lock, then settleMarket.
+    this.flushChainLock(target);
     this.cleanupTracked(target.marketId);
     if (seed !== undefined) void this.chain.settleMarket(seed, outcome);
 
@@ -1055,6 +1126,12 @@ export class Orchestrator {
     if (!t) return;
     t.bots.cancel();
     clearTimeout(t.lockTimer);
+    // Cancel any still-pending deferred chain-lock. finalizeMarket already flushed it
+    // (fired) before settling; on a VOID/match-switch we simply drop it (refund anyway).
+    if (t.chainLockTimer) {
+      clearTimeout(t.chainLockTimer);
+      t.chainLockTimer = undefined;
+    }
     // Any bet still HELD when the market goes away (resolved/voided) is a snipe
     // candidate — the result landed inside its delay. Void + refund it.
     for (const held of t.pending.values()) {
@@ -1062,8 +1139,23 @@ export class Orchestrator {
       this.rejectHeldBet(marketId, held, 'play resolved before your bet cleared');
     }
     t.pending.clear();
+    this.cleanupPointsHeld(marketId, 'play resolved before your bet cleared');
     this.tracked.delete(marketId);
     if (!t.isPeriod && this.extraTimeEntered) this.periodMarketPending = true;
+  }
+
+  /** Refund paper stakes still in the anti-snipe hold when a market ends. */
+  private cleanupPointsHeld(marketId: string, reason: string): void {
+    const pending = this.pointsHeld.get(marketId);
+    if (!pending) return;
+    for (const held of pending.values()) {
+      clearTimeout(held.timer);
+      this.server.emitPoints(
+        this.server.pointsManager.releaseHeldBet(held.userId, marketId, reason),
+      );
+    }
+    pending.clear();
+    this.pointsHeld.delete(marketId);
   }
 
   // -------------------------------------------------------------------------
@@ -1109,19 +1201,14 @@ export class Orchestrator {
       // cross-mode points score by their net result — both feed one leaderboard.
       this.server.emitPoints(this.server.pointsManager.onMarketResolve(m));
       this.server.emitPoints(this.server.pointsManager.awardRealBet(m));
-      this.pointsHeld.delete(m.id);
       // Mirror the settled outcome into every room (credits room points in lockstep).
       rooms.onGlobalMarketResolve(m);
     });
   }
 
   /**
-   * A user tapped BET. We do NOT place it immediately — we HOLD it for the
-   * bet-delay. When the delay elapses we place it (if the market's still open);
-   * if the play resolved during the hold
-   * (or the market closed), we reject + refund it. This is the anti-latency-
-   * arbitrage defense: betting "after seeing the goal on a faster feed" gets
-   * caught because the result lands inside the hold window.
+   * Real-money bet. With betDelayMs > 0, held briefly as an optional anti-snipe
+   * gate; default 0 places immediately.
    */
   private handleUserBet(msg: Extract<ClientMessage, { t: 'bet' }>): void {
     const t = this.tracked.get(msg.marketId);
@@ -1137,6 +1224,15 @@ export class Orchestrator {
     }
     if (t.pending.has(msg.userId)) return; // one held bet per user at a time
 
+    if (this.config.betDelayMs <= 0) {
+      try {
+        this.engine.placeBet(msg.marketId, msg.userId, msg.side, msg.stake);
+      } catch {
+        this.rejectHeldBet(msg.marketId, { ...msg }, 'market not open');
+      }
+      return;
+    }
+
     const held: HeldBet = {
       userId: msg.userId,
       side: msg.side,
@@ -1146,15 +1242,14 @@ export class Orchestrator {
     t.pending.set(msg.userId, held);
   }
 
-  /** Bet-delay elapsed: place the held bet IF the market is still open, else reject. */
+  /** Bet-delay elapsed: place the held bet once the hold clears (lock is OK). */
   private acceptHeldBet(marketId: string, userId: string): void {
     const t = this.tracked.get(marketId);
     const held = t?.pending.get(userId);
     if (!t || !held) return;
     t.pending.delete(userId);
     const m = this.engine.get(marketId);
-    const now = Date.now();
-    if (m && m.status === 'open' && now < bettingClosesAt(m.lockAt, m.windowMs)) {
+    if (m && m.status !== 'resolved' && m.status !== 'void') {
       try {
         this.engine.placeBet(marketId, userId, held.side, held.stake);
         return;
@@ -1165,9 +1260,7 @@ export class Orchestrator {
     this.rejectHeldBet(
       marketId,
       held,
-      m && now >= bettingClosesAt(m.lockAt, m.windowMs)
-        ? 'betting window closed'
-        : 'play resolved before your bet cleared',
+      'play resolved before your bet cleared',
     );
   }
 
@@ -1204,7 +1297,17 @@ export class Orchestrator {
       pending = new Map();
       this.pointsHeld.set(msg.marketId, pending);
     }
-    if (pending.has(msg.userId)) return;
+    if (pending.has(msg.userId)) {
+      this.server.emitPoints({
+        rejected: {
+          userId: msg.userId,
+          marketId: msg.marketId,
+          stake: msg.stake,
+          reason: 'bet already pending',
+        },
+      });
+      return;
+    }
 
     const holdFx = this.server.pointsManager.holdBet(
       msg.userId,
@@ -1224,7 +1327,7 @@ export class Orchestrator {
       stake: msg.stake,
       timer: setTimeout(
         () => this.acceptPointsHeldBet(msg.marketId, msg.userId),
-        this.config.betDelayMs,
+        this.config.pointsBetDelayMs,
       ),
     };
     pending.set(msg.userId, held);
@@ -1236,8 +1339,7 @@ export class Orchestrator {
     if (!pending || !held) return;
     pending.delete(userId);
     const m = this.engine.get(marketId);
-    const now = Date.now();
-    if (m && m.status === 'open' && now < bettingClosesAt(m.lockAt, m.windowMs)) {
+    if (m && m.status !== 'resolved' && m.status !== 'void') {
       const effects = this.server.pointsManager.confirmHeldBet(userId, marketId);
       if (effects.rejected) {
         this.server.emitPoints(effects);
@@ -1249,9 +1351,7 @@ export class Orchestrator {
     this.rejectPointsHeldBet(
       marketId,
       held,
-      m && now >= bettingClosesAt(m.lockAt, m.windowMs)
-        ? 'betting window closed'
-        : 'play resolved before your bet cleared',
+      'play resolved before your bet cleared',
     );
   }
 
@@ -1260,9 +1360,23 @@ export class Orchestrator {
     held: { userId: string; stake: number },
     reason: string,
   ): void {
-    this.server.emitPoints(
-      this.server.pointsManager.releaseHeldBet(held.userId, marketId, reason),
+    const effects = this.server.pointsManager.releaseHeldBet(
+      held.userId,
+      marketId,
+      reason,
     );
+    if (effects.rejected || effects.state) {
+      this.server.emitPoints(effects);
+      return;
+    }
+    this.server.emitPoints({
+      rejected: {
+        userId: held.userId,
+        marketId,
+        stake: held.stake,
+        reason,
+      },
+    });
   }
 
   /** Remember goal/miss clocks so a late corner/penalty dup doesn't open. */

@@ -2,7 +2,7 @@ import React from "react";
 import { ScrollView, StyleSheet, View } from "react-native";
 import { colors, radius, spacing, type } from "@/theme";
 import { Text } from "@/ui";
-import { signedMoney } from "@/lib/format";
+import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
 import type { BetRow } from "@/state/types";
 
 /**
@@ -12,6 +12,7 @@ import type { BetRow } from "@/state/types";
  * entirely until you've settled at least one bet.
  */
 export function ResultsRail({ bets }: { bets: BetRow[] }) {
+  const { signedFormat } = useDisplayBalance();
   if (bets.length === 0) return null;
   const recent = bets.slice(0, 12);
 
@@ -51,7 +52,7 @@ export function ResultsRail({ bets }: { bets: BetRow[] }) {
                     { color: voided ? colors.textMuted : tint },
                   ]}
                 >
-                  {voided ? "refund" : signedMoney(b.delta)}
+                  {voided ? "refund" : signedFormat(b.delta)}
                 </Text>
               </View>
             </View>

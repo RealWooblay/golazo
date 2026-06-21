@@ -83,12 +83,15 @@ export interface Config {
   resolveTimeoutMs: number;
 
   /**
-   * Bet-delay (anti-latency-arbitrage): a user's bet is HELD this long before it
-   * enters the pool. If the play resolves inside the window, the bet is voided +
-   * refunded — killing "bet after I saw the goal on a faster feed". Must exceed
-   * your feed's lag (free/delayed feed → seconds; a licensed fast feed → ~1s).
+   * Optional anti-latency hold (ms) before a real-money bet enters the pool.
+   * Default 0 — tap lands immediately. Set BET_DELAY_MS only if you run a
+   * materially slower feed than some bettors' TV/stream and want to void bets
+   * that arrive inside the hold when the play resolves first.
    */
   betDelayMs: number;
+
+  /** Paper-mode hold — same 5s anti-snipe as real bets unless POINTS_BET_DELAY_MS overrides. */
+  pointsBetDelayMs: number;
 
   /** Ms before lockAt when the server stops accepting new bets (ESPN lag cushion). */
   betSafetyBufferMs: number;
@@ -111,6 +114,20 @@ export interface Config {
 
   /** Optional operator seed per side. Default 0 for zero-capital pure parimutuel mode. */
   chainSeedLamports: number;
+
+  /**
+   * Grace (ms) the ON-CHAIN market lock is deferred PAST the off-chain engine lock.
+   *
+   * WHY: the off-chain engine + UI lock at `windowMs` (anti-snipe, unchanged), but a
+   * real-money on-chain `place_bet` only lands after the client-side hold (BET_DELAY_MS,
+   * ~5s) PLUS a devnet `confirmed` round-trip (up to ~4s with retries). If the operator
+   * flipped the chain market to Locked at `windowMs` like the engine, that in-flight bet
+   * would arrive after lock and fail with `MarketNotOpen` (0x1770). So we keep the chain
+   * twin Open for this grace after the engine locks — long enough for the held tx to
+   * confirm — while the client-side hold + `bettingClosesAt` remain the real anti-latency
+   * defense. Must be >= BET_DELAY_MS + devnet confirm headroom. Default 10s.
+   */
+  chainLockGraceMs: number;
 }
 
 /** Parse a number from env with a fallback; ignores blank/garbage values. */
@@ -170,12 +187,17 @@ export const config: Config = {
   botCount: num('BOT_COUNT', 24),
   resolveTimeoutMs: num('RESOLVE_TIMEOUT_MS', 12000),
   betDelayMs: num('BET_DELAY_MS', 5000),
+  /** Paper bets use the same anti-snipe hold as real money unless overridden. */
+  pointsBetDelayMs: num('POINTS_BET_DELAY_MS', 5000),
   betSafetyBufferMs: num('BET_SAFETY_BUFFER_MS', 2000),
   chainEnabled: bool('CHAIN_ENABLED'),
   operatorKeypair: process.env.OPERATOR_KEYPAIR?.trim() || undefined,
   solanaRpcUrl: string('SOLANA_RPC_URL', 'http://127.0.0.1:8899'),
   golazoProgramId: string('GOLAZO_PROGRAM_ID', 'GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu'),
   chainSeedLamports: num('CHAIN_SEED_LAMPORTS', 0),
+  // >= BET_DELAY_MS (5s client hold) + ~4s devnet confirm headroom so an in-flight
+  // real-money place_bet lands before the on-chain market flips to Locked.
+  chainLockGraceMs: num('CHAIN_LOCK_GRACE_MS', 10_000),
 };
 
 /** One-line, secret-free summary for the boot log. */

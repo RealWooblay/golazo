@@ -240,12 +240,12 @@ export class PointsManager {
     const key = this.holdKey(marketId, userId);
     const held = this.heldStakes.get(key);
     const pm = this.markets.get(marketId);
-    if (!held || !pm || pm.status !== 'open') {
-      return held ? this.releaseHeldBet(userId, marketId, 'market not open') : {};
+    if (!held) return {};
+    if (!pm || pm.status === 'resolved' || pm.status === 'void') {
+      return this.releaseHeldBet(userId, marketId, 'play resolved before your bet cleared');
     }
-    if (Date.now() >= bettingClosesAt(pm.lockAt, pm.windowMs)) {
-      return this.releaseHeldBet(userId, marketId, 'betting window closing');
-    }
+    // Stake was reserved while betting was open — locking closes new bets, not
+    // holds that already cleared the anti-snipe window.
 
     this.heldStakes.delete(key);
     pm.bets.push({ userId: held.userId, side: held.side, stake: held.stake });

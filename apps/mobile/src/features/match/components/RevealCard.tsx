@@ -15,7 +15,8 @@ import Svg, { Defs, Line, Pattern, Rect } from "react-native-svg";
 import { colors, radius, spacing, spring, type } from "@/theme";
 import { AnimatedNumber, Pressable, Surface, Text } from "@/ui";
 import { haptics } from "@/ui/haptics";
-import { money, multiple, signedMoney } from "@/lib/format";
+import { multiple } from "@/lib/format";
+import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
 import type { RevealVM } from "@/state/types";
 import { GlowWash } from "./GlowWash";
 
@@ -41,6 +42,7 @@ export function RevealCard({
   onAcknowledge: () => void;
   hapticsEnabled?: boolean;
 }) {
+  const { format, signedFormat } = useDisplayBalance();
   const [opened, setOpened] = useState(false);
   const flip = useSharedValue(0); // 0 = cover up, 1 = flipped away
   const shake = useSharedValue(0);
@@ -124,20 +126,20 @@ export function RevealCard({
           <View style={styles.payRow}>
             <AnimatedNumber
               value={reveal.payout}
-              format={(n) => signedMoney(n)}
+              format={(n) => signedFormat(n)}
               style={[styles.payBig, { color: colors.gold }]}
             />
             <Text style={styles.payMeta}>
-              {multiple(reveal.payoutMult)} final on {money(reveal.stake)}
+              {multiple(reveal.payoutMult)} final on {format(reveal.stake)}
             </Text>
           </View>
         ) : isVoid ? (
           <Text style={styles.payMeta}>
-            Unfair timing — {money(reveal.stake)} refunded in full.
+            Unfair timing — {format(reveal.stake)} refunded in full.
           </Text>
         ) : (
           <Text style={styles.payMeta}>
-            {signedMoney(-reveal.stake)} · {reveal.side} didn't land
+            {signedFormat(-reveal.stake)} · {reveal.side} didn't land
           </Text>
         )}
       </Animated.View>
