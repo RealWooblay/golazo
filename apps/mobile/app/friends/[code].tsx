@@ -52,6 +52,7 @@ import {
   RevealCard,
   WaitingCard,
 } from "@/features/match/components";
+import { StakeBar } from "@/features/match/components/StakeBar";
 import type { MarketVM, RevealVM } from "@/state/types";
 import {
   useFriendsRoomContext,
@@ -193,6 +194,7 @@ export default function FriendsRoomScreen() {
 
   // Tick the market countdowns while focused and something is open.
   const [focused, setFocused] = useState(true);
+  const [customStake, setCustomStake] = useState(0);
   useFocusEffect(
     React.useCallback(() => {
       setFocused(true);
@@ -400,6 +402,20 @@ export default function FriendsRoomScreen() {
           </View>
         ) : null}
 
+        {!fulltime && !waiting && chainMode && activeMarkets.length > 0 ? (
+          <View style={styles.gutter}>
+            <StakeBar
+              stake={store.stake}
+              onPick={store.setStake}
+              customStake={customStake}
+              onCustom={setCustomStake}
+              balance={bal.balanceInUnits}
+              format={stakeFormat}
+              hapticsEnabled={hapticsOn}
+            />
+          </View>
+        ) : null}
+
         {!fulltime && !waiting
           ? activeMarkets.map((m) => {
               const myBet = myBetByMarket[m.id];
@@ -459,12 +475,10 @@ export default function FriendsRoomScreen() {
                     market={displayMarket}
                     now={now}
                     stake={store.stake}
-                    onStakeChange={store.setStake}
                     pending={pending}
                     balance={bal.balanceInUnits}
                     formatStake={stakeFormat}
                     onBet={(side) => void onBet(m, side)}
-                    hapticsEnabled={hapticsOn}
                     betDisabled={
                       !chainMode ||
                       chainPreparing ||

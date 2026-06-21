@@ -69,9 +69,9 @@ describe('scaledResolveWindowMs', () => {
 });
 
 describe('resolveDeadlineMs — soccer-realistic locked countdowns', () => {
-  it('gives pressing spells ~2 minutes, set-pieces ~90s, shots ~60s', () => {
+  it('gives pressing spells ~2 minutes, set-pieces ~60s, shots ~30s', () => {
     expect(resolveDeadlineMs('goal_from_open_play')).toBe(120_000);
-    expect(resolveDeadlineMs('goal_from_corner')).toBe(90_000);
+    expect(resolveDeadlineMs('goal_from_corner')).toBe(60_000);
     // A single move is short — the "shot this move?" market resolves fast so the
     // lone market slot frees for the next moment (often a set-piece).
     expect(resolveDeadlineMs('chance_from_play')).toBe(30_000);

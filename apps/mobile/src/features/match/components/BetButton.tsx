@@ -18,7 +18,7 @@ import { multiple } from "@/lib/format";
 export function BetButton({
   side,
   odds,
-  sublabel,
+  label,
   onPress,
   disabled,
   /** Dim everything except the side the user just picked. */
@@ -26,7 +26,9 @@ export function BetButton({
 }: {
   side: "YES" | "NO";
   odds: number;
-  sublabel: string;
+  /** The honest verdict word — "Shot" / "No shot" / "Scores" / "Goal" — derived from
+   *  the market kind. Falls back to the raw side. */
+  label?: string;
   onPress: () => void;
   disabled?: boolean;
   picked?: "YES" | "NO" | null;
@@ -83,8 +85,9 @@ export function BetButton({
       <Text
         style={[styles.word, styles.content, { color: fg }]}
         allowFontScaling={false}
+        numberOfLines={1}
       >
-        {side}
+        {label ?? side}
       </Text>
       <View style={[styles.oddsRow, styles.content]}>
         <AnimatedNumber
@@ -92,9 +95,6 @@ export function BetButton({
           format={multiple}
           style={[styles.odds, { color: fg }]}
         />
-        <Text style={[styles.sub, { color: fg }]} numberOfLines={1}>
-          {sublabel}
-        </Text>
       </View>
     </Pressable>
   );

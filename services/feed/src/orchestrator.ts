@@ -742,6 +742,12 @@ export class Orchestrator {
       this.resolveOpenPeriodMarkets('NO');
       return;
     }
+    if (game.status === 'halftime') {
+      // Half-time usually arrives as a STATUS transition, not a keyEvent — settle the
+      // "goal before half-time?" period market NO here so it can't hang to full time.
+      this.resolveOpenPeriodMarkets('NO');
+      return;
+    }
     if (this.breakPaused) return; // don't open period markets mid-break
 
     const pk = periodMarketKeyForGame(game);
@@ -1052,7 +1058,11 @@ export class Orchestrator {
       return ev.type === 'red_card' ? { outcome: 'YES' } : undefined;
     }
 
-    if ((ev.type === 'miss' || ev.type === 'play_end') && isGoalQuestionKind(m.kind)) {
+    // A genuine end-of-play (the set piece was CLEARED) settles a goal-question NO
+    // fast. A 'miss' (saved/blocked) does NOT — it can REBOUND into a goal that ESPN
+    // reports a poll later, so letting a miss settle NO here pre-empts a real YES.
+    // Misses now settle only via the deadline sweep + late-goal rescue.
+    if (ev.type === 'play_end' && isGoalQuestionKind(m.kind)) {
       return { outcome: 'NO' };
     }
 

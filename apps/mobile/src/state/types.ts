@@ -31,6 +31,9 @@ export interface MarketVM {
   question: string; // "Argentina on the attack — GOAL?"
   subtitle: string; // the raw commentary line that opened it
   slot?: MarketSlot;
+  /** Engine market kind (shot_in_window, goal_from_corner, player_to_score…) —
+   *  drives the lane tag + the honest YES/NO labels on the card. */
+  kind?: string;
   team: "home" | "away" | undefined;
   phase: MarketPhase;
   /** Live implied multiples from the pool (move as money comes in). */

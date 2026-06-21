@@ -223,6 +223,7 @@ export function useGameFeed(): GameFeedApi {
       question: m.question,
       subtitle: "",
       slot: m.slot,
+      kind: m.kind,
       team: m.team,
       phase:
         m.status === "open"

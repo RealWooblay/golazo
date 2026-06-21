@@ -116,7 +116,10 @@ export function goalAlreadyHappenedForChance(
 ): boolean {
   if (!marketTeam || openClockMin === undefined) return false;
   const last = lastResolverByTeam.get(marketTeam);
-  return last !== undefined && last >= openClockMin - 0.5;
+  // Strictly at/after the open — the old 0.5-min look-back let a goal that happened
+  // BEFORE the market opened rescue it to a false YES (the clock barely advances on
+  // the ~2-min feed). A goal at the open clock still rescues; a pre-open one doesn't.
+  return last !== undefined && last >= openClockMin;
 }
 
 /** Stretch the post-lock resolve window in tense late-game moments. */
@@ -151,9 +154,9 @@ export function resolveDeadlineMs(kind: string): number {
     case 'penalty_scored':
       return 50_000; // run-up + kick + ESPN lag
     case 'goal_from_corner':
-      return 90_000; // organize, deliver, scramble, recycle
+      return 60_000; // 1 min: deliver + scramble; a goal off it is reported well inside this
     case 'goal_from_free_kick':
-      return 90_000; // wall, routine or direct shot
+      return 60_000; // 1 min: wall, routine or direct shot
     case 'goal_from_open_play':
       return 120_000; // sustained press — up to ~2 match minutes
     case 'chance_from_play':
