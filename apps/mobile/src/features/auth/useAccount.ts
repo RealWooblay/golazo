@@ -11,6 +11,7 @@ export function useAccount() {
     enabled: false,
     ready: true,
     authenticated: false,
+    id: null as string | null,
     handle: null as string | null,
     solanaAddress: null as string | null,
     login: () => {},

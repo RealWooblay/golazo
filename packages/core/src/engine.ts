@@ -1,4 +1,4 @@
-import type { MarketTrigger, OnChainRef, Outcome, Side } from './types';
+import type { MarketSlot, MarketTrigger, OnChainRef, Outcome, Side } from './types';
 import {
   type Bet,
   type Pool,
@@ -26,6 +26,7 @@ export interface Market {
   gameId: string;
   question: string;
   kind: string;
+  slot: MarketSlot;
   team?: 'home' | 'away';
   /** model YES prob — drives sim/bot behavior; not shown to users. */
   trueProb: number;
@@ -107,6 +108,7 @@ export class MarketEngine {
       gameId: t.gameId,
       question: t.question,
       kind: t.kind,
+      slot: t.slot ?? 'moment',
       team: t.team,
       trueProb: t.trueProb,
       status: 'open',

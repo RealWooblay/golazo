@@ -10,6 +10,7 @@ export type Side = 'YES' | 'NO';
 export type Outcome = 'YES' | 'NO' | 'VOID';
 export type Team = 'home' | 'away';
 export type Sport = 'soccer' | 'nfl';
+export type MarketSlot = 'moment' | 'window' | 'period';
 
 /** A team, normalized across feeds. */
 export interface TeamRef {
@@ -86,6 +87,8 @@ export interface MarketTrigger {
   gameId: string;
   question: string; // "Argentina on the attack — GOAL?"
   kind: string; // 'chance_from_play' | 'goal_from_free_kick' | 'penalty_scored' | ...
+  /** UI/concurrency lane. At most one unsettled market per slot. */
+  slot?: MarketSlot;
   team?: Team;
   windowMs: number; // betting window length
   /**

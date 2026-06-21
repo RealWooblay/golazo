@@ -32,6 +32,7 @@ import {
   type ClientMessage,
   type FeedEvent,
   type GameState,
+  type MarketSlot,
   type Market,
   type MarketTrigger,
   type Outcome,
@@ -52,12 +53,12 @@ import {
   KEY_EVENT_ONLY_OPENERS,
   bettingClosesAt,
   isGoalMomentKind,
+  marketSlot,
   MOMENTUM_OPEN_THRESHOLD,
   openerPriority,
   knobFor,
-  MAX_CONCURRENT_MARKETS,
   PERIOD_MARKET,
-  periodMarketKey,
+  periodMarketKeyForGame,
   resolveDeadlineMs,
 } from './ai/marketTuning';
 import {
@@ -89,12 +90,6 @@ const MOMENTUM_BET_WINDOW_MS = 10_000;
  * spell printing the same line back-to-back.
  */
 const MOMENTUM_OPEN_COOLDOWN_MS = 25_000;
-/**
- * A locked moment market blocks new opens until its resolveAt (the deadline sweep
- * settles it). Past that, the sweep has settled it, so it no longer blocks.
- */
-const LOCKED_BLOCK_MS = 75_000;
-
 /** Per-market bookkeeping the orchestrator keeps alongside the engine's Market. */
 interface TrackedMarket {
   marketId: string;
@@ -115,6 +110,8 @@ interface TrackedMarket {
   marketSeed?: number;
   /** Long-lived period market (e.g. extra-time comeback) — different resolve rules. */
   isPeriod?: boolean;
+  /** Concurrency/UI lane for this market. */
+  slot: MarketSlot;
   /** Match-clock (fractional min) when the chance opened — for the late-goal rescue. */
   openClockMin?: number;
   /** Feed event type that opened this market (free_kick, corner, …). */
@@ -127,6 +124,12 @@ interface HeldBet {
   side: 'YES' | 'NO';
   stake: number;
   timer: ReturnType<typeof setTimeout>;
+}
+
+interface OutcomeDecision {
+  outcome: Outcome;
+  voidCause?: string;
+  voidReason?: string;
 }
 
 export class Orchestrator {
@@ -157,6 +160,9 @@ export class Orchestrator {
   private seedCounter = 0;
   /** Belt-and-braces dedupe across commentary/keyEvent edge cases + feed restarts. */
   private readonly openedMoments = new Set<string>();
+  /** Resolver keys from the current poll batch; opener twins in same batch are skipped. */
+  private samePollResolverSeqs = new Set<string>();
+  private samePollResolverKeys = new Set<string>();
   /** Latest goal/miss clock per team — drives the deadline late-goal rescue. */
   private readonly lastResolverByTeam = new Map<Team, number>();
   /** True once we've seen the clock enter extra time this match. */
@@ -176,7 +182,7 @@ export class Orchestrator {
   /** Rotates momentum-market phrasing so a long spell doesn't repeat one line. */
   private momentumCounter = 0;
   /** Sim/test only: every momentum bar value broadcast this run (for assertions). */
-  private readonly momentumLog: Array<{ bar: Team | null }> = [];
+  private readonly momentumLog: Array<{ bar: Team | null; home: number; away: number }> = [];
 
   constructor(
     private readonly config: Config,
@@ -217,8 +223,8 @@ export class Orchestrator {
         audit: this.audit.recent(30),
         playPhase: this.playPhase,
       }),
-      getOpenGlobalMarket: () =>
-        this.engine.list().find((m) => m.status === 'open' || m.status === 'locked'),
+      getOpenGlobalMarkets: () =>
+        this.engine.list().filter((m) => m.status === 'open' || m.status === 'locked'),
       betDelayMs: this.config.betDelayMs,
     });
 
@@ -274,8 +280,13 @@ export class Orchestrator {
   }
 
   /** Sim/test hook: every momentum bar value broadcast this run (proves the bar fires + moves). */
-  simMomentum(): ReadonlyArray<{ bar: Team | null }> {
+  simMomentum(): ReadonlyArray<{ bar: Team | null; home: number; away: number }> {
     return this.momentumLog;
+  }
+
+  /** Sim/test hook: the audit trail (so the sim can prove every VOID is a match-switch). */
+  simAudit(): ReturnType<AuditLog['recent']> {
+    return this.audit.recent(500);
   }
 
   async stop(): Promise<void> {
@@ -313,12 +324,29 @@ export class Orchestrator {
     await this.checkPeriodMarkets(game);
 
     const ordered = sortFeedEvents(events);
+    this.samePollResolverSeqs = new Set(
+      ordered
+        .filter(isOutcomeEvent)
+        .map(seqIdOf)
+        .filter((seq): seq is string => !!seq),
+    );
+    this.samePollResolverKeys = new Set(
+      ordered
+        .filter(isOutcomeEvent)
+        .map(resolverBatchKey)
+        .filter((key): key is string => !!key),
+    );
 
     this.metrics.recordPoll(Date.now() - t0, ordered.length);
     this.audit.record('feed_poll', { events: ordered.length, ms: Date.now() - t0 });
 
-    for (const ev of ordered) {
-      await this.processEvent(ev);
+    try {
+      for (const ev of ordered) {
+        await this.processEvent(ev);
+      }
+    } finally {
+      this.samePollResolverSeqs.clear();
+      this.samePollResolverKeys.clear();
     }
 
     // THE ONE NO-WRITER: a single per-tick deadline sweep. Any locked market past
@@ -354,13 +382,26 @@ export class Orchestrator {
       outcomeFromEvent(ev) !== null ||
       this.isResolverEvent(ev) ||
       ev.type === 'shot' ||
-      ev.type === 'miss'
+      ev.type === 'miss' ||
+      ev.type === 'play_end'
     ) {
-      await this.resolveFromEvent(ev);
+      const resolvedSomething = await this.resolveFromEvent(ev);
+      // A PENALTY AWARDED that didn't resolve a pending VAR "penalty awarded?" review
+      // is itself a fresh bettable moment: "<Team> penalty — will it be SCORED?". The
+      // subsequent goal keyEvent settles it YES (parseGoalSource), a miss/save NO via
+      // the deadline sweep. Without this the penalty_scored market kind is unreachable.
+      if (ev.type === 'penalty' && !resolvedSomething) {
+        await this.maybeOpenMarket(ev);
+      }
       return;
     }
 
     if (ev.type === 'final') {
+      this.resolveOpenPeriodMarkets('NO');
+      return;
+    }
+
+    if (ev.type === 'halftime') {
       this.resolveOpenPeriodMarkets('NO');
       return;
     }
@@ -381,10 +422,6 @@ export class Orchestrator {
 
   /** Rules opener (set-pieces only now): if it yields a trigger, open the market. */
   private async maybeOpenMarket(ev: FeedEvent): Promise<void> {
-    // One market on the table at a time — except a LOCKED period market (ET comeback)
-    // doesn't block new moment markets; only an open betting window does.
-    if (this.hasBlockingMarket(false, ev)) return;
-
     const game = this.feed.state();
 
     // After a feed restart ESPN replays the full backlog — never open a market
@@ -411,6 +448,11 @@ export class Orchestrator {
 
     const mk = momentKey(ev);
     if (mk && this.openedMoments.has(mk)) return;
+    if (this.isSamePollSuppressed(ev)) {
+      this.metrics.marketsSkipped++;
+      this.audit.record('market_skip', { reason: 'same_poll_outcome', type: ev.type });
+      return;
+    }
 
     const trigger = await aiTriggerFromEvents([...this.recent], game, {
       homeName: game.home.name,
@@ -421,6 +463,9 @@ export class Orchestrator {
     // Final safety: never open a team-bound market without a team (no "They …").
     if (!trigger.team && requiresTeam(trigger.kind)) return;
 
+    const slot = trigger.slot ?? marketSlot(trigger.kind);
+    if (this.hasBlockingMarket(slot)) return;
+
     if (mk) this.openedMoments.add(mk);
 
     this.audit.record('watcher_rules', { type: ev.type, text: ev.text.slice(0, 80) });
@@ -428,16 +473,24 @@ export class Orchestrator {
     await this.openTriggeredMarket(trigger, {
       sequenceId: seqIdOf(ev),
       team: ev.team,
+      slot,
       openClockMin: clockMinutes(ev),
       openerType: ev.type,
       logLabel: `type=${ev.type} team=${ev.team ?? 'n/a'} clock=${String(ev.meta?.clock ?? game.clock)}`,
     });
   }
 
+  private isSamePollSuppressed(ev: FeedEvent): boolean {
+    const seq = seqIdOf(ev);
+    if (seq && this.samePollResolverSeqs.has(seq)) return true;
+    const key = resolverBatchKey(ev);
+    return !!key && this.samePollResolverKeys.has(key);
+  }
+
   /** Push the agent's momentum read to clients (drives the session momentum bar). */
   private broadcastMomentum(): void {
     const r = this.momentum.read();
-    this.momentumLog.push({ bar: r.bar });
+    this.momentumLog.push({ bar: r.bar, home: r.home, away: r.away });
     this.server.broadcast({ t: 'momentum', bar: r.bar, home: r.home, away: r.away });
   }
 
@@ -468,7 +521,7 @@ export class Orchestrator {
     const last = this.lastMomentumOpenAt.get(team) ?? 0;
     if (Date.now() - last < MOMENTUM_OPEN_COOLDOWN_MS) return;
     if (this.hasOpenMomentumMarketFor(team)) return;
-    if (this.hasBlockingMarket(false)) return;
+    if (this.hasBlockingMarket('window')) return;
 
     const game = this.feed.state();
     const name = team === 'home' ? game.home.name : game.away.name;
@@ -479,6 +532,7 @@ export class Orchestrator {
       gameId: game.gameId,
       question: spec.question,
       kind: spec.kind,
+      slot: 'window',
       team,
       windowMs: MOMENTUM_BET_WINDOW_MS,
       trueProb: spec.trueProb,
@@ -487,13 +541,14 @@ export class Orchestrator {
     this.lastMomentumOpenAt.set(team, Date.now());
     await this.openTriggeredMarket(trigger, {
       team,
+      slot: 'window',
       logLabel: `momentum kind=${spec.kind} team=${team} intensity=${read.intensity.toFixed(1)}`,
     });
   }
 
   /**
-   * Extra-time period markets — state-triggered, not tied to a single play.
-   * Opens on ET entry (or retries once a blocking moment market clears).
+   * Period markets — state-triggered, not tied to a single play.
+   * Opens in stoppage/extra time and resolves on goal or whistle.
    */
   private async checkPeriodMarkets(game: GameState): Promise<void> {
     if (game.status === 'final') {
@@ -501,10 +556,14 @@ export class Orchestrator {
       return;
     }
 
-    const pk = periodMarketKey(game.gameId);
+    const pk = periodMarketKeyForGame(game);
+    if (!pk) {
+      this.periodMarketPending = false;
+      return;
+    }
     if (this.openedMoments.has(pk)) return;
     for (const m of this.engine.list()) {
-      if (m.kind === 'goal_in_extra_time') {
+      if (m.slot === 'period' && (m.status === 'open' || m.status === 'locked')) {
         this.openedMoments.add(pk);
         return;
       }
@@ -517,12 +576,9 @@ export class Orchestrator {
     }
 
     const inEt = parseClockKey(game.clock).base > 90;
-    const justEnteredEt = inEt && !this.extraTimeEntered;
     if (inEt) this.extraTimeEntered = true;
 
-    if (!justEnteredEt && !this.periodMarketPending) return;
-
-    if (this.hasBlockingMarket(true)) {
+    if (this.hasBlockingMarket('period')) {
       this.periodMarketPending = true;
       return;
     }
@@ -535,42 +591,19 @@ export class Orchestrator {
     await this.openTriggeredMarket(trigger, {
       team: trigger.team,
       isPeriod: true,
+      slot: 'period',
       logLabel: `period clock=${game.clock}`,
     });
   }
 
-  /**
-   * Is another market blocking a new open?
-   * @param forPeriod — period markets only yield to an OPEN moment market, not a locked one.
-   */
-  private hasBlockingMarket(forPeriod: boolean, incoming?: FeedEvent): boolean {
-    const incomingPri = incoming ? openerPriority(incoming.type) : 9;
-    let active = 0;
+  /** True when another unsettled market already owns this slot. */
+  private hasBlockingMarket(slot: MarketSlot): boolean {
     for (const t of this.tracked.values()) {
       const m = this.engine.get(t.marketId);
       if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
-      // A lingering low-priority VAR/penalty market never blocks a live goal chance.
-      if (incoming && incomingPri <= 1 && !isGoalMomentKind(m.kind) && m.kind === 'penalty_awarded') {
-        continue;
-      }
-      if (forPeriod) {
-        // A period market (ET comeback) only needs a clear OPEN betting slot — a
-        // locked market settling out is fine.
-        if (m.status === 'open') return true;
-        continue;
-      }
-      if (m.status === 'open') {
-        active++;
-      } else if (m.status === 'locked' && !t.isPeriod) {
-        // A locked market blocks until its deadline sweep settles it. Past resolveAt
-        // it's effectively settled (the next tick's settleExpired will finalize it),
-        // so it no longer blocks a new open.
-        if (Date.now() < m.resolveAt && Date.now() - m.lockAt < LOCKED_BLOCK_MS) active++;
-      }
+      if ((m.slot ?? t.slot) === slot) return true;
     }
-    if (forPeriod) return false;
-    // Serial feed — only one open (or freshly locked) market at a time.
-    return active >= MAX_CONCURRENT_MARKETS;
+    return false;
   }
 
   /** Open a market from a validated trigger — shared by moment + period paths. */
@@ -579,16 +612,18 @@ export class Orchestrator {
     opts: {
       sequenceId?: string;
       team?: Team;
+      slot?: MarketSlot;
       isPeriod?: boolean;
       openClockMin?: number;
       openerType?: FeedEvent['type'];
       logLabel: string;
     },
   ): Promise<void> {
-    if (!opts.isPeriod && this.hasBlockingMarket(false)) return;
+    const slot = opts.slot ?? trigger.slot ?? marketSlot(trigger.kind);
+    if (this.hasBlockingMarket(slot)) return;
 
     const deadline = resolveDeadlineMs(trigger.kind);
-    const armed: MarketTrigger = { ...trigger, resolveWindowMs: deadline };
+    const armed: MarketTrigger = { ...trigger, slot, resolveWindowMs: deadline };
 
     console.log(
       `[golazo/feed] market_open ${opts.logLabel} resolve=${Math.round(deadline / 1000)}s ` +
@@ -607,7 +642,7 @@ export class Orchestrator {
         seedNoLamports: this.config.chainSeedLamports,
       });
       if (initRes) {
-        trigger.onChain = { marketSeed: seed, authority: this.chainAuthority };
+        armed.onChain = { marketSeed: seed, authority: this.chainAuthority };
         console.log(
           `[golazo/feed] chain initMarket seed=${seed} ` +
             `market=${initRes.marketPda.toBase58()} sig=${initRes.signature}`,
@@ -636,6 +671,7 @@ export class Orchestrator {
       resolveWindowMs: deadline,
       pending: new Map(),
       marketSeed,
+      slot,
       ...(opts.openClockMin !== undefined ? { openClockMin: opts.openClockMin } : {}),
       ...(opts.openerType ? { openerType: opts.openerType } : {}),
       ...(opts.isPeriod ? { isPeriod: true } : {}),
@@ -648,10 +684,7 @@ export class Orchestrator {
       if (!t.isPeriod) continue;
       const m = this.engine.get(t.marketId);
       if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
-      const seed = t.marketSeed;
-      this.engine.resolve(t.marketId, outcome);
-      this.cleanupTracked(t.marketId);
-      if (seed !== undefined) void this.chain.settleMarket(seed, outcome);
+      this.finalizeMarket(t, outcome);
     }
     this.periodMarketPending = false;
   }
@@ -704,25 +737,15 @@ export class Orchestrator {
   }
 
   /**
-   * Resolve a market from a feed event. THE ONE RULE: an event can only ever cause
-   * YES. We find the market, and if the event qualifies it YES (goal attribution via
-   * `parseGoalSource` for goal kinds), finalize YES. Otherwise we just record the
-   * resolver clock and return — NO is the deadline sweep's job, never an event's.
+   * Resolve all markets decided by a feed event. With slots, one goal can settle a
+   * moment market, a window market, and a before-whistle period market together.
    */
-  private async resolveFromEvent(ev: FeedEvent): Promise<void> {
+  private async resolveFromEvent(ev: FeedEvent): Promise<boolean> {
     this.recordResolverClock(ev);
 
-    const target = this.findMarketFor(ev);
-    if (!target) {
-      if (ev.type === 'goal' && ev.team) {
-        this.feed.applyGoal(ev.team);
-        this.server.broadcast({ t: 'game', game: this.feed.state() });
-      }
-      return;
-    }
-
-    const m = this.engine.get(target.marketId);
-    if (!m) return;
+    const targets = this.findMarketsFor(ev);
+    let settled = false;
+    let handled = targets.length > 0;
 
     // NOTE: we no longer VOID when an outcome lands while betting is still open. On a
     // ~2-min feed that "early" condition fires constantly and refunds whole pools; the
@@ -730,118 +753,125 @@ export class Orchestrator {
     // user bet placed after the result lands inside its hold gets rejected + refunded.
     // The market itself simply settles YES on the qualifying event.
 
-    if (target.isPeriod && ev.type === 'goal' && target.team && ev.team !== target.team) {
-      return;
-    }
-    if (m.kind === 'penalty_awarded' && ev.type === 'goal') return;
-
-    // Goal attribution for strict goal-question kinds: ESPN's own goal text decides.
-    // 'yes' → YES; 'no'/'ambiguous' → not this moment, let the deadline settle NO.
-    if (ev.type === 'goal' && isGoalQuestionKind(m.kind)) {
-      if (parseGoalSource(ev.text, m.kind) === 'yes') {
-        this.finalizeMarket(target, 'YES', ev);
-      }
-      return;
+    for (const target of targets) {
+      const m = this.engine.get(target.marketId);
+      if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
+      const decision = this.outcomeForTarget(ev, target, m);
+      if (!decision) continue;
+      this.finalizeMarket(target, decision.outcome, {
+        voidCause: decision.voidCause,
+        voidReason: decision.voidReason,
+      });
+      settled = true;
     }
 
-    // Everything else: an event only ever causes YES (else the deadline sweep NOs it).
-    if (outcomeFromEvent(ev, m.kind) === 'YES') {
-      this.finalizeMarket(target, 'YES', ev);
+    if (ev.type === 'goal' && ev.team) {
+      this.feed.applyGoal(ev.team);
+      this.server.broadcast({ t: 'game', game: this.feed.state() });
     }
+
+    return handled || settled;
   }
 
-  /** Find the tracked market this resolution event decides, if any. */
-  private findMarketFor(ev: FeedEvent): TrackedMarket | undefined {
+  private outcomeForTarget(
+    ev: FeedEvent,
+    target: TrackedMarket,
+    m: Market,
+  ): OutcomeDecision | undefined {
+    if (target.isPeriod && ev.type === 'goal') {
+      if (target.team && ev.team !== target.team) return undefined;
+      return { outcome: 'YES' };
+    }
+
+    if (m.kind === 'penalty_awarded') {
+      if (ev.type === 'penalty') return { outcome: 'YES' };
+      if (ev.type === 'var_penalty_denied') return { outcome: 'NO' };
+      return undefined;
+    }
+
+    if (m.kind === 'red_card_given') {
+      return ev.type === 'red_card' ? { outcome: 'YES' } : undefined;
+    }
+
+    if ((ev.type === 'miss' || ev.type === 'play_end') && isGoalQuestionKind(m.kind)) {
+      return { outcome: 'NO' };
+    }
+
+    // Goal attribution for strict goal-question kinds: ESPN's own goal text decides.
+    // 'yes' → YES; 'no' → NO; 'ambiguous' → VOID/refund.
+    if (ev.type === 'goal' && isGoalQuestionKind(m.kind)) {
+      const verdict = parseGoalSource(ev.text, m.kind);
+      if (verdict === 'yes') return { outcome: 'YES' };
+      if (verdict === 'ambiguous') {
+        return {
+          outcome: 'VOID',
+          voidCause: 'ambiguous_attribution',
+          voidReason: ev.text.slice(0, 80),
+        };
+      }
+      return { outcome: 'NO' };
+    }
+
+    return outcomeFromEvent(ev, m.kind) === 'YES' ? { outcome: 'YES' } : undefined;
+  }
+
+  /** Find every tracked market this resolution event can decide. */
+  private findMarketsFor(ev: FeedEvent): TrackedMarket[] {
     const seq = seqIdOf(ev);
+    const targets: TrackedMarket[] = [];
 
     // 1) Exact correlation by sequenceId.
     if (seq) {
       for (const t of this.tracked.values()) {
-        if (t.sequenceId && t.sequenceId === seq) return t;
+        if (t.sequenceId && t.sequenceId === seq) targets.push(t);
       }
     }
 
-    // 2) Fallback: newest still-settle-able market whose team POSITIVELY matches
-    //    the resolver. Period markets only settle on goals (handled below) or FT.
-    if (ev.type === 'miss') {
-      for (const t of this.tracked.values()) {
-        if (t.isPeriod) continue;
-        const m = this.engine.get(t.marketId);
-        if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
-        if (!isWindowOrPlayKind(m.kind)) continue;
-        if (!t.team || t.team !== ev.team) continue;
-        return t;
-      }
-      return undefined;
-    }
-
-    if (ev.type === 'var_penalty_denied') {
-      for (const t of this.tracked.values()) {
-        const m = this.engine.get(t.marketId);
-        if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
-        if (m.kind === 'penalty_awarded') return t;
-      }
-      return undefined;
-    }
-
-    if (ev.type === 'penalty') {
-      for (const t of this.tracked.values()) {
-        const m = this.engine.get(t.marketId);
-        if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
-        if (m.kind === 'penalty_awarded') return t;
-      }
-    }
-
-    // A red card (incl. second yellow) settles an open VAR "RED card?" review — the
-    // market is teamless ("will this review produce a red?"), so any red card counts.
-    if (ev.type === 'red_card') {
-      for (const t of this.tracked.values()) {
-        const m = this.engine.get(t.marketId);
-        if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
-        if (m.kind === 'red_card_given') return t;
-      }
-    }
-
-    if (!ev.team) {
-      let best: TrackedMarket | undefined;
-      for (const t of this.tracked.values()) {
-        if (t.isPeriod) continue;
-        const m = this.engine.get(t.marketId);
-        if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
-        if (!isWindowOrPlayKind(m.kind)) continue;
-        best = t;
-      }
-      return best;
-    }
-    let bestMoment: TrackedMarket | undefined;
-    let bestPeriod: TrackedMarket | undefined;
+    // 2) Fallback by kind/team. One per slot can match the same resolver.
     for (const t of this.tracked.values()) {
+      if (targets.includes(t)) continue;
       const m = this.engine.get(t.marketId);
       if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
-      if (t.isPeriod && !t.team && ev.type === 'goal') {
-        bestPeriod = t;
-        continue;
-      }
-      if (!t.team || t.team !== ev.team) continue;
-      if (t.isPeriod) bestPeriod = t;
-      else if (isWindowOrPlayKind(m.kind)) bestMoment = t;
+      if (this.marketMatchesEvent(t, m, ev)) targets.push(t);
     }
-    return bestMoment ?? bestPeriod;
+    return targets;
+  }
+
+  private marketMatchesEvent(t: TrackedMarket, m: Market, ev: FeedEvent): boolean {
+    if (t.isPeriod || m.slot === 'period') {
+      if (ev.type !== 'goal') return false;
+      return !t.team || ev.team === t.team;
+    }
+    if (m.kind === 'penalty_awarded') return ev.type === 'penalty' || ev.type === 'var_penalty_denied';
+    if (m.kind === 'red_card_given') return ev.type === 'red_card';
+    if (t.team && ev.team && t.team !== ev.team) return false;
+    if (ev.team && t.team !== ev.team) return false;
+    if (m.kind === 'shot_in_window') return ev.type === 'goal' || ev.type === 'shot' || ev.type === 'miss';
+    if (m.kind === 'score_in_window') return ev.type === 'goal';
+    if (isGoalQuestionKind(m.kind)) return ev.type === 'goal' || ev.type === 'miss' || ev.type === 'play_end';
+    if (m.kind === 'chance_from_play') return ev.type === 'goal' || ev.type === 'shot' || ev.type === 'miss';
+    return false;
   }
 
   /** Apply a final outcome and mirror on-chain. */
-  private finalizeMarket(target: TrackedMarket, outcome: Outcome, ev?: FeedEvent): void {
+  private finalizeMarket(
+    target: TrackedMarket,
+    outcome: Outcome,
+    opts: { voidCause?: string; voidReason?: string } = {},
+  ): void {
     const seed = target.marketSeed;
     this.engine.resolve(target.marketId, outcome);
-    this.metrics.marketsResolved++;
-    this.audit.record('market_resolve', { outcome }, target.marketId);
+    if (outcome === 'VOID') this.metrics.marketsVoided++;
+    else this.metrics.marketsResolved++;
+    this.audit.record(
+      outcome === 'VOID' ? 'market_void' : 'market_resolve',
+      outcome === 'VOID'
+        ? { outcome, cause: opts.voidCause ?? 'void', reason: opts.voidReason ?? opts.voidCause ?? 'void' }
+        : { outcome },
+      target.marketId,
+    );
     this.cleanupTracked(target.marketId);
     if (seed !== undefined) void this.chain.settleMarket(seed, outcome);
-
-    if (ev?.type === 'goal' && ev.team) {
-      this.feed.applyGoal(ev.team);
-      this.server.broadcast({ t: 'game', game: this.feed.state() });
-    }
 
     if (!target.isPeriod) this.periodMarketPending = this.periodMarketPending || this.extraTimeEntered;
   }
@@ -856,12 +886,17 @@ export class Orchestrator {
     );
   }
 
-  /** VOID + refund — optional commentary so the UI explains why. */
-  private voidMarket(target: TrackedMarket, commentary?: string): void {
+  /**
+   * VOID + refund. The ONLY caller is resetForNewMatch (a feed match-switch), so a
+   * VOID can ONLY ever mean "the match we opened this on is gone" — never "the event
+   * didn't arrive" (that's a deterministic NO via settleExpired). `cause` is recorded
+   * structurally so this invariant is auditable.
+   */
+  private voidMarket(target: TrackedMarket, cause = 'match_switch', commentary?: string): void {
     const seed = target.marketSeed;
     this.engine.resolve(target.marketId, 'VOID');
     this.metrics.marketsVoided++;
-    this.audit.record('market_void', { reason: commentary?.slice(0, 80) ?? 'fairness' }, target.marketId);
+    this.audit.record('market_void', { cause, reason: commentary?.slice(0, 80) ?? cause }, target.marketId);
     this.cleanupTracked(target.marketId);
     if (seed !== undefined) void this.chain.settleMarket(seed, 'VOID');
     if (commentary) this.server.broadcast({ t: 'commentary', text: commentary, ts: Date.now() });
@@ -1156,23 +1191,35 @@ export class Orchestrator {
 
 /** Process goal-scoring openers before card/VAR lines at the same clock. */
 function sortFeedEvents(events: FeedEvent[]): FeedEvent[] {
-  const isResolver = (ev: FeedEvent) =>
-    ev.type === 'goal' ||
-    ev.type === 'miss' ||
-    ev.type === 'shot' ||
-    ev.type === 'yellow_card' ||
-    ev.type === 'red_card' ||
-    ev.type === 'var_penalty_denied';
-
   return [...events].sort((a, b) => {
     const ac = clockMinutes(a) ?? 0;
     const bc = clockMinutes(b) ?? 0;
     if (ac !== bc) return ac - bc;
-    const ra = isResolver(a) ? 1 : 0;
-    const rb = isResolver(b) ? 1 : 0;
+    const ra = isOutcomeEvent(a) ? 1 : 0;
+    const rb = isOutcomeEvent(b) ? 1 : 0;
     if (ra !== rb) return ra - rb;
     return openerPriority(a.type) - openerPriority(b.type);
   });
+}
+
+function isOutcomeEvent(ev: FeedEvent): boolean {
+  return (
+    ev.type === 'goal' ||
+    ev.type === 'miss' ||
+    ev.type === 'shot' ||
+    ev.type === 'play_end' ||
+    ev.type === 'yellow_card' ||
+    ev.type === 'red_card' ||
+    ev.type === 'var_penalty_denied'
+  );
+}
+
+function resolverBatchKey(ev: FeedEvent): string | undefined {
+  if (!ev.team) return undefined;
+  const clock = typeof ev.meta?.clock === 'string' ? ev.meta.clock : '';
+  const { base, stopp } = parseClockKey(clock);
+  if (base <= 0) return undefined;
+  return `${ev.team}:${base}+${stopp}`;
 }
 
 /** Pull the correlation sequenceId out of an event's meta, if present. */
@@ -1196,6 +1243,7 @@ function anyTeamGoalCountsYes(kind: string): boolean {
     kind === 'score_in_window' ||
     kind === 'chance_from_play' ||
     kind === 'goal_from_open_play' ||
+    kind === 'goal_in_stoppage' ||
     kind === 'goal_in_extra_time'
   );
 }

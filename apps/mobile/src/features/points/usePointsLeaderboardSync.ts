@@ -1,23 +1,23 @@
 import { useEffect } from "react";
 import { useStore } from "@/state/store";
 import { connectFeed } from "@/lib/ws";
-import { USER_ID } from "@/lib/config";
+import { usePointsIdentity } from "./usePointsIdentity";
 
 /**
  * Keeps the ONE global points leaderboard fresh in BOTH modes — you earn points
  * on every bet (real + paper), so the board is always live. Lightweight WS —
- * hello + points_hello only; no match state. The points identity matches the
- * bet that earns the points: pointsUserId in paper mode, the engine USER_ID in
- * real mode (real bets settle under USER_ID), so "your standing" lines up either way.
+ * hello + points_hello only; no match state. The points identity comes from
+ * {@link usePointsIdentity}: a stable account id when signed in (so one account
+ * is one leaderboard player on every device), else the device-local id.
  */
 export function usePointsLeaderboardSync(enabled = true): void {
   const store = useStore();
-  const { liveUrl, session } = store;
+  const { liveUrl } = store;
+  const identity = usePointsIdentity();
+  const { userId, name } = identity;
 
   useEffect(() => {
     if (!enabled) return;
-    const userId =
-      session.moneyMode === "points" ? session.pointsUserId : USER_ID;
     if (!userId) return;
 
     let cancelled = false;
@@ -32,7 +32,7 @@ export function usePointsLeaderboardSync(enabled = true): void {
           socket.send({
             t: "points_hello",
             userId,
-            name: session.displayName ?? "Player",
+            name,
           });
         },
         onClose: () => {
@@ -59,12 +59,5 @@ export function usePointsLeaderboardSync(enabled = true): void {
       if (retry) clearTimeout(retry);
       socket?.close();
     };
-  }, [
-    enabled,
-    liveUrl,
-    session.moneyMode,
-    session.pointsUserId,
-    session.displayName,
-    store,
-  ]);
+  }, [enabled, liveUrl, userId, name, store]);
 }

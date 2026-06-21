@@ -36,6 +36,10 @@ export function LiveScoreboard({
   clock,
   /** 'home' | 'away' = who's attacking; undefined = even / nothing live. */
   momentum,
+  /** Continuous lean in [0..1] (0 = home/left, 1 = away/right, 0.5 = even). When
+   *  provided, the bar tracks it smoothly; otherwise it falls back to the binary
+   *  `momentum` (3 fixed positions). */
+  momentumLean,
   live = true,
 }: {
   home: FixtureTeam;
@@ -44,6 +48,7 @@ export function LiveScoreboard({
   scoreAway: number;
   clock: string;
   momentum?: "home" | "away";
+  momentumLean?: number | null;
   live?: boolean;
 }) {
   return (
@@ -101,6 +106,7 @@ export function LiveScoreboard({
 
       <MomentumBar
         momentum={momentum}
+        lean={momentumLean}
         homeColor={home.colors[0]}
         awayColor={away.colors[0]}
       />
@@ -151,26 +157,44 @@ function ScoreDigit({ value }: { value: number }) {
 
 /**
  * MomentumBar — a thin bar under the score whose fill leans toward whichever side
- * is attacking. When a market is live it springs toward that team's color and the
- * marker breathes; otherwise it rests in the middle, neutral.
+ * is pressing. It tracks the CONTINUOUS lean (server home/away pressure) so it
+ * visibly moves with the run of play — not just three frozen positions off the
+ * binary leader (which looked stuck the moment one team stayed on top). When no
+ * continuous read is available it falls back to the binary `momentum` (offline /
+ * friends mode). The marker breathes while a side is meaningfully on top; the bar
+ * rests centred and calm when play is even.
  */
 function MomentumBar({
   momentum,
+  lean: leanInput,
   homeColor,
   awayColor,
 }: {
   momentum?: "home" | "away";
+  lean?: number | null;
   homeColor: string;
   awayColor: string;
 }) {
-  // 0 = all home (left), 1 = all away (right), 0.5 = even.
-  const target = momentum === "home" ? 0.18 : momentum === "away" ? 0.82 : 0.5;
+  // 0 = all home (left), 1 = all away (right), 0.5 = even. Prefer the continuous
+  // lean; clamp into [0.12, 0.88] so even a total siege still shows a sliver of the
+  // other side. Fall back to the binary leader's 3 fixed stops when there's no read.
+  const continuous =
+    typeof leanInput === "number"
+      ? Math.min(0.88, Math.max(0.12, leanInput))
+      : undefined;
+  const target =
+    continuous ??
+    (momentum === "home" ? 0.18 : momentum === "away" ? 0.82 : 0.5);
+  // "Active" = the bar is meaningfully off-centre (someone's on top). Drives the
+  // breathing glow whether we're on the continuous or the binary path.
+  const active =
+    continuous !== undefined ? Math.abs(continuous - 0.5) > 0.06 : !!momentum;
   const lean = useSharedValue(0.5);
   const glow = useSharedValue(0);
 
   useEffect(() => {
     lean.value = withSpring(target, spring.smooth);
-    if (momentum) {
+    if (active) {
       glow.value = withRepeat(
         withSequence(
           withTiming(1, { duration: 700, easing: Easing.inOut(Easing.ease) }),
@@ -184,7 +208,7 @@ function MomentumBar({
       glow.value = withTiming(0, { duration: 300 });
     }
     return () => cancelAnimation(glow);
-  }, [target, momentum, lean, glow]);
+  }, [target, active, lean, glow]);
 
   const leftStyle = useAnimatedStyle(() => ({
     flex: lean.value,

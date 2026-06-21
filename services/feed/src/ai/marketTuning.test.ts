@@ -6,6 +6,7 @@ import {
   isAwardedFreeKick,
   isDefensiveSetPiece,
   isStalePlay,
+  marketSlot,
   resolveDeadlineMs,
   scaledResolveWindowMs,
   staleLagThreshold,
@@ -13,8 +14,10 @@ import {
 
 const game = (clock: string): GameState => ({
   gameId: 'g1',
-  home: { name: 'Brazil', abbr: 'BRA' },
-  away: { name: 'Haiti', abbr: 'HAI' },
+  sport: 'soccer',
+  league: 'WC',
+  home: { id: 'bra', name: 'Brazil', abbr: 'BRA' },
+  away: { id: 'hai', name: 'Haiti', abbr: 'HAI' },
   scoreHome: 0,
   scoreAway: 0,
   clock,
@@ -78,6 +81,15 @@ describe('resolveDeadlineMs — soccer-realistic locked countdowns', () => {
   it('gives momentum time-boxed markets their own windows', () => {
     expect(resolveDeadlineMs('shot_in_window')).toBe(90_000);
     expect(resolveDeadlineMs('score_in_window')).toBe(180_000);
+  });
+});
+
+describe('marketSlot', () => {
+  it('classifies moment/window/period markets', () => {
+    expect(marketSlot('goal_from_free_kick')).toBe('moment');
+    expect(marketSlot('shot_in_window')).toBe('window');
+    expect(marketSlot('goal_in_stoppage')).toBe('period');
+    expect(marketSlot('goal_in_extra_time')).toBe('period');
   });
 });
 

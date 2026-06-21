@@ -1,0 +1,742 @@
+{
+"scoreboard": {
+"events": [
+{
+"id": "999001",
+"status": {
+"displayClock": "90'+6'",
+"period": 2,
+"type": {
+"state": "post",
+"completed": true,
+"detail": "FT"
+}
+},
+"competitions": [
+{
+"competitors": [
+{
+"homeAway": "home",
+"score": "3",
+"team": {
+"id": "100",
+"displayName": "Albion",
+"abbreviation": "ALB",
+"color": "1f6feb"
+}
+},
+{
+"homeAway": "away",
+"score": "2",
+"team": {
+"id": "200",
+"displayName": "Rovers",
+"abbreviation": "ROV",
+"color": "d4351c"
+}
+}
+]
+}
+]
+}
+]
+},
+"summary": {
+"commentary": [
+{
+"sequence": 1,
+"time": {
+"displayValue": ""
+},
+"text": "Lineups are announced and the players are warming up."
+},
+{
+"sequence": 2,
+"time": {
+"displayValue": ""
+},
+"text": "First Half begins."
+},
+{
+"sequence": 3,
+"time": {
+"displayValue": "1'"
+},
+"text": "Albion building from the back, pushing forward into the final third."
+},
+{
+"sequence": 4,
+"time": {
+"displayValue": "2'"
+},
+"text": "Big chance for Albion! A through ball releases the striker."
+},
+{
+"sequence": 5,
+"time": {
+"displayValue": "5'"
+},
+"text": "Rovers on the attack now, building pressure down the right."
+},
+{
+"sequence": 6,
+"time": {
+"displayValue": "6'"
+},
+"text": "Midfielder (Rovers) wins a free kick in the defensive half."
+},
+{
+"sequence": 7,
+"time": {
+"displayValue": "7'"
+},
+"text": "Rovers surging forward, quick transition through midfield."
+},
+{
+"sequence": 8,
+"time": {
+"displayValue": "8'"
+},
+"text": "Corner, Rovers. Conceded by a defender."
+},
+{
+"sequence": 9,
+"time": {
+"displayValue": "8'"
+},
+"text": "Corner taken by Rovers, headed clear at the near post."
+},
+{
+"sequence": 10,
+"time": {
+"displayValue": "9'"
+},
+"text": "The ball is played back and Rovers recycle possession."
+},
+{
+"sequence": 11,
+"time": {
+"displayValue": "10'"
+},
+"text": "Throw-in deep in midfield."
+},
+{
+"sequence": 12,
+"time": {
+"displayValue": "11'"
+},
+"text": "The ball runs out of play for a goal kick. A lull in the game."
+},
+{
+"sequence": 13,
+"time": {
+"displayValue": "12'"
+},
+"text": "Both sides catching their breath, possession traded in midfield."
+},
+{
+"sequence": 14,
+"time": {
+"displayValue": "13'"
+},
+"text": "Rovers working it wide, building an attack down the flank."
+},
+{
+"sequence": 15,
+"time": {
+"displayValue": "14'"
+},
+"text": "Corner, Rovers. Conceded by the full-back."
+},
+{
+"sequence": 16,
+"time": {
+"displayValue": "17'"
+},
+"text": "Albion pressing forward again, in the final third."
+},
+{
+"sequence": 17,
+"time": {
+"displayValue": "18'"
+},
+"text": "Winger (Albion) wins a free kick in the attacking half."
+},
+{
+"sequence": 18,
+"time": {
+"displayValue": "19'"
+},
+"text": "Albion free kick is played short and worked into the wall, cleared away."
+},
+{
+"sequence": 19,
+"time": {
+"displayValue": "21'"
+},
+"text": "Rovers on top now, building pressure with a series of attacks."
+},
+{
+"sequence": 20,
+"time": {
+"displayValue": "22'"
+},
+"text": "Rovers dangerous attack, a cut-back across the six-yard box."
+},
+{
+"sequence": 21,
+"time": {
+"displayValue": "23'"
+},
+"text": "Attempt saved. A fierce drive is turned around the post."
+},
+{
+"sequence": 22,
+"time": {
+"displayValue": "24'"
+},
+"text": "Rovers keep coming, another attack down the left."
+},
+{
+"sequence": 23,
+"time": {
+"displayValue": "25'"
+},
+"text": "Shot on target by Rovers, forces a save low to the right."
+},
+{
+"sequence": 24,
+"time": {
+"displayValue": "27'"
+},
+"text": "Albion breaking into the box, a real chance here."
+},
+{
+"sequence": 25,
+"time": {
+"displayValue": "31'"
+},
+"text": "A scrappy spell, the ball pinging around midfield, out for a throw."
+},
+{
+"sequence": 26,
+"time": {
+"displayValue": "32'"
+},
+"text": "Defender (Rovers) wins a free kick in the defensive half."
+},
+{
+"sequence": 27,
+"time": {
+"displayValue": "34'"
+},
+"text": "Striker (Albion) wins a free kick in the attacking half."
+},
+{
+"sequence": 28,
+"time": {
+"displayValue": "35'"
+},
+"text": "Albion free kick whipped in, headed away by the defence."
+},
+{
+"sequence": 29,
+"time": {
+"displayValue": "37'"
+},
+"text": "Rovers building again, sustained pressure, a real spell on top."
+},
+{
+"sequence": 30,
+"time": {
+"displayValue": "38'"
+},
+"text": "Rovers counter-attack, three on two, golden chance!"
+},
+{
+"sequence": 31,
+"time": {
+"displayValue": "39'"
+},
+"text": "Attempt missed. The shot flashes wide of the far post."
+},
+{
+"sequence": 32,
+"time": {
+"displayValue": "41'"
+},
+"text": "The referee is checking the monitor — VAR review for a possible penalty to Albion."
+},
+{
+"sequence": 33,
+"time": {
+"displayValue": "42'"
+},
+"text": "VAR Decision: No penalty. Play continues, the appeals waved away."
+},
+{
+"sequence": 34,
+"time": {
+"displayValue": "45'"
+},
+"text": "Albion win a free kick in the defensive half as the half winds down."
+},
+{
+"sequence": 35,
+"time": {
+"displayValue": "45'+2'"
+},
+"text": "Throw-in, the ball worked back to the keeper."
+},
+{
+"sequence": 36,
+"time": {
+"displayValue": "45'+3'"
+},
+"text": "First Half ends, Albion 2, Rovers 1."
+},
+{
+"sequence": 37,
+"time": {
+"displayValue": "46'"
+},
+"text": "Second Half begins. Albion 2, Rovers 1."
+},
+{
+"sequence": 38,
+"time": {
+"displayValue": "47'"
+},
+"text": "Albion straight on the front foot, building pressure."
+},
+{
+"sequence": 39,
+"time": {
+"displayValue": "48'"
+},
+"text": "Albion dangerous attack, cutting it back across the box."
+},
+{
+"sequence": 40,
+"time": {
+"displayValue": "49'"
+},
+"text": "Corner, Albion. Conceded by the centre-back."
+},
+{
+"sequence": 41,
+"time": {
+"displayValue": "49'"
+},
+"text": "Albion corner headed over the bar."
+},
+{
+"sequence": 42,
+"time": {
+"displayValue": "50'"
+},
+"text": "Albion relentless, another dangerous attack into the area."
+},
+{
+"sequence": 43,
+"time": {
+"displayValue": "51'"
+},
+"text": "Shot on target by Albion, tipped onto the bar!"
+},
+{
+"sequence": 44,
+"time": {
+"displayValue": "52'"
+},
+"text": "Albion still all over them, sustained siege pressure."
+},
+{
+"sequence": 45,
+"time": {
+"displayValue": "53'"
+},
+"text": "Playmaker (Albion) wins a free kick in the attacking half."
+},
+{
+"sequence": 46,
+"time": {
+"displayValue": "56'"
+},
+"text": "Rovers respond, pushing forward in numbers now."
+},
+{
+"sequence": 47,
+"time": {
+"displayValue": "57'"
+},
+"text": "Rovers on the attack, building real pressure of their own."
+},
+{
+"sequence": 48,
+"time": {
+"displayValue": "58'"
+},
+"text": "Rovers dangerous attack, a driving run into the box."
+},
+{
+"sequence": 49,
+"time": {
+"displayValue": "59'"
+},
+"text": "Shot on target by Rovers, a stinging save needed!"
+},
+{
+"sequence": 50,
+"time": {
+"displayValue": "60'"
+},
+"text": "Corner, Rovers. Conceded by the right-back."
+},
+{
+"sequence": 51,
+"time": {
+"displayValue": "61'"
+},
+"text": "Rovers corner cleared to the edge, recycled and lost."
+},
+{
+"sequence": 52,
+"time": {
+"displayValue": "62'"
+},
+"text": "Rovers breaking forward, a clear chance through the middle!"
+},
+{
+"sequence": 53,
+"time": {
+"displayValue": "65'"
+},
+"text": "A scrappy, quiet spell — throw-in, ball out for a goal kick."
+},
+{
+"sequence": 54,
+"time": {
+"displayValue": "66'"
+},
+"text": "Possession traded in midfield, the tempo drops right off."
+},
+{
+"sequence": 55,
+"time": {
+"displayValue": "67'"
+},
+"text": "Another stoppage, the ball out of play. The game has gone flat."
+},
+{
+"sequence": 56,
+"time": {
+"displayValue": "69'"
+},
+"text": "The referee goes to the pitchside monitor — VAR review for a possible red card, Rovers."
+},
+{
+"sequence": 57,
+"time": {
+"displayValue": "73'"
+},
+"text": "Albion pressing the advantage against ten men, on top."
+},
+{
+"sequence": 58,
+"time": {
+"displayValue": "74'"
+},
+"text": "Albion dangerous attack, swinging it into the box."
+},
+{
+"sequence": 59,
+"time": {
+"displayValue": "75'"
+},
+"text": "Corner, Albion. Conceded by the left-back."
+},
+{
+"sequence": 60,
+"time": {
+"displayValue": "75'"
+},
+"text": "Albion corner met by a header, just wide."
+},
+{
+"sequence": 61,
+"time": {
+"displayValue": "76'"
+},
+"text": "Shot on target by Albion, superbly saved!"
+},
+{
+"sequence": 62,
+"time": {
+"displayValue": "77'"
+},
+"text": "Albion still pushing, relentless pressure now."
+},
+{
+"sequence": 63,
+"time": {
+"displayValue": "79'"
+},
+"text": "VAR review — checking a possible penalty for Albion, handball in the area."
+},
+{
+"sequence": 64,
+"time": {
+"displayValue": "83'"
+},
+"text": "Rovers throwing everyone forward, a late rally."
+},
+{
+"sequence": 65,
+"time": {
+"displayValue": "84'"
+},
+"text": "Substitute (Rovers) wins a free kick in the attacking half."
+},
+{
+"sequence": 66,
+"time": {
+"displayValue": "85'"
+},
+"text": "Rovers free kick dropped into the box, headed clear."
+},
+{
+"sequence": 67,
+"time": {
+"displayValue": "86'"
+},
+"text": "Rovers dangerous attack, one last surge into the area."
+},
+{
+"sequence": 68,
+"time": {
+"displayValue": "88'"
+},
+"text": "The ball is shielded out for a throw, time being run down."
+},
+{
+"sequence": 69,
+"time": {
+"displayValue": "90'+1'"
+},
+"text": "Albion on the attack as we move into stoppage time."
+},
+{
+"sequence": 70,
+"time": {
+"displayValue": "90'+2'"
+},
+"text": "Corner, Albion. Conceded deep in stoppage time."
+},
+{
+"sequence": 71,
+"time": {
+"displayValue": "90'+3'"
+},
+"text": "Albion corner swung in, scrambled away on the line."
+},
+{
+"sequence": 72,
+"time": {
+"displayValue": "90'+4'"
+},
+"text": "Shot on target by Albion! Saved at the death."
+},
+{
+"sequence": 73,
+"time": {
+"displayValue": "90'+6'"
+},
+"text": "The referee brings the game to an end."
+}
+],
+"keyEvents": [
+{
+"id": 90001,
+"type": {
+"id": "70",
+"text": "Goal",
+"type": "goal"
+},
+"text": "Goal! Albion 1, Rovers 0. Open-play move finished low into the bottom corner. Assisted by the winger.",
+"clock": {
+"displayValue": "2'"
+},
+"scoringPlay": true,
+"team": {
+"id": "100",
+"displayName": "Albion"
+}
+},
+{
+"id": 90002,
+"type": {
+"id": "70",
+"text": "Goal",
+"type": "goal"
+},
+"text": "Goal! Albion 1, Rovers 1. Header from a corner, bundled in at the back post.",
+"clock": {
+"displayValue": "14'+1'"
+},
+"scoringPlay": true,
+"team": {
+"id": "200",
+"displayName": "Rovers"
+}
+},
+{
+"id": 90003,
+"type": {
+"id": "155",
+"text": "Penalty"
+},
+"clock": {
+"displayValue": "28'"
+},
+"scoringPlay": false,
+"text": "Penalty awarded to Albion after a foul in the box.",
+"team": {
+"id": "100"
+}
+},
+{
+"id": 90004,
+"type": {
+"id": "70",
+"text": "Goal",
+"type": "goal"
+},
+"text": "Goal! Albion 2, Rovers 1. Penalty scored, sent the keeper the wrong way.",
+"clock": {
+"displayValue": "28'+1'"
+},
+"scoringPlay": true,
+"team": {
+"id": "100",
+"displayName": "Albion"
+}
+},
+{
+"id": 90005,
+"type": {
+"id": "26",
+"text": "Halftime"
+},
+"clock": {
+"displayValue": "45'"
+},
+"scoringPlay": false,
+"text": "First Half ends, Albion 2, Rovers 1."
+},
+{
+"id": 90006,
+"type": {
+"id": "22",
+"text": "Start 2nd Half"
+},
+"clock": {
+"displayValue": "45'"
+},
+"scoringPlay": false,
+"text": "Second Half begins."
+},
+{
+"id": 90007,
+"type": {
+"id": "70",
+"text": "Goal",
+"type": "goal"
+},
+"text": "Goal! Albion 3, Rovers 1. Curling shot scored directly from the free-kick into the top corner.",
+"clock": {
+"displayValue": "54'"
+},
+"scoringPlay": true,
+"team": {
+"id": "100",
+"displayName": "Albion"
+}
+},
+{
+"id": 90008,
+"type": {
+"id": "70",
+"text": "Goal",
+"type": "goal"
+},
+"text": "Goal! Albion 3, Rovers 2. Slotted home from open play after a flowing move. Assisted by the substitute.",
+"clock": {
+"displayValue": "63'"
+},
+"scoringPlay": true,
+"team": {
+"id": "200",
+"displayName": "Rovers"
+}
+},
+{
+"id": 90009,
+"type": {
+"id": "98",
+"text": "Red Card"
+},
+"clock": {
+"displayValue": "71'"
+},
+"scoringPlay": false,
+"text": "Rovers defender is shown a straight red card after the VAR review.",
+"team": {
+"id": "200"
+}
+},
+{
+"id": 90010,
+"type": {
+"id": "155",
+"text": "Penalty"
+},
+"clock": {
+"displayValue": "80'"
+},
+"scoringPlay": false,
+"text": "Penalty awarded to Albion after the VAR review for handball.",
+"team": {
+"id": "100"
+}
+},
+{
+"id": 90011,
+"type": {
+"id": "156",
+"text": "Penalty - Missed"
+},
+"clock": {
+"displayValue": "81'"
+},
+"scoringPlay": false,
+"text": "Penalty missed! The spot-kick is blazed over the bar.",
+"team": {
+"id": "100"
+}
+},
+{
+"id": 90012,
+"type": {
+"id": "27",
+"text": "End Regular Time"
+},
+"clock": {
+"displayValue": "90'+6'"
+},
+"scoringPlay": false,
+"text": "Match ends, Albion 3, Rovers 2."
+}
+]
+}
+}

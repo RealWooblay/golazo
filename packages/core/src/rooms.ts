@@ -24,7 +24,7 @@
  * render whatever the latest `RoomState` says and animate reveals for flavour.
  * Pure types + helpers only — no I/O, so feed and app share one source of truth.
  */
-import type { Outcome, Side, Team, OnChainRef } from './types';
+import type { MarketSlot, Outcome, Side, Team, OnChainRef } from './types';
 import type { MarketStatus } from './engine';
 import { settle, type Pool, type Settlement } from './parimutuel';
 
@@ -61,6 +61,7 @@ export interface RoomBet {
 export interface RoomMarket {
   id: string;
   source: RoomMarketSource;
+  slot: MarketSlot;
   /** Friend-made markets only: the player who created it. */
   authorId?: string;
   question: string;

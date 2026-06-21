@@ -10,6 +10,7 @@
  * and cools off when the game goes quiet.
  */
 import type { FeedEvent, Team } from '@golazo/core';
+import { resolveDeadlineMs } from './marketTuning';
 
 /** How much each event type signals attacking pressure for the team that caused it. */
 const WEIGHTS: Partial<Record<FeedEvent['type'], number>> = {
@@ -87,13 +88,22 @@ export interface MomentumMarketSpec {
   trueProb: number;
 }
 
+/** Whole minutes of the score_in_window resolve window — drives the CONCRETE title. */
+function scoreWindowMinutes(): number {
+  return Math.max(1, Math.round(resolveDeadlineMs('score_in_window') / 60_000));
+}
+
 /**
  * Turn a momentum read into a TIME-BOXED market — the bet is on a wall-clock
- * window ("this spell" / "the next few minutes"), not a play phase, which is what
+ * window ("this spell" / "the next N minutes"), not a play phase, which is what
  * makes it resolve reliably under feed lag. The harder the press, the bigger the
  * ask: sustained siege opens a "to score in the next N minutes?" (score_in_window);
  * lighter pressure asks the answerable "a shot this spell?" (shot_in_window).
  * Phrasing rotates by a counter so a long spell never repeats one line.
+ *
+ * The score_in_window title is CONCRETE — the "N minutes" is derived from the
+ * actual resolve window (resolveDeadlineMs('score_in_window')), not a vague "few
+ * minutes", so the card promises exactly the window it will be judged on.
  */
 export function momentumMarketSpec(
   teamName: string,
@@ -101,11 +111,13 @@ export function momentumMarketSpec(
   counter: number,
 ): MomentumMarketSpec {
   if (intensity >= MOMENTUM_GOAL_THRESHOLD) {
+    const mins = scoreWindowMinutes();
+    const unit = mins === 1 ? 'minute' : 'minutes';
     const scoreLines = [
-      `${teamName} all over them — to SCORE in the next few minutes?`,
-      `${teamName} laying siege — do they SCORE this spell?`,
-      `${teamName} piling it on — GOAL in the next few minutes?`,
-      `${teamName} relentless — to SCORE before this spell ends?`,
+      `${teamName} all over them — to SCORE in the next ${mins} ${unit}?`,
+      `${teamName} laying siege — do they SCORE in the next ${mins} ${unit}?`,
+      `${teamName} piling it on — GOAL in the next ${mins} ${unit}?`,
+      `${teamName} relentless — to SCORE in the next ${mins} ${unit}?`,
     ];
     return {
       kind: 'score_in_window',

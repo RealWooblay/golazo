@@ -37,6 +37,7 @@ function makeManager(opts: { live?: boolean; chain?: boolean; global?: Market } 
       return r;
     },
     chain: (opts.chain ?? true) ? mockChain() : null,
+    getOpenGlobalMarkets: () => (opts.global ? [opts.global] : []),
     getOpenGlobalMarket: () => opts.global,
   });
   return {
@@ -58,6 +59,7 @@ function globalMarket(over: Partial<Market> = {}): Market {
     gameId: 'sim-arg-fra',
     question: 'Argentina on the attack — GOAL?',
     kind: 'goal_from_open_play',
+    slot: 'moment',
     team: 'home',
     trueProb: 0.4,
     status: 'open',
@@ -67,6 +69,8 @@ function globalMarket(over: Partial<Market> = {}): Market {
     openedAt: 1_000,
     windowMs: 8_000,
     lockAt: 9_000,
+    resolveWindowMs: 75_000,
+    resolveAt: 84_000,
     ...over,
   };
 }
@@ -140,9 +144,9 @@ describe('RoomManager — lifecycle', () => {
     const code = h.mgr.createRoom('u1', 'Alice').state!.code;
     h.mgr.disconnect(code, 'u1');
     expect(h.mgr.has(code)).toBe(true);
-    expect(h.mgr.getRoomState(code)!.players[0].connected).toBe(false);
+    expect(h.mgr.getRoomState(code)!.players[0]!.connected).toBe(false);
     const re = h.mgr.joinRoom(code, 'u1', 'Alice');
-    expect(re.state!.players[0].connected).toBe(true);
+    expect(re.state!.players[0]!.connected).toBe(true);
   });
 
   it('reassigns host when the host leaves', () => {
@@ -267,7 +271,7 @@ describe('RoomManager — friend markets + parimutuel betting', () => {
 
   it('rejects makeMarket while another market is active', () => {
     openFriendMarket('u1');
-    expect(h.mgr.makeMarket(code, 'u2', 'Second?').error?.message).toMatch(/current market/i);
+    expect(h.mgr.makeMarket(code, 'u2', 'Second?').error?.message).toMatch(/moment market/i);
   });
 
   it('only the host or author may resolve a friend market', () => {
@@ -363,6 +367,30 @@ describe('RoomManager — AI relay (lockstep with the global market)', () => {
     h.mgr.makeMarket(code, 'u1', 'Custom line?');
     h.mgr.onGlobalMarketOpen(globalMarket({ id: 'mkt_2' }));
     expect(h.mgr.getRoomState(code)!.markets.filter((m) => m.source === 'ai')).toHaveLength(0);
+  });
+
+  it('mirrors different slots at the same time, but never duplicates a slot', () => {
+    const h = makeManager();
+    const code = h.mgr.createRoom('u1', 'A').state!.code;
+
+    h.mgr.onGlobalMarketOpen(globalMarket({ id: 'moment_1', slot: 'moment' }));
+    h.mgr.onGlobalMarketOpen(
+      globalMarket({
+        id: 'window_1',
+        kind: 'score_in_window',
+        slot: 'window',
+        question: 'Argentina to score in the next 3 minutes?',
+      }),
+    );
+    h.mgr.onGlobalMarketOpen(globalMarket({ id: 'moment_2', slot: 'moment' }));
+
+    const active = h
+      .mgr
+      .getRoomState(code)!
+      .markets
+      .filter((m) => m.status === 'open' || m.status === 'locked');
+    expect(active.map((m) => m.sourceMarketId)).toEqual(['moment_1', 'window_1']);
+    expect(active.map((m) => m.slot)).toEqual(['moment', 'window']);
   });
 
   it('backfills the open global market when a friend joins mid-match', () => {

@@ -478,11 +478,9 @@ export function useFriendsRoom(): UseFriendsRoom {
 
   const activeMarkets = useMemo<RoomMarket[]>(() => {
     if (!state) return [];
-    const active = state.markets.filter(
+    return state.markets.filter(
       (m) => m.status === "open" || m.status === "locked",
     );
-    const latest = active.at(-1);
-    return latest ? [latest] : [];
   }, [state]);
 
   const openMarkets = useMemo<RoomMarket[]>(
