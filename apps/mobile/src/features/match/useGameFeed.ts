@@ -5,6 +5,7 @@ import {
   indicativeQuote,
   triggerFromEvent,
   outcomeFromEvent,
+  isGoalQuestionKind,
   POINTS_RAKE,
   type FeedEvent,
   type GameState,
@@ -36,12 +37,12 @@ import type {
  * pending bets, reveal queue) plus a `placeBet` action, and runs in two
  * interchangeable modes:
  *
- *   OFFLINE (default, zero backend)
+ *   OFFLINE (Profile → Demo match, zero backend)
  *     SimMatch (the "feed") + a local MarketEngine. On every tick we:
  *       sim.due(now) ─▶ triggerFromEvent ─▶ engine.openMarket ─▶ runBots
  *       at lockAt:      engine.lock
- *       on goal/miss:   engine.resolve(outcomeFromEvent(ev))
- *     The attack and its resolving goal/miss are correlated by meta.sequenceId,
+ *       on goal/miss:   engine.resolve (kind-aware YES/NO, not blind VOID)
+ *     The attack and its resolving goal/miss are correlated by meta.sequenceId.
  *     so we resolve the RIGHT market even if events overlap. This mirrors
  *     index.html exactly, but every number now flows through @golazo/core's pool
  *     math, and the human's bet is a real `engine.placeBet` — so the engine's
@@ -103,9 +104,30 @@ export interface GameFeedApi extends GameFeedVM {
   clearToast: () => void;
 }
 
-/** Belt-and-braces: if a locked market's resolving event never shows (it always
- *  does in the sim), VOID it after this so money is refunded, never stuck. */
-const OFFLINE_RESOLVE_SAFETY_MS = 8000;
+/**
+ * Offline demo resolution — mirrors the live engine where possible. The sim
+ * correlates resolver events by sequenceId (no ESPN lag), so a miss on a corner
+ * market is a confident NO, not a stuck lock → VOID.
+ */
+function offlineOutcomeForEvent(
+  ev: FeedEvent,
+  kind: string,
+): Outcome | null {
+  if (isGoalQuestionKind(kind)) {
+    if (ev.type === 'goal') return 'YES';
+    if (ev.type === 'miss' || ev.type === 'play_end') return 'NO';
+    return null;
+  }
+  if (kind === 'penalty_awarded') {
+    if (ev.type === 'penalty') return 'YES';
+    return null;
+  }
+  if (kind === 'red_card_given') {
+    if (ev.type === 'red_card') return 'YES';
+    return null;
+  }
+  return outcomeFromEvent(ev, kind) === 'YES' ? 'YES' : null;
+}
 
 let _betSeq = 0;
 const betRowId = () =>
@@ -358,7 +380,26 @@ export function useGameFeed(): GameFeedApi {
     let bots: BotRunner | null = null;
     // sequenceId -> marketId, so a later goal/miss resolves the right market.
     const seqToMarket = new Map<string, string>();
-    let safetyTimer: ReturnType<typeof setTimeout> | null = null;
+    let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const clearDeadlineTimer = () => {
+      if (deadlineTimer) {
+        clearTimeout(deadlineTimer);
+        deadlineTimer = null;
+      }
+    };
+
+    const scheduleDeadlineNo = (marketId: string) => {
+      clearDeadlineTimer();
+      const live = engine.get(marketId);
+      if (!live) return;
+      const delay = Math.max(0, live.resolveAt - Date.now());
+      deadlineTimer = setTimeout(() => {
+        deadlineTimer = null;
+        const m = engine.get(marketId);
+        if (m && m.status === 'locked') engine.resolve(marketId, 'NO');
+      }, delay);
+    };
 
     // Engine -> UI: every pool change (bot OR human bet) re-flattens the VM so
     // odds + the split bar move live.
@@ -370,6 +411,7 @@ export function useGameFeed(): GameFeedApi {
     // Engine -> UI: a resolved/void market produces the reveal + clears the card.
     const offResolve = engine.on("resolve", (m) => {
       if (cancelled || !m.settlement) return;
+      clearDeadlineTimer();
       recordClosedMarket(m);
       bots?.stop();
       const r = buildReveal(m, m.settlement);
@@ -386,10 +428,7 @@ export function useGameFeed(): GameFeedApi {
       bots?.stop(); // no more crowd money once betting closes
       patchMarket(m.id, { phase: "locked" });
       setCommentary("Bets are in. Here it comes…");
-      safetyTimer = setTimeout(() => {
-        const live = engine.get(m.id);
-        if (live && live.status === "locked") engine.resolve(m.id, "VOID");
-      }, OFFLINE_RESOLVE_SAFETY_MS);
+      scheduleDeadlineNo(m.id);
     };
 
     const handleEvent = (ev: FeedEvent) => {
@@ -403,9 +442,6 @@ export function useGameFeed(): GameFeedApi {
         setGame({ ...sim.state });
       }
 
-      // Lifecycle flips: half time, full time, and the next kickoff must reach
-      // the UI so the match screen can show/clear its HT + FT states. The looping
-      // sim cycles through these each match.
       if (
         ev.type === "final" ||
         ev.type === "halftime" ||
@@ -414,31 +450,49 @@ export function useGameFeed(): GameFeedApi {
         setGame({ ...sim.state });
       }
 
-      // (a) Does this event RESOLVE the correlated market? (goal/miss + seqId)
-      const outcome = outcomeFromEvent(ev);
+      if (ev.type === "final" && openMarket) {
+        const m = engine.get(openMarket.id);
+        if (m && (m.status === "open" || m.status === "locked")) {
+          clearDeadlineTimer();
+          engine.resolve(openMarket.id, "VOID");
+        }
+      }
+
+      // (a) Correlated resolver (goal/miss/play_end) for the market this seq opened.
       const seqId =
         typeof ev.meta?.sequenceId === "string"
           ? ev.meta.sequenceId
           : undefined;
-      if (outcome && seqId) {
+      if (seqId) {
         const marketId = seqToMarket.get(seqId);
         if (marketId) {
           const m = engine.get(marketId);
-          if (m && (m.status === "open" || m.status === "locked"))
-            engine.resolve(marketId, outcome);
+          if (m && (m.status === "open" || m.status === "locked")) {
+            const decision = offlineOutcomeForEvent(ev, m.kind);
+            if (decision) {
+              clearDeadlineTimer();
+              engine.resolve(marketId, decision);
+            }
+          }
           seqToMarket.delete(seqId);
+          return;
         }
-        return;
       }
 
       // (b) Is this a BETTABLE moment? Open a market (only one card at a time).
       if (openMarket) return;
       const trigger = triggerFromEvent(ev, ctx);
       if (!trigger) return;
-      const m = engine.openMarket(trigger);
+      const m = engine.openMarket({
+        ...trigger,
+        // Tight deadline backup — sim resolves ~1–2s after lock, not 60s.
+        resolveWindowMs: trigger.windowMs + 5_000,
+      });
       openMarket = m;
       openMarketIdRef.current = m.id;
-      if (seqId) seqToMarket.set(seqId, m.id);
+      const openerSeq =
+        typeof ev.meta?.sequenceId === "string" ? ev.meta.sequenceId : undefined;
+      if (openerSeq) seqToMarket.set(openerSeq, m.id);
       upsertMarket({ ...toVM(m), subtitle: ev.text });
       bots = runBots(engine, m); // crowd starts trickling in
     };
@@ -469,12 +523,20 @@ export function useGameFeed(): GameFeedApi {
       ) {
         lockMarket(openMarket);
       }
+
+      if (openMarket) {
+        const live = engine.get(openMarket.id);
+        if (live && live.status === "locked" && now >= live.resolveAt) {
+          clearDeadlineTimer();
+          engine.resolve(openMarket.id, "NO");
+        }
+      }
     }, 120);
 
     return () => {
       cancelled = true;
       clearInterval(loop);
-      if (safetyTimer) clearTimeout(safetyTimer);
+      clearDeadlineTimer();
       bots?.stop();
       offUpdate();
       offResolve();
