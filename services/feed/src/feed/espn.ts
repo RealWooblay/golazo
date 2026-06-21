@@ -56,8 +56,20 @@ import type { FeedEvent, FeedEventType, GameState, Team, TeamRef } from '@golazo
 import type { FeedSource } from './index';
 import { COMMENTARY_PATTERNS, classifyResolverCommentary, isPostShotCommentary, isPreShotBuildUp } from '../ai/marketTuning';
 
+/**
+ * ±1-day window (UTC) so the scoreboard reliably includes the IN-PROGRESS match.
+ * ESPN's default board (no `dates`) drops live games — it returns the day's
+ * FINISHED matches but omits the in-progress one — so we MUST pass an explicit
+ * date range or the feed never locks onto the live game.
+ */
+function espnDateWindow(): string {
+  const ymd = (ms: number) =>
+    new Date(ms).toISOString().slice(0, 10).replace(/-/g, '');
+  const now = Date.now();
+  return `${ymd(now - 86_400_000)}-${ymd(now + 86_400_000)}`;
+}
 const SCOREBOARD = (league: string) =>
-  `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/scoreboard`;
+  `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/scoreboard?dates=${espnDateWindow()}`;
 const SUMMARY = (league: string, eventId: string, lang?: string) => {
   const base = `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/summary?event=${encodeURIComponent(eventId)}&region=us`;
   return lang ? `${base}&lang=${lang}` : base;

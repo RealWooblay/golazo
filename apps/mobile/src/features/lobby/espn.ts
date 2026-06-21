@@ -19,8 +19,17 @@ import { flagFor } from "./flags";
 /** Default league: the FIFA World Cup. Others: 'eng.1', 'esp.1', 'usa.1'… */
 export const WORLD_CUP_LEAGUE = "fifa.world";
 
+/** ±1-day window (UTC). ESPN's default scoreboard drops the IN-PROGRESS match
+ *  (returns finished games but omits the live one), so we pass an explicit date
+ *  range — otherwise live fixtures never show in the lobby. */
+function espnDateWindow(): string {
+  const ymd = (ms: number) =>
+    new Date(ms).toISOString().slice(0, 10).replace(/-/g, "");
+  const now = Date.now();
+  return `${ymd(now - 86_400_000)}-${ymd(now + 86_400_000)}`;
+}
 const SCOREBOARD = (league: string) =>
-  `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/scoreboard`;
+  `https://site.api.espn.com/apis/site/v2/sports/soccer/${league}/scoreboard?dates=${espnDateWindow()}`;
 
 const FETCH_TIMEOUT_MS = 8000;
 
