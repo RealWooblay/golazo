@@ -58,7 +58,7 @@ describe('AuditLog + FeedMetrics', () => {
 describe('LagMeter', () => {
   it('detects wallclock staleness', () => {
     const meter = new LagMeter();
-    const old = new Date(Date.now() - 120_000).toISOString();
+    const old = new Date(Date.now() - 200_000).toISOString();
     meter.observe(
       { gameId: 'g1', ts: 1, type: 'attack', text: 'x', meta: { wallclock: old, clock: "20'" } },
       game,

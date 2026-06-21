@@ -80,7 +80,7 @@ describe('resolveDeadlineMs — soccer-realistic locked countdowns', () => {
 
   it('gives momentum time-boxed markets their own windows', () => {
     expect(resolveDeadlineMs('shot_in_window')).toBe(90_000);
-    expect(resolveDeadlineMs('score_in_window')).toBe(180_000);
+    expect(resolveDeadlineMs('score_in_window')).toBe(120_000);
   });
 });
 

@@ -93,7 +93,10 @@ export function bettingClosesAt(lockAt: number, windowMs = 10_000): number {
 export function staleLagThreshold(type: FeedEvent['type']): number {
   const k = knobFor(type);
   if (!k) return 1.25;
-  return 0.5;
+  // 0.75min (was 0.5) — on the ~2-min-lagged ESPN feed an event's match-clock stamp
+  // legitimately trails the live scoreboard clock, so 30s was rejecting genuinely
+  // fresh corners/free kicks as "stale". The wallclock gate is the real backstop.
+  return 0.75;
 }
 
 /** True when a moment is too far behind live play to open fairly. */
@@ -136,7 +139,7 @@ export const STOPPAGE_EXTEND_MS = 90_000;
  * market off ANY weighted event. Lower than the old shot threshold (3.5) to drive
  * more volume; the markets are pure wall-clock windows so they resolve cleanly.
  */
-export const MOMENTUM_OPEN_THRESHOLD = 3.0;
+export const MOMENTUM_OPEN_THRESHOLD = 2.2;
 
 /**
  * Post-lock "score window" — how long the user waits for YES evidence once betting
@@ -166,7 +169,9 @@ export function resolveDeadlineMs(kind: string): number {
       return 90_000;
     case 'score_in_window':
       // Momentum time-box: "to score in the next N minutes?" — a longer window.
-      return 180_000;
+      // Trimmed 180s→120s so one score market can't monopolise the window slot for
+      // 3 minutes (more momentum-market throughput).
+      return 120_000;
     case 'goal_in_stoppage':
       return STOPPAGE_EXTEND_MS;
     case 'goal_in_extra_time':

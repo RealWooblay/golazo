@@ -14,7 +14,7 @@ import type { Payout } from './parimutuel';
 import { settle, type Pool, type Settlement } from './parimutuel';
 
 /** Starting tab for a new points player. */
-export const POINTS_START_BALANCE = 5000;
+export const POINTS_START_BALANCE = 500;
 /** Minimum balance before a free top-up is offered. */
 export const POINTS_REFILL_THRESHOLD = 50;
 /** Cooldown between paper-trade refills (ms). */
