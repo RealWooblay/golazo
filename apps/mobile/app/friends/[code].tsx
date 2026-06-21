@@ -142,7 +142,8 @@ export default function FriendsRoomScreen() {
   const hapticsOn = store.session.hapticsOn;
   const chain = useChain();
   const bal = useDisplayBalance();
-  const stakeFormat = makeStakeFormatter(bal.chain);
+  // Friends rooms stake real (devnet) SOL → always money, never paper points.
+  const stakeFormat = makeStakeFormatter(false);
 
   const room = useFriendsRoomContext();
 

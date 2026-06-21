@@ -122,7 +122,7 @@ export function MarketCard({
         <Chip
           label={
             locked
-              ? `LOCKED · ${resolveLabel} to score`
+              ? `LOCKED · ${resolveLabel} left`
               : closing
                 ? "CLOSING · no more bets"
                 : "LIVE · bet now"

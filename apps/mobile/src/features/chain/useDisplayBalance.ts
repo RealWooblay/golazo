@@ -60,7 +60,9 @@ export function useDisplayBalance(): DisplayBalance {
   };
 }
 
-/** Format a stake (held in $ "units", $1 each) for display — dollars in every mode. */
-export function makeStakeFormatter(_chain: boolean): (units: number) => string {
-  return money;
+/** Format a stake (held in "units") for display — POINTS in paper mode, dollars
+ *  otherwise. Pass `bal.points` so the card's stake / pool / odds match the
+ *  header's currency (was always `$`, which made paper mode read as money). */
+export function makeStakeFormatter(points: boolean): (units: number) => string {
+  return points ? pts : money;
 }
