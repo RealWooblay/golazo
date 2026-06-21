@@ -7,7 +7,6 @@ import {
   isDefensiveSetPiece,
   isStalePlay,
   resolveDeadlineMs,
-  resolvePolicyFor,
   scaledResolveWindowMs,
   staleLagThreshold,
 } from './marketTuning';
@@ -59,10 +58,10 @@ describe('goalAlreadyHappenedForChance', () => {
 });
 
 describe('scaledResolveWindowMs', () => {
-  it('stretches open-play opener windows modestly in late game', () => {
-    const w = scaledResolveWindowMs('dangerous_attack', game("70'"));
-    expect(w).toBeGreaterThanOrEqual(55_000);
-    expect(w).toBeLessThanOrEqual(75_000);
+  it('stretches set-piece opener windows modestly in late game', () => {
+    const w = scaledResolveWindowMs('corner', game("70'"));
+    expect(w).toBeGreaterThanOrEqual(85_000);
+    expect(w).toBeLessThanOrEqual(115_000);
   });
 });
 
@@ -74,6 +73,11 @@ describe('resolveDeadlineMs — soccer-realistic locked countdowns', () => {
     // lone market slot frees for the next moment (often a set-piece).
     expect(resolveDeadlineMs('chance_from_play')).toBe(30_000);
     expect(resolveDeadlineMs('red_card_given')).toBe(120_000);
+  });
+
+  it('gives momentum time-boxed markets their own windows', () => {
+    expect(resolveDeadlineMs('shot_in_window')).toBe(90_000);
+    expect(resolveDeadlineMs('score_in_window')).toBe(180_000);
   });
 });
 
@@ -111,12 +115,5 @@ describe('free-kick location gating — attacking only, never defensive', () => 
   it('opens Spanish attacking-zone free kicks, rejects defensive ones', () => {
     expect(isAwardedFreeKick(fk('Vinícius ha recibido una falta en campo contrario.'))).toBe(true);
     expect(isAwardedFreeKick(fk('ha recibido una falta en zona defensiva.'))).toBe(false);
-  });
-});
-
-describe('event-driven resolution policy', () => {
-  it('goal markets use event_only policy', () => {
-    expect(resolvePolicyFor('goal_from_free_kick')).toBe('event_only');
-    expect(resolvePolicyFor('penalty_awarded')).toBe('timeout_no');
   });
 });

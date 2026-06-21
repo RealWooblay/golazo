@@ -75,9 +75,23 @@ export interface SimReport {
   skipped: number;
   /** Markets still open/locked when the match ended — these are BUGS (hung). */
   hung: number;
+  /** Events the pipeline processed (the bar broadcasts once per event). */
+  eventCount: number;
+  /** Momentum bar values broadcast this run (should be ~one per event). */
+  momentumEvents: number;
+  /** Number of times the bar changed state — home/away/neutral (proves it MOVES). */
+  momentumFlips: number;
+  /** Distinct non-neutral sides the bar reached (both = it isn't stuck on one team). */
+  momentumSides: number;
   byOutcome: Record<string, number>;
   byKind: Record<string, number>;
-  markets: Array<{ question: string; kind: string; status: string; outcome?: string }>;
+  markets: Array<{
+    question: string;
+    kind: string;
+    status: string;
+    team?: string;
+    outcome?: string;
+  }>;
 }
 
 /** Summarize what the orchestrator produced over a full simulated match. */
@@ -93,18 +107,37 @@ export function summarize(orchestrator: Orchestrator): SimReport {
     const oc = mk.settlement?.outcome ?? (mk.status === 'void' ? 'VOID' : 'PENDING');
     byOutcome[oc] = (byOutcome[oc] ?? 0) + 1;
   }
+
+  // Momentum bar liveness: count broadcasts, how often the bar CHANGED state
+  // (home/away/neutral — proves it moves), and how many distinct sides it reached
+  // (both = the bar isn't stuck leaning one team the whole match).
+  const bars = orchestrator.simMomentum();
+  let momentumFlips = 0;
+  const sidesSeen = new Set<'home' | 'away'>();
+  let prev: 'home' | 'away' | null | undefined;
+  for (const b of bars) {
+    if (b.bar !== null) sidesSeen.add(b.bar);
+    if (prev !== undefined && b.bar !== prev) momentumFlips++;
+    prev = b.bar;
+  }
+
   return {
     opened: m.marketsOpened,
     resolved: m.marketsResolved,
     voided: m.marketsVoided,
     skipped: m.marketsSkipped,
     hung,
+    eventCount: m.eventsProcessed,
+    momentumEvents: bars.length,
+    momentumFlips,
+    momentumSides: sidesSeen.size,
     byOutcome,
     byKind,
     markets: markets.map((mk: Market) => ({
       question: mk.question,
       kind: mk.kind,
       status: mk.status,
+      ...(mk.team ? { team: mk.team } : {}),
       ...(mk.settlement?.outcome ? { outcome: mk.settlement.outcome } : {}),
     })),
   };
@@ -117,6 +150,8 @@ export function printReport(label: string, r: SimReport): void {
     `\n=== SIM: ${label} ===\n` +
       `opened=${r.opened} resolved=${r.resolved} voided=${r.voided} ` +
       `skipped=${r.skipped} hung=${r.hung}\n` +
+      `events=${r.eventCount} momentumEvents=${r.momentumEvents} ` +
+      `momentumFlips=${r.momentumFlips} momentumSides=${r.momentumSides}\n` +
       `byKind=${JSON.stringify(r.byKind)}\n` +
       `byOutcome=${JSON.stringify(r.byOutcome)}\n` +
       r.markets

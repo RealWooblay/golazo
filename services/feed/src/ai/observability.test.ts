@@ -1,10 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { CommentaryBuffer } from './commentaryBuffer';
-import { fuzzyCandidates, seqKey } from './batchJudge';
 import { AuditLog } from '../observability/auditLog';
 import { FeedMetrics } from '../observability/metrics';
 import { LagMeter } from '../observability/lagMeter';
-import type { FeedEvent, GameState } from '@golazo/core';
+import type { GameState } from '@golazo/core';
 
 const game: GameState = {
   gameId: 'g1',
@@ -45,17 +44,6 @@ describe('CommentaryBuffer', () => {
   });
 });
 
-describe('fuzzyCandidates', () => {
-  it('collects fuzzy types only', () => {
-    const events: FeedEvent[] = [
-      { gameId: 'g1', ts: 1, type: 'attack', text: 'Push', meta: { sequenceId: 'a1' } },
-      { gameId: 'g1', ts: 2, type: 'goal', text: 'Goal', meta: { sequenceId: 'g1' } },
-      { gameId: 'g1', ts: 3, type: 'free_kick', text: 'FK', meta: { sequenceId: 'f1' } },
-    ];
-    expect(fuzzyCandidates(events).map((e) => e.type)).toEqual(['attack', 'free_kick']);
-  });
-});
-
 describe('AuditLog + FeedMetrics', () => {
   it('records and caps entries', () => {
     const log = new AuditLog();
@@ -76,18 +64,5 @@ describe('LagMeter', () => {
       game,
     );
     expect(meter.isWallclockStale()).toBe(true);
-  });
-});
-
-describe('seqKey', () => {
-  it('uses sequenceId when present', () => {
-    const ev: FeedEvent = {
-      gameId: 'g1',
-      ts: 1,
-      type: 'attack',
-      text: 'x',
-      meta: { sequenceId: 'espn_cm_es_42' },
-    };
-    expect(seqKey(ev)).toBe('espn_cm_es_42');
   });
 });

@@ -45,21 +45,21 @@ describe('MomentumTracker', () => {
 });
 
 describe('momentumMarketSpec', () => {
-  it('asks for a GOAL under heavy pressure, a SHOT when merely building', () => {
-    const goal = momentumMarketSpec('Türkiye', MOMENTUM_GOAL_THRESHOLD + 1, 'miss', 0);
-    expect(goal.kind).toBe('goal_from_open_play');
-    expect(goal.question).toMatch(/GOAL|SCORE/);
+  it('asks for a SCORE window under heavy pressure, a SHOT window when merely building', () => {
+    const score = momentumMarketSpec('Türkiye', MOMENTUM_GOAL_THRESHOLD + 1, 0);
+    expect(score.kind).toBe('score_in_window');
+    expect(score.question).toMatch(/SCORE|GOAL/);
 
-    const shot = momentumMarketSpec('Türkiye', MOMENTUM_SHOT_THRESHOLD + 0.1, 'other', 0);
-    expect(shot.kind).toBe('chance_from_play');
+    const shot = momentumMarketSpec('Türkiye', MOMENTUM_SHOT_THRESHOLD + 0.1, 0);
+    expect(shot.kind).toBe('shot_in_window');
     expect(shot.question).toMatch(/SHOT/);
   });
 
   it('rotates phrasing so a long spell never repeats the same line', () => {
     const i = MOMENTUM_GOAL_THRESHOLD + 1;
-    const a = momentumMarketSpec('Türkiye', i, 'miss', 0).question;
-    const b = momentumMarketSpec('Türkiye', i, 'miss', 1).question;
-    const c = momentumMarketSpec('Türkiye', i, 'miss', 2).question;
+    const a = momentumMarketSpec('Türkiye', i, 0).question;
+    const b = momentumMarketSpec('Türkiye', i, 1).question;
+    const c = momentumMarketSpec('Türkiye', i, 2).question;
     expect(new Set([a, b, c]).size).toBeGreaterThan(1);
   });
 });

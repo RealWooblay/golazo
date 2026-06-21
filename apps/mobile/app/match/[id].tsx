@@ -70,7 +70,13 @@ export default function MatchScreen() {
       return () => setFocused(false);
     }, []),
   );
-  const ticking = focused && !!market && market.phase === "open";
+  // Tick through BOTH open and locked: the locked card shows the resolve-window
+  // countdown, so the clock must keep running after lock or it freezes on a
+  // static number (the "countdown not counting down" bug).
+  const ticking =
+    focused &&
+    !!market &&
+    (market.phase === "open" || market.phase === "locked");
   const now = useTick(80, ticking);
 
   // Team identity (crests + colors) — from the lobby fixture we came through, or

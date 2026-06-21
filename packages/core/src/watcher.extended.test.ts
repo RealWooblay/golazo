@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { outcomeFromEvent, kindSettlesNoOnTimeout, triggerFromEvent } from './watcher';
+import { outcomeFromEvent, triggerFromEvent } from './watcher';
 
 describe('extended market resolution', () => {
   const ev = (type: string, team?: 'home' | 'away') => ({
@@ -10,9 +10,10 @@ describe('extended market resolution', () => {
     ...(team ? { team } : {}),
   });
 
-  it('VAR penalty market resolves on penalty award or denial', () => {
+  it('VAR penalty market resolves YES on a penalty award (NO comes from the deadline)', () => {
     expect(outcomeFromEvent(ev('penalty'), 'penalty_awarded')).toBe('YES');
-    expect(outcomeFromEvent(ev('var_penalty_denied'), 'penalty_awarded')).toBe('NO');
+    // An event can only ever cause YES — a denial settles NO via the deadline sweep.
+    expect(outcomeFromEvent(ev('var_penalty_denied'), 'penalty_awarded')).toBe(null);
     expect(outcomeFromEvent(ev('goal'), 'penalty_awarded')).toBe(null);
   });
 
@@ -54,19 +55,13 @@ describe('extended market resolution', () => {
     expect(triggerFromEvent(ev('red_card_incident', 'home'), { homeName: 'Scotland' })).toBeNull();
   });
 
-  it('kindSettlesNoOnTimeout covers VAR + play markets, never goal questions', () => {
-    expect(kindSettlesNoOnTimeout('penalty_awarded')).toBe(true);
-    expect(kindSettlesNoOnTimeout('red_card_given')).toBe(true);
-    expect(kindSettlesNoOnTimeout('chance_from_play')).toBe(true);
-    expect(kindSettlesNoOnTimeout('goal_from_free_kick')).toBe(false);
-    expect(kindSettlesNoOnTimeout('goal_from_open_play')).toBe(false);
-    expect(kindSettlesNoOnTimeout('penalty_scored')).toBe(false);
-  });
-
-  it('play_end and set-piece shot resolve goal markets', () => {
-    expect(outcomeFromEvent(ev('play_end'), 'goal_from_free_kick')).toBe('NO');
-    expect(outcomeFromEvent(ev('shot'), 'goal_from_free_kick')).toBe('NO');
+  it('events never settle a goal market NO — only the deadline sweep does', () => {
+    // ONE RULE: an event can only ever cause YES. A play_end / non-goal shot no
+    // longer pre-empts a genuinely-late goal that arrives in a later poll.
+    expect(outcomeFromEvent(ev('play_end'), 'goal_from_free_kick')).toBe(null);
+    expect(outcomeFromEvent(ev('shot'), 'goal_from_free_kick')).toBe(null);
     expect(outcomeFromEvent(ev('shot'), 'goal_from_open_play')).toBe(null);
+    expect(outcomeFromEvent(ev('goal'), 'goal_from_free_kick')).toBe('YES');
   });
 
   describe('no team → no market (never render "They …")', () => {
@@ -94,12 +89,9 @@ describe('extended market resolution', () => {
       expect(outcomeFromEvent(ev('miss', 'home'), 'chance_from_play')).toBe('YES');
     });
 
-    it('resolves NO when the play ends (possession lost / cleared)', () => {
-      expect(outcomeFromEvent(ev('play_end', 'home'), 'chance_from_play')).toBe('NO');
-    });
-
-    it('settles NO on the countdown timer (a fizzled move = no shot)', () => {
-      expect(kindSettlesNoOnTimeout('chance_from_play')).toBe(true);
+    it('does NOT settle from a play_end event — a fizzled move settles NO via the deadline', () => {
+      // NO is written in exactly one place (the deadline sweep), never from an event.
+      expect(outcomeFromEvent(ev('play_end', 'home'), 'chance_from_play')).toBe(null);
     });
 
     it('open-play attack triggers open this fast market kind', () => {

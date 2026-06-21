@@ -7,44 +7,38 @@
 import type { FeedEvent, FeedEventType, GameState, MarketTrigger, Team } from '@golazo/core';
 import { parseClockKey } from '../feed/espn';
 
-export type MarketTier = 'set_piece' | 'fuzzy';
-export type OpenableType =
-  | 'penalty'
-  | 'corner'
-  | 'free_kick'
-  | 'dangerous_attack'
-  | 'attack'
-  | 'var_check';
+export type MarketTier = 'set_piece';
+export type OpenableType = 'penalty' | 'corner' | 'free_kick' | 'var_check';
 
 /** Everything we know about ONE kind of bettable moment. */
 export interface MarketTypeKnob {
-  /** set_piece → rules open it instantly (inherently a chance). fuzzy → the AI judges + scores. */
+  /** set_piece → rules open it instantly (inherently a chance). No AI gating. */
   tier: MarketTier;
   /** How long betting stays OPEN before the market locks (must close before the play resolves). */
   betWindowMs: number;
   /** After lock, how long to wait for a goal/miss before settling the goal-question NO. */
   resolveWindowMs: number;
-  /** fuzzy only: minimum AI confidence (0..1) to open. set_piece ignores this. */
-  minConfidence: number;
 }
 
 /**
  * Per-type knobs. To make a moment more/less bettable, or change its window,
- * edit the numbers here — nothing else.
+ * edit the numbers here — nothing else. All openable moments are now rule-driven
+ * set-pieces (the fuzzy AI-judged open-play path was deleted; its volume is now
+ * the momentum time-boxed markets opened in the orchestrator).
  *
  * resolveWindowMs must cover ESPN's reporting delay (often 30–60s on the free
  * feed). Too short → a real goal lands after we've already settled NO.
  */
 export const MARKET_TYPES: Record<OpenableType, MarketTypeKnob> = {
-  penalty: { tier: 'set_piece', betWindowMs: 12_000, resolveWindowMs: 50_000, minConfidence: 0 },
-  corner: { tier: 'set_piece', betWindowMs: 12_000, resolveWindowMs: 90_000, minConfidence: 0 },
-  free_kick: { tier: 'fuzzy', betWindowMs: 12_000, resolveWindowMs: 90_000, minConfidence: 0.55 },
-  // Open-play build-up — AI-judged; actual locked countdown uses resolveDeadlineMs(kind).
-  dangerous_attack: { tier: 'fuzzy', betWindowMs: 10_000, resolveWindowMs: 60_000, minConfidence: 0.35 },
-  attack: { tier: 'fuzzy', betWindowMs: 10_000, resolveWindowMs: 60_000, minConfidence: 0.3 },
+  penalty: { tier: 'set_piece', betWindowMs: 12_000, resolveWindowMs: 50_000 },
+  corner: { tier: 'set_piece', betWindowMs: 12_000, resolveWindowMs: 90_000 },
+  // A free kick is a set piece like any other — if one is awarded and the slot is
+  // free, open a market. The only free kick we DON'T open is a clearly defensive /
+  // own-half one (filtered in the watcher); everything else just opens, no AI needed.
+  free_kick: { tier: 'set_piece', betWindowMs: 12_000, resolveWindowMs: 90_000 },
   // VAR reviews take real time (often 60–120s + feed lag) — a short window made
   // card/penalty markets settle NO before the decision was even reported. Wait it out.
-  var_check: { tier: 'set_piece', betWindowMs: 14_000, resolveWindowMs: 120_000, minConfidence: 0 },
+  var_check: { tier: 'set_piece', betWindowMs: 14_000, resolveWindowMs: 120_000 },
 };
 
 export function knobFor(type: FeedEvent['type']): MarketTypeKnob | undefined {
@@ -91,8 +85,8 @@ export function bettingClosesAt(lockAt: number, windowMs = 10_000): number {
 /** Max feed lag we'll still open a market for — set-pieces must be timely. */
 export function staleLagThreshold(type: FeedEvent['type']): number {
   const k = knobFor(type);
-  if (!k) return 1;
-  return k.tier === 'set_piece' ? 0.5 : 1.25;
+  if (!k) return 1.25;
+  return 0.5;
 }
 
 /** True when a moment is too far behind live play to open fairly. */
@@ -127,12 +121,15 @@ export function scaledResolveWindowMs(type: FeedEvent['type'], game: GameState):
   return Math.round(knob.resolveWindowMs * f);
 }
 
-/** How long after lock we wait before VOIDing an unresolved goal-question (never auto-NO). */
-export const MAX_PENDING_GOAL_MS = 2 * 60_000;
-/** Min match-clock gap before the same team gets another set-piece market. */
-export const SET_PIECE_OPEN_COOLDOWN_MIN = 2.5;
 /** Extra time added when subs/injury/VAR delay the match. */
 export const STOPPAGE_EXTEND_MS = 90_000;
+
+/**
+ * MOMENTUM VOLUME KNOB — minimum leader intensity to open a momentum time-boxed
+ * market off ANY weighted event. Lower than the old shot threshold (3.5) to drive
+ * more volume; the markets are pure wall-clock windows so they resolve cleanly.
+ */
+export const MOMENTUM_OPEN_THRESHOLD = 3.0;
 
 /**
  * Post-lock "score window" — how long the user waits for YES evidence once betting
@@ -157,30 +154,17 @@ export function resolveDeadlineMs(kind: string): number {
     case 'penalty_awarded':
     case 'red_card_given':
       return 120_000; // VAR review
+    case 'shot_in_window':
+      // Momentum time-box: "a shot this spell?" — a short pressing window.
+      return 90_000;
+    case 'score_in_window':
+      // Momentum time-box: "to score in the next N minutes?" — a longer window.
+      return 180_000;
     case 'goal_in_extra_time':
       return 25 * 60_000;
     default:
       return 75_000;
   }
-}
-
-export type ResolvePolicy = 'event_only' | 'timeout_no';
-
-/** Goal markets resolve only on feed evidence; cards/VAR keep short timeout NO. */
-export function resolvePolicyFor(kind: string): ResolvePolicy {
-  if (kind.startsWith('goal_from') || kind === 'penalty_scored') return 'event_only';
-  return 'timeout_no';
-}
-
-/** Live match clock as fractional minutes from the scoreboard. */
-export function liveClockMinutes(game: GameState): number {
-  const liveC = parseClockKey(game.clock);
-  return liveC.base + liveC.stopp / 100;
-}
-
-/** Absolute pending cap before VOID (goal questions — never guess NO). */
-export function maxPendingMs(kind: string): number {
-  return resolveDeadlineMs(kind);
 }
 
 /**
@@ -249,16 +233,13 @@ export function isAwardedFreeKick(ev: FeedEvent): boolean {
   return false;
 }
 
-/** Goal-scoring moments outrank card/VAR markets when both arrive together. */
+/** Goal-scoring set-pieces outrank card/VAR markets when both arrive together. */
 export function openerPriority(type: FeedEvent['type']): number {
   switch (type) {
     case 'corner':
     case 'penalty':
     case 'free_kick':
       return 0;
-    case 'dangerous_attack':
-    case 'attack':
-      return 1;
     case 'var_check':
       return 2;
     default:
@@ -335,7 +316,7 @@ export function isMomentumBuildUp(text: string): boolean {
 // COMMENTARY PATTERNS — phrase → event type. First match wins (most dangerous
 // first). Only PRE-SHOT build-up; post-shot lines are rejected in classifyCommentary.
 // ───────────────────────────────────────────────────────────────────────────
-export const COMMENTARY_PATTERNS: { type: OpenableType; re: RegExp }[] = [
+export const COMMENTARY_PATTERNS: { type: FeedEventType; re: RegExp }[] = [
   // VAR review — opens a VAR market. The SUBJECT (penalty vs red card) is decided
   // downstream from the text by varReviewTrigger; here we just detect "a review".
   {
