@@ -45,6 +45,36 @@ const COMMITMENT: Commitment = 'confirmed';
 /** System-account rent-exempt minimum (0-byte data). Claims must leave this in the vault. */
 const VAULT_RENT_MIN_LAMPORTS = 890_880;
 
+/**
+ * Solvency top-up retry budget. We re-read the pool and re-top-up a few times
+ * before settling so a real-money `place_bet` that confirmed on the client but
+ * is still propagating to our RPC is included in the gross we fund for. Mirrors
+ * the client claim loop's patience (6 × 2.5s) with headroom to spare.
+ */
+const MAX_SOLVENCY_ATTEMPTS = 4;
+const SOLVENCY_RETRY_MS = 1500;
+
+/**
+ * Lamports the operator must keep above any top-up — headroom for transaction
+ * fees so a top-up never drains the operator into a state where it can no longer
+ * lock/resolve. ~0.01 SOL ≈ 2000 signatures at 5000 lamports each.
+ */
+const OPERATOR_FEE_RESERVE_LAMPORTS = 10_000_000n;
+
+/**
+ * Below this, a market side has NO genuine opponent — only the house seed. A real-money
+ * YES/NO market that is one-sided (real stake = pool − seed ≤ this on EITHER side) is
+ * VOIDED (refund all) instead of resolved, so a lone bettor never wins ~nothing (own
+ * stake back, seed-diluted) nor loses everything to the house seed. 50k lamports
+ * (0.00005 SOL) sits far below any real stake but above rounding noise.
+ * MAINNET: pair with a program-side min-stake (none exists today) so a dust-above bet
+ * can't masquerade as a real opponent to force a resolve — see the mainnet checklist.
+ */
+const ONE_SIDED_DUST_LAMPORTS = 50_000n;
+
+/** MarketStatus discriminant for `Locked` (state.rs enum order: Open=0, Locked=1, …). */
+const MARKET_STATUS_LOCKED = 1;
+
 /** PDA seed prefixes — mirror `instructions::seeds` in the program. */
 const SEED_MARKET = Buffer.from('market');
 const SEED_VAULT = Buffer.from('vault');
@@ -403,53 +433,224 @@ export class FeedChainOperator {
     }
   }
 
-  /** Settle on-chain: YES/NO via resolve_market, VOID via void_market. */
+  /**
+   * Settle on-chain: YES/NO via resolve_market, VOID via void_market.
+   *
+   * CRITICAL ordering: we make the vault solvent FIRST and only resolve if it
+   * succeeded. Resolving an insolvent vault would brick every winner's claim
+   * (InsufficientVaultFunds) with no way back, so if the top-up can't cover the
+   * pool we leave the market Open/Locked and bail — a later settle (or operator
+   * intervention) can retry. The off-chain market is the source of truth for the
+   * UX either way, so an unresolved on-chain mirror is the safe failure mode.
+   */
   async settleMarket(
     marketSeed: number | bigint,
     outcome: 'YES' | 'NO' | 'VOID',
   ): Promise<TxResult | null> {
-    await this.ensureVaultSolvency(marketSeed);
+    const solvent = await this.ensureVaultSolvency(marketSeed);
+    if (!solvent) {
+      this.warn(
+        'settleMarket',
+        new Error(
+          `vault still short for seed=${marketSeed}; NOT resolving (claims would brick) — left Open/Locked for retry`,
+        ),
+      );
+      return null;
+    }
     if (outcome === 'VOID') return this.voidMarket(marketSeed);
+
+    // NO-COUNTERPARTY GUARD: a real-money YES/NO market with no genuine opponent on a
+    // side must REFUND, not resolve — otherwise the lone bettor either wins ~nothing
+    // (own stake back, diluted by the house seed) or, if they backed the losing side,
+    // loses everything to the seed. We lock first (awaited, so the pool is provably
+    // frozen — unlike the orchestrator's fire-and-forget lock) and only void when we
+    // can CONFIRM one-sidedness on a Locked market; any uncertainty resolves as before.
+    if (await this.isOneSidedRealBook(marketSeed)) {
+      return this.voidMarket(marketSeed);
+    }
     return this.resolveMarket(marketSeed, outcome);
   }
 
   /**
-   * Top up the market vault from the operator when on-chain pool accounting exceeds
-   * actual lamports (deployed program rejects claims with InsufficientVaultFunds).
-   * Also keeps rent-exempt minimum in the vault PDA after payouts.
+   * True when a real-money market lacks a genuine two-sided book — at least one side
+   * holds only the house seed (real stake = pool − seed ≤ dust). Such a market must be
+   * VOIDED (refund) rather than resolved. Locks the market first (idempotent, AWAITED)
+   * so no late bet can change the pool between this read and settlement — this is what
+   * closes the bet/settle race. Returns false (→ resolve as before, NO regression and no
+   * stranding) whenever we cannot PROVE one-sidedness: an unreadable pool, or a market
+   * not confirmed Locked. So we only ever refund when certain.
    */
-  async ensureVaultSolvency(marketSeed: number | bigint): Promise<void> {
-    if (!this.active || !this.operator || !this.programId || !this.connection) return;
+  private async isOneSidedRealBook(marketSeed: number | bigint): Promise<boolean> {
+    // Read first: the orchestrator's flushChainLock usually already Locked the market,
+    // so we avoid a redundant (and log-noisy) lock attempt. Only if it's still Open do
+    // we lock — AWAITED, so the pool is provably frozen — and re-read.
+    let pools = await this.readMarketPools(marketSeed);
+    if (pools && pools.status !== MARKET_STATUS_LOCKED) {
+      await this.lockMarket(marketSeed);
+      pools = await this.readMarketPools(marketSeed);
+    }
+    if (!pools || pools.status !== MARKET_STATUS_LOCKED) return false; // not provably frozen
+    const realYes = pools.poolYes > pools.seedYes ? pools.poolYes - pools.seedYes : 0n;
+    const realNo = pools.poolNo > pools.seedNo ? pools.poolNo - pools.seedNo : 0n;
+    const oneSided = realYes <= ONE_SIDED_DUST_LAMPORTS || realNo <= ONE_SIDED_DUST_LAMPORTS;
+    if (oneSided) {
+      console.log(
+        `[chain] one-sided market seed=${marketSeed} realYes=${realYes} realNo=${realNo} ` +
+          `<= dust ${ONE_SIDED_DUST_LAMPORTS} — VOIDing (refund all, no genuine opponent)`,
+      );
+    }
+    return oneSided;
+  }
 
+  /**
+   * Read pools + seed + lifecycle status from the on-chain Market account. Offsets are
+   * fixed by state.rs field order after the 8-byte Anchor discriminator: status@82,
+   * pool_yes@84, pool_no@92, seed_yes@100, seed_no@108 (Market::SIZE = 118). Returns null
+   * on a short/absent account or transient RPC error (caller treats null as "unknown").
+   */
+  private async readMarketPools(marketSeed: number | bigint): Promise<{
+    poolYes: bigint;
+    poolNo: bigint;
+    seedYes: bigint;
+    seedNo: bigint;
+    status: number;
+  } | null> {
+    if (!this.active || !this.operator || !this.programId || !this.connection) return null;
     try {
-      const authority = this.operator.publicKey;
-      const { marketPda, vaultPda } = this.derive(marketSeed, authority, this.programId);
+      const { marketPda } = this.derive(marketSeed, this.operator.publicKey, this.programId);
+      const info = await this.connection.getAccountInfo(marketPda, COMMITMENT);
+      if (!info?.data || info.data.length < 118) return null; // < Market::SIZE → not a market
+      const d = info.data;
+      return {
+        status: d.readUInt8(82),
+        poolYes: d.readBigUInt64LE(84),
+        poolNo: d.readBigUInt64LE(92),
+        seedYes: d.readBigUInt64LE(100),
+        seedNo: d.readBigUInt64LE(108),
+      };
+    } catch (err) {
+      this.warn('readMarketPools', err);
+      return null;
+    }
+  }
+
+  /**
+   * Ensure the market vault can cover the FULL gross pool plus the rent-exempt
+   * minimum, topping up from the operator if short. Returns `true` once the vault
+   * is provably solvent, `false` if it could not be made so (operator too poor,
+   * transfers kept failing, or RPC unreadable) — in which case the caller MUST
+   * NOT resolve.
+   *
+   * Hardening vs. the naive single-read top-up:
+   *   - retries (re-reading the pool each pass) to catch a still-propagating
+   *     real-money bet that the first read missed — closes the bet/resolve race;
+   *   - never swallows a failed transfer into apparent success — a failure just
+   *     means the loop tries again and, if it never recovers, we return `false`;
+   *   - guards on operator balance so a top-up never drains the fee reserve;
+   *   - no fixed deficit cap — the operator-balance guard is the natural bound,
+   *     and a corrupt over-large read simply exceeds it and returns `false`.
+   *
+   * No-op (`true`) when the operator is inactive or there is no on-chain market
+   * to keep solvent — there is nothing that could brick a claim.
+   */
+  async ensureVaultSolvency(marketSeed: number | bigint): Promise<boolean> {
+    if (!this.active || !this.operator || !this.programId || !this.connection) return true;
+
+    const authority = this.operator.publicKey;
+    const { marketPda, vaultPda } = this.derive(marketSeed, authority, this.programId);
+
+    for (let attempt = 0; attempt < MAX_SOLVENCY_ATTEMPTS; attempt++) {
+      const status = await this.readVaultStatus(marketPda, vaultPda);
+      if (status === 'no-market') return true; // nothing on-chain → nothing to brick
+      if (status === null) {
+        await this.sleep(SOLVENCY_RETRY_MS * (attempt + 1));
+        continue; // transient RPC error — retry
+      }
+
+      const { needed, vaultBal } = status;
+      if (vaultBal >= needed) return true; // solvent
+
+      const deficit = needed - vaultBal;
+
+      // Operator-balance guard: never attempt a transfer we can't cover while
+      // leaving a fee reserve. If the operator is too poor, the vault cannot be
+      // made solvent — fail so the caller does NOT resolve.
+      let opBal: bigint;
+      try {
+        opBal = BigInt(await this.connection.getBalance(authority, COMMITMENT));
+      } catch (err) {
+        this.warn('ensureVaultSolvency.opbal', err);
+        await this.sleep(SOLVENCY_RETRY_MS * (attempt + 1));
+        continue;
+      }
+      if (opBal < deficit + OPERATOR_FEE_RESERVE_LAMPORTS) {
+        this.warn(
+          'ensureVaultSolvency',
+          new Error(
+            `operator ${authority.toBase58().slice(0, 6)}… balance ${opBal} < deficit ${deficit} ` +
+              `+ reserve ${OPERATOR_FEE_RESERVE_LAMPORTS}; cannot fund vault seed=${marketSeed}`,
+          ),
+        );
+        return false;
+      }
+
+      try {
+        const sig = await this.send(
+          SystemProgram.transfer({
+            fromPubkey: authority,
+            toPubkey: vaultPda,
+            lamports: deficit,
+          }),
+          'vaultTopUp',
+        );
+        console.log(`[chain] vault top-up seed=${marketSeed} +${deficit} lamports sig=${sig}`);
+      } catch (err) {
+        // Do NOT swallow into success — log and let the loop re-read/retry. If we
+        // exhaust attempts the final verification below decides solvency.
+        this.warn('ensureVaultSolvency.transfer', err);
+      }
+
+      // Re-read on the next pass to confirm the top-up landed AND fold in any
+      // bet that propagated in the meantime.
+      await this.sleep(SOLVENCY_RETRY_MS);
+    }
+
+    // Attempts exhausted — verify one last time so we only return `true` when the
+    // vault genuinely covers the pool.
+    const finalStatus = await this.readVaultStatus(marketPda, vaultPda);
+    if (finalStatus === 'no-market') return true;
+    if (finalStatus === null) return false;
+    return finalStatus.vaultBal >= finalStatus.needed;
+  }
+
+  /**
+   * Read the vault's lamport balance and the lamports it must hold to be solvent
+   * (gross pool + rent-exempt minimum). Returns `'no-market'` when there is no
+   * on-chain market account, or `null` on a transient RPC error (caller retries).
+   */
+  private async readVaultStatus(
+    marketPda: PublicKey,
+    vaultPda: PublicKey,
+  ): Promise<{ needed: bigint; vaultBal: bigint } | 'no-market' | null> {
+    if (!this.connection) return null;
+    try {
       const [marketInfo, vaultBal] = await Promise.all([
         this.connection.getAccountInfo(marketPda, COMMITMENT),
         this.connection.getBalance(vaultPda, COMMITMENT),
       ]);
-      if (!marketInfo?.data || marketInfo.data.length < 100) return;
-
+      if (!marketInfo?.data || marketInfo.data.length < 100) return 'no-market';
       const d = marketInfo.data;
-      const poolYes = d.readBigUInt64LE(84);
-      const poolNo = d.readBigUInt64LE(92);
-      const gross = poolYes + poolNo;
-      const needed = gross + BigInt(VAULT_RENT_MIN_LAMPORTS);
-      if (BigInt(vaultBal) >= needed) return;
-
-      const deficit = Number(needed - BigInt(vaultBal));
-      if (deficit <= 0 || deficit > 500_000_000) return; // sanity cap 0.5 SOL
-
-      const ix = SystemProgram.transfer({
-        fromPubkey: authority,
-        toPubkey: vaultPda,
-        lamports: deficit,
-      });
-      const sig = await this.send(ix);
-      console.log(`[chain] vault top-up seed=${marketSeed} +${deficit} lamports sig=${sig}`);
+      const gross = d.readBigUInt64LE(84) + d.readBigUInt64LE(92);
+      return { needed: gross + BigInt(VAULT_RENT_MIN_LAMPORTS), vaultBal: BigInt(vaultBal) };
     } catch (err) {
-      this.warn('ensureVaultSolvency', err);
+      this.warn('ensureVaultSolvency.read', err);
+      return null;
     }
+  }
+
+  /** Small awaitable delay used by the solvency retry loop. */
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   // --- internals ------------------------------------------------------------

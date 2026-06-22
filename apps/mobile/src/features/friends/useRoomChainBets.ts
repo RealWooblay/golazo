@@ -40,7 +40,7 @@ export interface UseRoomChainBets {
     stakeUnits: number,
   ) => Promise<boolean>;
   claim: (marketId: string) => Promise<void>;
-  markResolved: (marketIds: Set<string>) => void;
+  markResolved: (outcomes: Map<string, "YES" | "NO" | "VOID">) => void;
   clearError: () => void;
 }
 
@@ -123,6 +123,53 @@ export function useRoomChainBets(
       clearInterval(id);
     };
   }, [enabled, chain, openMarkets, stake]);
+
+  // A market disappearing off-chain is not enough to claim: the Solana mirror may
+  // still be locking/resolving. Poll the actual program account and only enable
+  // the button once it is settled there too.
+  useEffect(() => {
+    if (!enabled || !chain.ready) return;
+    let cancelled = false;
+    const poll = async () => {
+      const updates: Record<string, Partial<ChainBetVM>> = {};
+      for (const b of betsRef.current) {
+        if (b.claimable || b.claimSignature || !b.resolvedOutcome) continue;
+        try {
+          const om = await chain.fetchMarket(b.authority, b.marketSeed);
+          if (!om || (om.status !== "Resolved" && om.status !== "Void")) continue;
+          const outcome =
+            om.status === "Void"
+              ? "VOID"
+              : om.outcome === "Yes"
+                ? "YES"
+                : om.outcome === "No"
+                  ? "NO"
+                  : b.resolvedOutcome;
+          updates[b.offChainMarketId] = {
+            claimable: true,
+            resolvedOutcome: outcome,
+            won: outcome !== "VOID" && b.side === outcome,
+          };
+        } catch {
+          /* rpc blip */
+        }
+      }
+      if (cancelled || Object.keys(updates).length === 0) return;
+      setBets((prev) =>
+        prev.map((b) =>
+          updates[b.offChainMarketId]
+            ? { ...b, ...updates[b.offChainMarketId] }
+            : b,
+        ),
+      );
+    };
+    void poll();
+    const id = setInterval(poll, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [enabled, chain]);
 
   const waitForTwin = useCallback(
     async (authority: string, marketSeed: number): Promise<boolean> => {
@@ -235,6 +282,12 @@ export function useRoomChainBets(
       setBetFor(marketId, { claiming: true });
       setError(null);
       try {
+        const market = await chain.fetchMarket(bet.authority, bet.marketSeed);
+        if (!market || (market.status !== "Resolved" && market.status !== "Void")) {
+          setError("Settlement still finalizing on devnet — claim unlocks in a moment.");
+          setBetFor(marketId, { claiming: false });
+          return;
+        }
         let res = null as Awaited<ReturnType<UseChain["claim"]>> | null;
         let lastErr: unknown = null;
         for (let i = 0; i < 6 && !res; i++) {
@@ -262,13 +315,18 @@ export function useRoomChainBets(
     [chain, setBetFor],
   );
 
-  const markResolved = useCallback((marketIds: Set<string>) => {
+  const markResolved = useCallback((outcomes: Map<string, "YES" | "NO" | "VOID">) => {
     setBets((prev) =>
-      prev.map((b) =>
-        marketIds.has(b.offChainMarketId) && !b.claimable
-          ? { ...b, claimable: true }
-          : b,
-      ),
+      prev.map((b) => {
+        const outcome = outcomes.get(b.offChainMarketId);
+        return outcome && !b.resolvedOutcome
+          ? {
+              ...b,
+              resolvedOutcome: outcome,
+              won: outcome !== "VOID" && b.side === outcome,
+            }
+          : b;
+      }),
     );
   }, []);
 

@@ -36,6 +36,13 @@ function isPlausibleSolanaAddress(addr: string): boolean {
   return BASE58_RE.test(addr.trim());
 }
 
+/**
+ * Reserve a little SOL for the network fee so a "Max" cash-out can't request the user's
+ * ENTIRE balance and revert (a System transfer pays the ~5000-lamport fee on TOP of the
+ * sent amount, so draining to zero always fails). Intentionally generous vs the real fee.
+ */
+const WITHDRAW_FEE_HEADROOM_SOL = 0.002;
+
 /** Local flow snapshot for the LIVE on-chain send (the sandbox path uses
  *  useWallet().flow; this drives the same <FlowStatus> for the real transfer). */
 interface LiveFlow {
@@ -81,12 +88,17 @@ export default function WithdrawModal() {
   const pasteTouched = cryptoAddr.length > 0;
   const pasteInvalid = pasteTouched && !isPlausibleSolanaAddress(cryptoAddr);
   const needsAddr = !isPlausibleSolanaAddress(cryptoAddr);
-  const canSubmit = numeric > 0 && !overBalance && !needsAddr;
+  // LIVE mode but the chain wallet isn't connected yet (e.g. Privy sign-in pending):
+  // block the cash-out so it can never silently fall through to the play-money
+  // sandbox — a real-money user must finish connecting first.
+  const liveNotReady = wallet.isLive && !chain.ready;
+  const canSubmit = numeric > 0 && !overBalance && !needsAddr && !liveNotReady;
 
   const caption = useMemo(() => {
+    if (liveNotReady) return "Finishing wallet connection… one moment.";
     if (overBalance) return `That's more than your ${money(balance)} balance.`;
     return `${money(balance)} available`;
-  }, [overBalance, balance]);
+  }, [liveNotReady, overBalance, balance]);
 
   const close = () => {
     wallet.resetFlow();
@@ -103,8 +115,33 @@ export default function WithdrawModal() {
       hapticIf(hapticsOn, "error");
       return;
     }
-    const sol = numeric * SOL_PER_UNIT;
-    setLiveFlow({ status: "pending", amount: numeric });
+    // The wallet can race-disconnect between the button gate and the tap; surface a
+    // clean message rather than letting withdrawSol's requireCtx throw raw.
+    if (!chain.ready) {
+      setLiveFlow({
+        status: "error",
+        amount: numeric,
+        message: "Your wallet isn't connected yet — try again in a moment.",
+      });
+      hapticIf(hapticsOn, "error");
+      return;
+    }
+    // Cap the amount so the network fee is always covered. Cap in DISPLAY units first,
+    // then convert to SOL, and reflect the ACTUAL sent amount everywhere (pending +
+    // success) so a "Max" cash-out never silently sends less than the UI claims.
+    const headroomUnits = WITHDRAW_FEE_HEADROOM_SOL / SOL_PER_UNIT;
+    const sendUnits = Math.min(numeric, Math.max(0, balance - headroomUnits));
+    if (sendUnits <= 0) {
+      setLiveFlow({
+        status: "error",
+        amount: numeric,
+        message: "Not enough to cover the network fee — leave a little for gas.",
+      });
+      hapticIf(hapticsOn, "error");
+      return;
+    }
+    const sol = sendUnits * SOL_PER_UNIT;
+    setLiveFlow({ status: "pending", amount: sendUnits });
     hapticIf(hapticsOn, "select");
     try {
       const res = await chain.withdrawSol(cryptoAddr, sol);
@@ -113,7 +150,7 @@ export default function WithdrawModal() {
       const txUrl = res?.explorerUrl || chain.explorerAddressUrl(cryptoAddr);
       setLiveFlow({
         status: "success",
-        amount: numeric,
+        amount: sendUnits,
         message: "Sent on-chain. Your balance is updated.",
         txUrl,
       });
@@ -121,7 +158,7 @@ export default function WithdrawModal() {
     } catch (e) {
       setLiveFlow({
         status: "error",
-        amount: numeric,
+        amount: sendUnits,
         message:
           e instanceof Error
             ? e.message

@@ -48,6 +48,8 @@ export interface ChainBetVM {
   betUrl: string;
   /** True once the off-chain market has resolved → the on-chain bet can claim. */
   claimable: boolean;
+  resolvedOutcome?: "YES" | "NO" | "VOID";
+  won?: boolean;
   claiming: boolean;
   claimSignature?: string;
   claimUrl?: string;

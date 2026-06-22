@@ -33,7 +33,6 @@ import {
   LiveScoreboard,
   MarketCard,
   MatchFriendsBar,
-  ResultsRail,
   RevealCard,
   WaitingCard,
 } from "@/features/match/components";
@@ -125,13 +124,19 @@ export default function MatchScreen() {
   // AND the stake chips / over-balance check (so nothing reads "$" while you bet SOL).
   const bal = useDisplayBalance();
   const stakeFormat = makeStakeFormatter(bal.points);
-  const resolvedMarketIds = useMemo(
-    () => new Set(historicMarkets.map((m) => m.marketId)),
+  const resolvedMarketOutcomes = useMemo(
+    () =>
+      new Map(
+        historicMarkets.map((m) => [
+          m.marketId,
+          m.outcome,
+        ] as const),
+      ),
     [historicMarkets],
   );
   useEffect(() => {
-    if (chainMode) chainBets.markResolved(resolvedMarketIds);
-  }, [chainMode, chainBets.markResolved, resolvedMarketIds]);
+    if (chainMode) chainBets.markResolved(resolvedMarketOutcomes);
+  }, [chainMode, chainBets.markResolved, resolvedMarketOutcomes]);
 
   // ── Win confetti: fire when a reveal is acknowledged as a win ───────────────
   const [confettiTrigger, setConfettiTrigger] = useState(0);
@@ -263,27 +268,38 @@ export default function MatchScreen() {
             />
           </View>
         ) : halftime ? (
-          <View style={styles.gutter}>
-            <WaitingCard
-              title="Half time"
-              body="Grab a breather — second-half markets are moments away."
-            />
-          </View>
+          <>
+            <View style={styles.gutter}>
+              <StakeBar
+                stake={store.stake}
+                onPick={store.setStake}
+                customStake={customStake}
+                onCustom={setCustomStake}
+                balance={bal.balanceInUnits}
+                format={stakeFormat}
+                hapticsEnabled={hapticsOn}
+              />
+            </View>
+            <View style={styles.gutter}>
+              <WaitingCard
+                title="Half time"
+                body="Grab a breather — second-half markets are moments away."
+              />
+            </View>
+          </>
         ) : (
           <>
-            {openMarkets.length > 0 ? (
-              <View style={styles.gutter}>
-                <StakeBar
-                  stake={store.stake}
-                  onPick={store.setStake}
-                  customStake={customStake}
-                  onCustom={setCustomStake}
-                  balance={bal.balanceInUnits}
-                  format={stakeFormat}
-                  hapticsEnabled={hapticsOn}
-                />
-              </View>
-            ) : null}
+            <View style={styles.gutter}>
+              <StakeBar
+                stake={store.stake}
+                onPick={store.setStake}
+                customStake={customStake}
+                onCustom={setCustomStake}
+                balance={bal.balanceInUnits}
+                format={stakeFormat}
+                hapticsEnabled={hapticsOn}
+              />
+            </View>
 
             {openMarkets.map((m) => {
               const liveOdds = chainBets.getLiveOdds(m.id);
@@ -337,11 +353,20 @@ export default function MatchScreen() {
               );
             })}
 
-            {lockedMarkets.map((m) => (
-              <View key={m.id} style={styles.gutter}>
-                <LockedStrip market={m} now={now} />
-              </View>
-            ))}
+            {lockedMarkets.map((m) => {
+              const chainBet = chainBets.getBet(m.id);
+              const pendingBet = pendingByMarket[m.id];
+              const betLabel = chainBet
+                ? `You: ${chainBet.side} · ${stakeFormat(chainBet.stakeSol / SOL_PER_UNIT)}`
+                : pendingBet
+                  ? `You: ${pendingBet.side} · ${stakeFormat(pendingBet.stake)}`
+                  : undefined;
+              return (
+                <View key={m.id} style={styles.gutter}>
+                  <LockedStrip market={m} now={now} betLabel={betLabel} />
+                </View>
+              );
+            })}
 
             {openMarkets.length === 0 &&
             lockedMarkets.length === 0 &&
@@ -371,15 +396,12 @@ export default function MatchScreen() {
         ))}
 
         <View style={styles.gutter}>
-          <ClosedMarketsList markets={historicMarkets} catchingUp={catchingUp} />
-        </View>
-
-        {/* recent results rail — YOUR bets on this match only */}
-        <View style={styles.gutter}>
-          <ResultsRail
-            bets={
+          <ClosedMarketsList
+            markets={historicMarkets}
+            userBets={
               game ? store.bets.filter((b) => b.gameId === game.gameId) : []
             }
+            catchingUp={catchingUp}
           />
         </View>
       </View>

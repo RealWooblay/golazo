@@ -86,6 +86,9 @@ describe('classifyCommentary — opportunity detection from prose', () => {
     expect(classifyCommentary('VAR overturns the penalty — no penalty given.')).toBe(
       'var_penalty_denied',
     );
+    expect(classifyCommentary('VAR check complete: corner overturned, goal kick.')).toBe(
+      'var_penalty_denied',
+    );
   });
 
   it('detects Spanish ESPN build-up and set-pieces (Brazil/Haiti)', () => {
@@ -210,6 +213,9 @@ describe('EspnFeed.rotateToNextLive — game-to-game handoff', () => {
     const feed = new EspnFeed({ league: 'fifa.world', fetchImpl, replayHistory: true, commentaryLang: 'en' });
     await feed.start();
     (feed as unknown as { game: { state: GameState } }).game.state.status = 'final';
+    // Rotation is debounced: a single 'final' poll is an ESPN flicker, not a real
+    // match end. Only sustained final (>=3 consecutive polls) triggers a switch.
+    (feed as unknown as { finalPolls: number }).finalPolls = 3;
 
     expect(feed.shouldRotate()).toBe(true);
     expect(await feed.rotateToNextLive()).toBe(true);

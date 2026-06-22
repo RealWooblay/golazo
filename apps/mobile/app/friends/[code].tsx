@@ -215,18 +215,21 @@ export default function FriendsRoomScreen() {
     activeMarketVMs,
   );
 
-  const resolvedMarketIds = useMemo(
+  const resolvedMarketOutcomes = useMemo(
     () =>
-      new Set(
+      new Map(
         (state?.markets ?? [])
           .filter((m) => m.status === "resolved" || m.status === "void")
-          .map((m) => m.id),
+          .map((m) => [
+            m.id,
+            m.status === "void" ? "VOID" : (m.outcome ?? "VOID"),
+          ] as const),
       ),
     [state?.markets],
   );
   useEffect(() => {
-    if (chainMode) roomChain.markResolved(resolvedMarketIds);
-  }, [chainMode, resolvedMarketIds, roomChain.markResolved]);
+    if (chainMode) roomChain.markResolved(resolvedMarketOutcomes);
+  }, [chainMode, resolvedMarketOutcomes, roomChain.markResolved]);
 
   const teams = useMemo(() => resolveTeams(game?.gameId, game ?? null), [game]);
 
@@ -402,7 +405,7 @@ export default function FriendsRoomScreen() {
           </View>
         ) : null}
 
-        {!fulltime && !waiting && chainMode && activeMarkets.length > 0 ? (
+        {!fulltime && !waiting && chainMode ? (
           <View style={styles.gutter}>
             <StakeBar
               stake={store.stake}

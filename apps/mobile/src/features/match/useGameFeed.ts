@@ -807,8 +807,10 @@ export function useGameFeed(): GameFeedApi {
               if (!pointsMode) break;
               const p = pendingByMarketRef.current[msg.marketId];
               if (p && p.marketId === msg.marketId) {
-                const won =
-                  msg.outcome !== "VOID" && msg.payout > p.stake;
+                // WIN is side===outcome — NOT payout>stake. In a one-sided pool (a solo
+                // tester, zero points rake) a winning payout EQUALS the stake, so
+                // payout>stake wrongly read every win as a MISS.
+                const won = msg.outcome !== "VOID" && p.side === msg.outcome;
                 const payout =
                   msg.outcome === "VOID" ? p.stake : msg.payout;
                 enqueueReveal({
