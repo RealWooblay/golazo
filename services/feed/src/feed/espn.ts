@@ -299,8 +299,13 @@ export class EspnFeed implements FeedSource {
    * True when this match is over and we should look for the next live game.
    * Status is refreshed on every poll via the scoreboard.
    */
+  /** Consecutive polls the CURRENT match has reported final — debounces ESPN's
+   *  flickery 'post' blips so one blip can't trigger a spurious match-switch that
+   *  VOIDs every live market (the "my real shot just voided" bug). */
+  private finalPolls = 0;
+
   shouldRotate(): boolean {
-    return this.game?.state.status === 'final';
+    return this.finalPolls >= 3;
   }
 
   /**
@@ -312,10 +317,10 @@ export class EspnFeed implements FeedSource {
     const currentId = this.game?.eventId;
     const live = (board?.events ?? []).filter((e) => e.status?.type?.state === 'in' && e.id);
 
-    let pick = live.find((e) => e.id !== currentId);
-    if (!pick && this.game?.state.status === 'final') pick = live[0];
+    // Only ever rotate to a DIFFERENT live event. Never re-pick the current id (a
+    // flicker), which would needlessly void + reopen every market.
+    const pick = live.find((e) => e.id !== currentId);
     if (!pick?.id) return false;
-    if (pick.id === currentId && this.game?.state.status !== 'final') return false;
 
     const parsed = parseGameState(pick);
     if (!parsed) return false;
@@ -323,6 +328,7 @@ export class EspnFeed implements FeedSource {
     this.seen.clear();
     this.momentsSeen.clear();
     this.synthSeq = 0;
+    this.finalPolls = 0;
     this.game = { eventId: pick.id, ...parsed };
     return true;
   }
@@ -500,7 +506,12 @@ export class EspnFeed implements FeedSource {
     const ev = board?.events?.find((e) => e.id === this.game!.eventId);
     if (!ev) return;
     const parsed = parseGameState(ev);
-    if (parsed) this.game.state = parsed.state;
+    if (parsed) {
+      this.game.state = parsed.state;
+      // Count consecutive 'final' polls so shouldRotate() debounces ESPN blips.
+      if (parsed.state.status === 'final') this.finalPolls += 1;
+      else this.finalPolls = 0;
+    }
   }
 
   /**
@@ -669,6 +680,23 @@ export function classifyCommentary(text: string): FeedEventType | undefined {
   // must NOT land here — it routes to var_check below and opens a RED-card market.
   if (
     /\b(no penalty|penalty (?:overturned|cancelled|rescinded|denied)|not a penalty|var[^.]*\bno penalty\b)\b/i.test(
+      t,
+    )
+  ) {
+    return 'var_penalty_denied';
+  }
+  // Awarded set-piece later invalidated by VAR / correction. The orchestrator
+  // maps this to VOID for the affected corner/free-kick/penalty-scored market,
+  // while a VAR "penalty awarded?" review still maps it to NO.
+  if (
+    /\b(no corner|not a corner|corner (?:overturned|cancelled|rescinded)|var[^.]*corner[^.]*(?:overturned|cancelled|rescinded)|goal kick after (?:a )?var)\b/i.test(
+      t,
+    )
+  ) {
+    return 'var_penalty_denied';
+  }
+  if (
+    /\b(no free[- ]?kick|not a free[- ]?kick|free[- ]?kick (?:overturned|cancelled|rescinded))\b/i.test(
       t,
     )
   ) {

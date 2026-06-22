@@ -25,7 +25,8 @@ use crate::state::{Market, MarketStatus, Outcome};
 #[derive(Accounts)]
 #[instruction(market_seed: u64)]
 pub struct InitializeMarket<'info> {
-    /// The operator. Pays rent for the Market account and optional seed.
+    /// The operator. Pays rent for the Market account, the vault's rent-exempt
+    /// minimum (always), and any optional seed.
     #[account(mut)]
     pub authority: Signer<'info>,
 
@@ -70,21 +71,33 @@ pub fn handler(
         .checked_add(seed_no)
         .ok_or_else(|| error!(GolazoError::MathOverflow))?;
 
-    // --- Optional seed deposit: authority -> vault ------------------------
-    // Zero is the normal pure-parimutuel path. Nonzero stays available for QA
-    // or operator-seeded markets, but it is not required for payout solvency.
-    if total_seed > 0 {
-        system_program::transfer(
-            CpiContext::new(
-                ctx.accounts.system_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.authority.to_account_info(),
-                    to: ctx.accounts.vault.to_account_info(),
-                },
-            ),
-            total_seed,
-        )?;
-    }
+    // --- Fund the vault: rent-exemption (always) + optional seed ----------
+    // The vault is a data-less, system-owned PDA. We ALWAYS move the 0-byte
+    // rent-exempt minimum into it here, at init and paid by the operator, so the
+    // vault is rent-exempt BEFORE any bet or claim. This is required because
+    // `claim.rs` reserves `Rent::minimum_balance(0)` in the vault on every
+    // payout; without this pre-funding that reservation bites into the prize
+    // pool and bricks the last winner's claim (InsufficientVaultFunds).
+    //
+    // Rent funding is DELIBERATELY decoupled from `seed_yes/seed_no`: the seed
+    // (when nonzero) is added to BOTH the vault AND the pools below, so seeding
+    // the pools must never double as paying for rent — that would inject phantom
+    // liquidity and dilute real bettors' parimutuel shares. Here we add rent on
+    // top of the seed in one transfer; only the seed ever touches the pools.
+    let rent_min = Rent::get()?.minimum_balance(0);
+    let vault_funding = rent_min
+        .checked_add(total_seed)
+        .ok_or_else(|| error!(GolazoError::MathOverflow))?;
+    system_program::transfer(
+        CpiContext::new(
+            ctx.accounts.system_program.to_account_info(),
+            Transfer {
+                from: ctx.accounts.authority.to_account_info(),
+                to: ctx.accounts.vault.to_account_info(),
+            },
+        ),
+        vault_funding,
+    )?;
 
     // --- Initialize Market state -----------------------------------------
     let market = &mut ctx.accounts.market;

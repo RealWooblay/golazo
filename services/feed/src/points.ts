@@ -23,6 +23,18 @@ import {
 } from '@golazo/core';
 import { bettingClosesAt } from './ai/marketTuning';
 
+/**
+ * House liquidity (in points) seeded into EACH paper market when it opens, split by
+ * the model's YES probability. Without it a solo bettor faces an EMPTY pool: a
+ * winning bet only refunds the stake (there's no opposing money to win FROM) and the
+ * displayed odds are fictional. The seed gives every market a real two-sided book
+ * from bet one — live odds that actually match the payout — without ever crediting a
+ * real player: the seed lives only in the pool totals, never as a `bets` entry, so on
+ * settle the house's losing-side stake funds the winners and its winning-side stake is
+ * simply absorbed. Sized for a 500-point bankroll and 10–100 stakes.
+ */
+export const HOUSE_SEED_POINTS = 150;
+
 export interface PointsEffects {
   state?: { userId: string; balance: number; rank: number };
   leaderboard?: PointsPlayer[];
@@ -105,10 +117,15 @@ export class PointsManager {
 
   onMarketOpen(m: Market): void {
     if (this.markets.has(m.id)) return;
+    // Seed house liquidity split by the model's YES prob so the book is two-sided
+    // and a winner is paid real points out of the house's opposing stake. Clamp the
+    // prob so neither side is ever starved (which would mean absurd one-sided odds).
+    const p = Math.min(0.85, Math.max(0.15, m.trueProb || 0.5));
+    const seedYes = Math.round(HOUSE_SEED_POINTS * p);
     this.markets.set(m.id, {
       id: m.id,
       status: 'open',
-      pool: { yes: 0, no: 0 },
+      pool: { yes: seedYes, no: HOUSE_SEED_POINTS - seedYes },
       openedAt: m.openedAt,
       lockAt: m.lockAt,
       windowMs: m.windowMs,

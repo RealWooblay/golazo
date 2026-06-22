@@ -28,6 +28,15 @@ const WEIGHTS: Partial<Record<FeedEvent['type'], number>> = {
 const DECAY = 0.8;
 
 /**
+ * Per-heartbeat-tick decay. `observe()` decays ONLY per event, so during an event-free
+ * lull the reading would FREEZE at its last value — and the heartbeat opener would then
+ * keep printing "they're pressing!" markets off pressure that has actually died. A gentle
+ * per-tick relaxation lets a quiet spell drift the reading back toward neutral (~80s to
+ * fall a strong 3.0 read below the 1.6 open threshold), so markets track CURRENT play.
+ */
+const TICK_DECAY = 0.98;
+
+/**
  * Pressure needed before the agent will spin up a market off momentum alone.
  * The GOAL bar sits high: a momentum "— GOAL?" market almost always resolves NO
  * (a pressing spell rarely yields a goal inside the window), so we reserve it for
@@ -35,7 +44,7 @@ const DECAY = 0.8;
  * "— SHOT?" instead. This stops the board filling with un-winnable "GOAL next?" spam.
  */
 export const MOMENTUM_SHOT_THRESHOLD = 3.0; // legacy alias → see MOMENTUM_OPEN_THRESHOLD
-export const MOMENTUM_GOAL_THRESHOLD = 5.5; // sustained siege → "to score in N min?"
+export const MOMENTUM_GOAL_THRESHOLD = 5.0; // sustained siege → "to score in N min?"
 
 /** Lean past this (0..1 toward a side) lights up the client momentum bar. */
 const BAR_LEAN_MIN = 0.58;
@@ -55,6 +64,19 @@ export interface MomentumRead {
 export class MomentumTracker {
   private home = 0;
   private away = 0;
+
+  /** Wipe the tally — called on a match switch so momentum never carries over. */
+  reset(): void {
+    this.home = 0;
+    this.away = 0;
+  }
+
+  /** Relax the reading one heartbeat tick toward neutral (called each live tick) so a
+   *  quiet spell doesn't keep a stale-high reading that prints false-pressure markets. */
+  decayTick(): void {
+    this.home *= TICK_DECAY;
+    this.away *= TICK_DECAY;
+  }
 
   /** Fold one event into the running momentum. */
   observe(ev: FeedEvent): void {
@@ -118,6 +140,10 @@ export function momentumMarketSpec(
       `${teamName} laying siege — do they SCORE in the next ${mins} ${unit}?`,
       `${teamName} piling it on — GOAL in the next ${mins} ${unit}?`,
       `${teamName} relentless — to SCORE in the next ${mins} ${unit}?`,
+      `${teamName} have the pressure — GOAL in the next ${mins} ${unit}?`,
+      `${teamName} are camped high — SCORE in the next ${mins} ${unit}?`,
+      `${teamName} turning the screw — SCORE in the next ${mins} ${unit}?`,
+      `${teamName} with wave after wave — SCORE in the next ${mins} ${unit}?`,
     ];
     return {
       kind: 'score_in_window',
@@ -130,6 +156,12 @@ export function momentumMarketSpec(
     `${teamName} building — get a SHOT away soon?`,
     `${teamName} pushing forward — a SHOT this spell?`,
     `${teamName} pressing — another SHOT incoming?`,
+    `${teamName} finding rhythm — do they create a SHOT?`,
+    `${teamName} pinning them back — SHOT before it clears?`,
+    `${teamName} on the front foot — a SHOT coming?`,
+    `${teamName} keeping it alive — do they test the keeper?`,
+    `${teamName} probing again — SHOT from this spell?`,
+    `${teamName} carrying momentum — a SHOT soon?`,
   ];
   return {
     kind: 'shot_in_window',

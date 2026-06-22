@@ -53,21 +53,52 @@ const goal = (team: Team, id: string, name: string, seq: string): FeedEvent =>
     meta: { player: { id, name }, clock: "30'", sequenceId: seq, source: 'espn.keyEvent' },
   });
 
-describe('player markets (will <player> score?)', () => {
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
+const playerEvent = (
+  type: 'shot' | 'miss',
+  team: Team,
+  id: string,
+  name: string,
+  seq: string,
+): FeedEvent =>
+  ev(type, team, {
+    text: `${name} ${type === 'shot' ? 'has a shot saved' : 'misses from range'}.`,
+    meta: { player: { id, name }, clock: "30'", sequenceId: seq, source: 'espn.keyEvent' },
+  });
 
-  it('opens off the in-form scorer and resolves YES only when THAT player scores', async () => {
+describe('player markets (will <player> score?)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('does not open a player market from a goal alone', async () => {
     const feed = new StubFeed([
-      [goal('home', '297328', 'Galarza', 'g1')], // builds Galarza's form (+4)
+      [goal('home', '297328', 'Galarza', 'g1')],
+      [ev('attack', 'home', { text: 'home on the ball' })],
+    ]);
+    const orch = new Orchestrator(simConfig(), feed);
+
+    await orch.simTick();
+    await orch.simTick();
+    expect(orch.simMarkets().find((m) => m.kind === 'player_to_score')).toBeUndefined();
+    await orch.stop();
+  });
+
+  it('opens off sustained player shot threat and resolves YES only when THAT player scores', async () => {
+    const feed = new StubFeed([
+      [playerEvent('shot', 'home', '297328', 'Galarza', 's1')],
+      [playerEvent('miss', 'home', '297328', 'Galarza', 's2')],
       [ev('attack', 'home', { text: 'home on the ball' })], // build-up → opens the player market
       [],
       [goal('home', '297328', 'Galarza', 'g2')], // Galarza scores again → YES
     ]);
     const orch = new Orchestrator(simConfig(), feed);
 
-    await orch.simTick(); // goal → form
-    await orch.simTick(); // build-up → player market opens
+    await orch.simTick();
+    await orch.simTick();
+    await orch.simTick();
     const opened = orch.simMarkets().find((m) => m.kind === 'player_to_score');
     expect(opened, 'a player_to_score market should open for the in-form scorer').toBeTruthy();
     expect(opened!.question).toContain('Galarza');
@@ -86,13 +117,15 @@ describe('player markets (will <player> score?)', () => {
 
   it('does NOT resolve YES when a DIFFERENT player scores', async () => {
     const feed = new StubFeed([
-      [goal('home', '297328', 'Galarza', 'g1')],
+      [playerEvent('shot', 'home', '297328', 'Galarza', 's1')],
+      [playerEvent('miss', 'home', '297328', 'Galarza', 's2')],
       [ev('attack', 'home')],
       [],
       [goal('home', '999', 'Someone Else', 'g2')], // a different scorer
     ]);
     const orch = new Orchestrator(simConfig(), feed);
 
+    await orch.simTick();
     await orch.simTick();
     await orch.simTick();
     expect(orch.simMarkets().find((m) => m.kind === 'player_to_score')).toBeTruthy();

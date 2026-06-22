@@ -157,6 +157,21 @@ export class MarketEngine {
   }
 
   /**
+   * Move a market's resolution deadline when the driver has real evidence that
+   * the underlying play is still pending. Used for delayed set pieces: betting
+   * stays locked, but the result clock follows the kick instead of guessing NO.
+   */
+  extendResolve(id: string, resolveAt: number): Market {
+    const m = this.must(id);
+    if (m.status === 'resolved' || m.status === 'void') return m;
+    if (resolveAt <= m.resolveAt) return m;
+    m.resolveAt = resolveAt;
+    m.resolveWindowMs = Math.max(0, resolveAt - m.lockAt);
+    this.emit('update', m);
+    return m;
+  }
+
+  /**
    * Resolve a locked (or still-open) market. `VOID` refunds everyone — use it
    * for any ambiguity, feed fault, or timing violation. Real money + doubt =
    * never guess.

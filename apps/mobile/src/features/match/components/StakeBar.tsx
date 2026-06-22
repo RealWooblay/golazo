@@ -64,6 +64,7 @@ export function StakeBar({
 
   return (
     <View style={styles.wrap}>
+      <Text style={styles.label}>YOUR STAKE</Text>
       <View style={styles.row}>
         {presets.map((n) => {
           const active = !editing && stake === n;
@@ -131,6 +132,13 @@ export function StakeBar({
 
 const styles = StyleSheet.create({
   wrap: { gap: spacing.sm },
+  label: {
+    ...type.overline,
+    fontSize: 8,
+    color: colors.textFaint,
+    letterSpacing: 1.2,
+    paddingHorizontal: spacing.xs,
+  },
   row: { flexDirection: "row", gap: spacing.sm },
   chip: {
     flex: 1,

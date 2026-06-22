@@ -139,10 +139,31 @@ export const STOPPAGE_EXTEND_MS = 90_000;
 
 /**
  * MOMENTUM VOLUME KNOB — minimum leader intensity to open a momentum time-boxed
- * market off ANY weighted event. Lower than the old shot threshold (3.5) to drive
- * more volume; the markets are pure wall-clock windows so they resolve cleanly.
+ * market. This is now a KEEP-ALIVE threshold: with the per-tick heartbeat opener +
+ * the 0.98 per-tick decay, a low floor lets a market open whenever ANY decayed leader
+ * still exists, which is what lifts the board from ~43% to ~85% of the match VISIBLE
+ * (measured). It is deliberately low because momentum sits below 1.6 for ~86% of live
+ * time; a higher floor leaves the board dead most of the match. Phrasing stays honest
+ * because the "siege/all over them" lines only fire at MOMENTUM_GOAL_THRESHOLD (5.0) —
+ * a low-intensity open gets the milder "a shot this spell?" wording.
  */
-export const MOMENTUM_OPEN_THRESHOLD = 2.2;
+export const MOMENTUM_OPEN_THRESHOLD = 0.15;
+
+/**
+ * Parallel momentum "window" lanes. The board is BETTABLE only during a market's short
+ * window (then locked 90–120s while it resolves), so a single lane can't keep something
+ * bettable — two lanes (one per team, naturally) roughly double bettable coverage and
+ * keep ~2 markets visible. Bounded so the board never spams.
+ */
+export const MOMENTUM_WINDOW_LANES = 2;
+
+/**
+ * Max concurrent momentum markets ONE team may hold. MUST be 1: the opener only ever
+ * fires for the single current leader, so a higher cap would let the SAME team stack
+ * duplicate same-question markets that resolve in lockstep off one shot. Cap=1 makes
+ * each lane genuinely per-team (home gets one, away gets one).
+ */
+export const MOMENTUM_PER_TEAM_CAP = 1;
 
 /**
  * Post-lock "score window" — how long the user waits for YES evidence once betting
@@ -400,12 +421,10 @@ export interface GameContext {
   isClose: boolean;
 }
 
-/** Parse "45'", "90+3'", "120'", "HT", etc. into structured context. */
+/** Parse "45'", "45+2'", "45'+1'", "90+3'", "HT", etc. into structured context. */
 export function parseGameContext(game: GameState): GameContext {
-  const raw = (game.clock ?? '').trim();
-  const m = raw.match(/(\d+)\s*(?:\+\s*(\d+))?/);
-  const base = m && m[1] ? parseInt(m[1], 10) : 0;
-  const isStoppage = !!(m && m[2]);
+  const { base, stopp } = parseClockKey(game.clock);
+  const isStoppage = stopp > 0;
   let period: Period = 'unknown';
   if (base > 0) {
     if (base <= 45) period = '1H';
@@ -483,6 +502,34 @@ export function periodMarketPhase(game: GameState): PeriodMarketPhase | undefine
   return undefined;
 }
 
+/** Stable pick from a list — same game + phase → same line (tests stay deterministic). */
+function pickPeriodQuestion(variants: string[], seed: string): string {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
+  return variants[Math.abs(h) % variants.length]!;
+}
+
+const HT_STOPPAGE_QUESTIONS = [
+  'Goal before half-time?',
+  'Added time — goal before the whistle?',
+  'Late drama — another goal before HT?',
+  'Stoppage time — will it go in before half-time?',
+];
+
+const FT_STOPPAGE_QUESTIONS = [
+  'Goal before full-time?',
+  'Added time — goal before the whistle?',
+  'Late twist — goal before FT?',
+  'Stoppage time — one more before full-time?',
+];
+
+const ET_LEVEL_QUESTIONS = [
+  'Will there be a goal in extra time?',
+  'Extra time — a goal on the way?',
+  'ET — will someone break the deadlock?',
+  'Added periods — goal incoming?',
+];
+
 /**
  * Build the before-whistle period market trigger when conditions are met, or null.
  * Stoppage questions resolve on HT/FT whistle, never on an announced X-minute timer.
@@ -490,15 +537,15 @@ export function periodMarketPhase(game: GameState): PeriodMarketPhase | undefine
 export function buildPeriodMarketTrigger(game: GameState): MarketTrigger | null {
   if (!PERIOD_MARKET.enabled) return null;
   const ctx = parseGameContext(game);
-  if (!ctx.isClose) return null;
-
   const margin = game.scoreHome - game.scoreAway;
-  if (Math.abs(margin) > PERIOD_MARKET.maxMargin) return null;
 
+  // Added-time (stoppage) markets ALWAYS open — the tensest moment of the half,
+  // regardless of the scoreline. (The extra-time comeback markets below keep the
+  // close-game gate, which only makes sense there.)
   if (ctx.isStoppage && ctx.period === '1H') {
     return {
       gameId: game.gameId,
-      question: 'Goal before half-time?',
+      question: pickPeriodQuestion(HT_STOPPAGE_QUESTIONS, `${game.gameId}:stoppage_1h`),
       kind: 'goal_in_stoppage',
       slot: 'period',
       windowMs: PERIOD_MARKET.betWindowMs,
@@ -509,7 +556,7 @@ export function buildPeriodMarketTrigger(game: GameState): MarketTrigger | null 
   if (ctx.isStoppage && ctx.period === '2H') {
     return {
       gameId: game.gameId,
-      question: 'Goal before full-time?',
+      question: pickPeriodQuestion(FT_STOPPAGE_QUESTIONS, `${game.gameId}:stoppage_2h`),
       kind: 'goal_in_stoppage',
       slot: 'period',
       windowMs: PERIOD_MARKET.betWindowMs,
@@ -518,11 +565,20 @@ export function buildPeriodMarketTrigger(game: GameState): MarketTrigger | null 
   }
 
   if (!ctx.isExtraTime) return null;
+  if (!ctx.isClose) return null;
+  if (Math.abs(margin) > PERIOD_MARKET.maxMargin) return null;
 
   if (margin < 0) {
+    const name = game.home.name;
+    const qs = [
+      `Will ${name} score in extra time?`,
+      `Can ${name} find an equaliser in ET?`,
+      `${name} to score in extra time?`,
+      `ET comeback — will ${name} score?`,
+    ];
     return {
       gameId: game.gameId,
-      question: `Will ${game.home.name} score in extra time?`,
+      question: pickPeriodQuestion(qs, `${game.gameId}:et_home`),
       kind: 'goal_in_extra_time',
       slot: 'period',
       team: 'home',
@@ -531,9 +587,16 @@ export function buildPeriodMarketTrigger(game: GameState): MarketTrigger | null 
     };
   }
   if (margin > 0) {
+    const name = game.away.name;
+    const qs = [
+      `Will ${name} score in extra time?`,
+      `Can ${name} find an equaliser in ET?`,
+      `${name} to score in extra time?`,
+      `ET comeback — will ${name} score?`,
+    ];
     return {
       gameId: game.gameId,
-      question: `Will ${game.away.name} score in extra time?`,
+      question: pickPeriodQuestion(qs, `${game.gameId}:et_away`),
       kind: 'goal_in_extra_time',
       slot: 'period',
       team: 'away',
@@ -543,7 +606,7 @@ export function buildPeriodMarketTrigger(game: GameState): MarketTrigger | null 
   }
   return {
     gameId: game.gameId,
-    question: `Will there be a goal in extra time?`,
+    question: pickPeriodQuestion(ET_LEVEL_QUESTIONS, `${game.gameId}:et_level`),
     kind: 'goal_in_extra_time',
     slot: 'period',
     windowMs: PERIOD_MARKET.betWindowMs,

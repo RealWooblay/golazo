@@ -168,9 +168,13 @@ describe("golazo-parimutuel", () => {
       assert.deepEqual(m.status, { open: {} });
       assert.deepEqual(m.outcome, { none: {} });
 
-      // Vault starts empty in zero-capital mode.
+      // Vault is funded to the 0-byte rent-exempt minimum at init (operator
+      // pays), even with zero seed — so claim.rs's rent reservation never bites
+      // into the prize pool. Pools stay zero; only the vault holds rent.
+      const rentMin =
+        await provider.connection.getMinimumBalanceForRentExemption(0);
       const vaultBal = await provider.connection.getBalance(vault);
-      assert.equal(vaultBal, 0);
+      assert.equal(vaultBal, rentMin);
     });
 
     it("Alice bets YES and grows the YES pool", async () => {

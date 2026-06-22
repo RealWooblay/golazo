@@ -34,6 +34,17 @@ export interface Config {
   aiResolveTimeoutMs: number;
 
   /**
+   * QUESTION ENHANCER (off-hot-path AI that only rewrites market question TEXT). OFF by
+   * default — it re-introduces the Anthropic SDK, so it stays dark until the leaked key
+   * is rotated and AI_ENHANCER=1 is set. Even when on it fails open to templates.
+   */
+  aiEnhancerEnabled: boolean;
+  /** How often the enhancer's slow background generator runs (ms). Far slower than a tick. */
+  aiRefreshMs: number;
+  /** Output-token ceiling per match for the enhancer; exhaustion fails open to templates. */
+  aiMatchTokenBudget: number;
+
+  /**
    * Confidence gate (0..1): a judged (free-kick / open-play) market only opens when
    * the AI's confidence it's a REAL, dangerous, timely chance is at least this.
    * Higher = fewer but higher-quality markets. Default 0.6.
@@ -172,6 +183,9 @@ export const config: Config = {
   aiModel: process.env.AI_MODEL?.trim() || 'claude-haiku-4-5-20251001',
   aiTimeoutMs: num('AI_TIMEOUT_MS', 4000),
   aiResolveTimeoutMs: num('AI_RESOLVE_TIMEOUT_MS', 6000),
+  aiEnhancerEnabled: (process.env.AI_ENHANCER?.trim() || '') === '1',
+  aiRefreshMs: num('AI_REFRESH_MS', 15000),
+  aiMatchTokenBudget: num('AI_MATCH_TOKEN_BUDGET', 120000),
   minConfidence: num('MIN_CONFIDENCE', 0.6),
   feedMode: parseFeedMode(process.env.FEED_MODE?.trim()),
   espnLeague: process.env.ESPN_LEAGUE?.trim() || 'eng.1',

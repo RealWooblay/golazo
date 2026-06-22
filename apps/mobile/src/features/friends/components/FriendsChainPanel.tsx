@@ -39,6 +39,12 @@ function Receipt({
   onClaim: (marketId: string) => void;
 }) {
   const tint = bet.side === "YES" ? colors.yes : colors.no;
+  const result =
+    bet.resolvedOutcome && bet.resolvedOutcome !== "VOID"
+      ? `Result: ${bet.resolvedOutcome} · ${bet.won ? "your side won" : "your side lost"}`
+      : bet.resolvedOutcome === "VOID"
+        ? "Result: VOID · stake refunded"
+        : null;
   return (
     <Surface radius={radius.lg} borderColor={tint} style={styles.receipt}>
       <View style={styles.row}>
@@ -55,6 +61,7 @@ function Receipt({
         <Text style={styles.txLabel}>● bet on-chain</Text>
         <Text style={styles.txView}>view tx ↗</Text>
       </Pressable>
+      {result ? <Text style={styles.result}>{result}</Text> : null}
       {bet.claimSignature ? (
         <Pressable onPress={() => openUrl(bet.claimUrl)} style={styles.txLink}>
           <Text style={[styles.txLabel, { color: colors.gold }]}>
@@ -64,7 +71,7 @@ function Receipt({
         </Pressable>
       ) : bet.claimable ? (
         <Button
-          label="Claim winnings"
+          label={bet.won ? "Claim payout" : "Claim settlement"}
           variant="primary"
           size="md"
           fullWidth
@@ -94,5 +101,6 @@ const styles = StyleSheet.create({
   txLabel: { ...type.caption, color: colors.cyan, fontSize: 11 },
   txView: { ...type.caption, color: colors.textFaint, fontSize: 11 },
   wait: { ...type.caption, color: colors.textFaint, fontSize: 11 },
+  result: { ...type.caption, color: colors.textSecondary, fontSize: 11 },
   claimBtn: { marginTop: spacing.xs },
 });

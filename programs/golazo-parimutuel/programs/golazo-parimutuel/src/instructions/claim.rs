@@ -94,6 +94,21 @@ pub fn handler(ctx: Context<Claim>) -> Result<()> {
 
     // --- Pay out from the vault (if anything is owed) ---------------------
     if amount > 0 {
+        // `initialize_market` funds the vault to the rent-exempt minimum and
+        // every stake lands in the vault, so post-init the vault holds exactly
+        // `rent_min + gross` and `available` below equals the gross pool. Total
+        // winner payouts can never exceed the net pool (<= gross), so this guard
+        // is a never-trip invariant in the normal flow — it only fires if the
+        // vault is *transiently* underfunded (e.g. a real-money bet still
+        // propagating when the operator settled).
+        //
+        // We deliberately keep a HARD revert rather than clamping the payout to
+        // `available` (`amount.min(available)`). Clamping would underpay whoever
+        // claims first during a transient shortfall and permanently strand the
+        // difference, because `bet.claimed` is flipped regardless of the amount
+        // paid. Reverting instead rolls the whole tx back — `bet.claimed` is NOT
+        // persisted — so the client (which already retries) simply re-claims
+        // once the operator top-up lands, and no winner is ever short-changed.
         let rent_min = Rent::get()?.minimum_balance(0);
         let vault_lamports = ctx.accounts.vault.to_account_info().lamports();
         let available = vault_lamports.saturating_sub(rent_min);

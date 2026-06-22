@@ -1,45 +1,98 @@
-import React from "react";
+import React, { useMemo } from "react";
 import { StyleSheet, View } from "react-native";
 import { colors, radius, spacing, type } from "@/theme";
 import { Text } from "@/ui";
 import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
-import type { ClosedMarketVM } from "@/state/types";
+import type { BetRow, ClosedMarketVM } from "@/state/types";
+
+function userResult(
+  m: ClosedMarketVM,
+  bet?: BetRow,
+): "won" | "lost" | "void" | "none" {
+  const side = m.userSide ?? bet?.side;
+  if (!side) return "none";
+  if (m.outcome === "VOID" || bet?.outcome === "VOID") return "void";
+  if (side === m.outcome) return "won";
+  return "lost";
+}
 
 /**
- * Compact historic settled markets — one slim row each, outcome always visible.
- * The most recent live moment uses the big RevealCard instead (excluded upstream).
+ * Your session's settled markets — slim rows with outcome badges. Markets you bet
+ * on get a green (win) or red (loss) border; everything else stays neutral.
  */
 export function ClosedMarketsList({
   markets,
+  userBets = [],
   catchingUp = false,
 }: {
   markets: ClosedMarketVM[];
-  /** Fresh session load — label as catch-up history. */
+  /** Settled bets on this match — used for borders, side labels, and W/L header. */
+  userBets?: BetRow[];
   catchingUp?: boolean;
 }) {
-  const { format } = useDisplayBalance();
+  const { format, signedFormat } = useDisplayBalance();
+  const betByMarket = useMemo(
+    () => new Map(userBets.map((b) => [b.marketId, b] as const)),
+    [userBets],
+  );
+
+  const sessionStats = useMemo(() => {
+    let wins = 0;
+    let losses = 0;
+    for (const m of markets) {
+      const r = userResult(m, betByMarket.get(m.marketId));
+      if (r === "won") wins += 1;
+      else if (r === "lost") losses += 1;
+    }
+    return { wins, losses };
+  }, [markets, betByMarket]);
+
   if (markets.length === 0) return null;
+
+  const played = sessionStats.wins + sessionStats.losses;
+  const header =
+    played > 0
+      ? `YOUR SESSION · ${sessionStats.wins}W ${sessionStats.losses}L`
+      : catchingUp
+        ? "YOUR SESSION · catching up"
+        : "YOUR SESSION";
 
   return (
     <View style={styles.wrap}>
-      <Text style={styles.header}>
-        {catchingUp ? "EARLIER THIS MATCH" : "SESSION MARKETS"}
-      </Text>
+      <Text style={styles.header}>{header}</Text>
       <View style={styles.list}>
         {markets.map((m) => {
+          const bet = betByMarket.get(m.marketId);
+          const result = userResult(m, bet);
           const voided = m.outcome === "VOID";
           const yesWon = m.outcome === "YES";
           const tint = voided ? colors.cyan : yesWon ? colors.yes : colors.no;
           const label = voided ? "VOID" : yesWon ? "YES" : "NO";
+          const side = m.userSide ?? bet?.side;
+          const rowBorder =
+            result === "won"
+              ? styles.rowWon
+              : result === "lost"
+                ? styles.rowLost
+                : null;
 
           return (
-            <View
-              key={m.marketId}
-              style={[styles.row, m.userSide ? styles.rowMine : null]}
-            >
-              <Text style={styles.question} numberOfLines={1}>
-                {m.question}
-              </Text>
+            <View key={m.marketId} style={[styles.row, rowBorder]}>
+              <View style={styles.main}>
+                <Text style={[styles.question, side ? styles.questionMine : null]} numberOfLines={1}>
+                  {m.question}
+                </Text>
+                {side ? (
+                  <Text style={styles.youLine} numberOfLines={1}>
+                    You · {side}
+                    {bet && result !== "none"
+                      ? result === "void"
+                        ? " · refund"
+                        : ` · ${signedFormat(bet.delta)}`
+                      : ""}
+                  </Text>
+                ) : null}
+              </View>
               <View style={styles.meta}>
                 <View style={[styles.badge, { backgroundColor: tint }]}>
                   <Text style={styles.badgeText}>{label}</Text>
@@ -76,13 +129,21 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.hairline,
   },
-  rowMine: { borderColor: colors.glow.yesSoft },
+  rowWon: { borderColor: colors.glow.yesSoft },
+  rowLost: { borderColor: colors.glow.noSoft },
+  main: { flex: 1, gap: 2 },
   question: {
     ...type.caption,
-    flex: 1,
     fontSize: 11.5,
     color: colors.textMuted,
     lineHeight: 14,
+  },
+  questionMine: { color: colors.textSecondary },
+  youLine: {
+    ...type.overline,
+    fontSize: 8.5,
+    color: colors.textFaint,
+    letterSpacing: 0.4,
   },
   meta: { flexDirection: "row", alignItems: "center", gap: 6 },
   badge: {

@@ -55,6 +55,8 @@ import {
   isGoalMomentKind,
   marketSlot,
   MOMENTUM_OPEN_THRESHOLD,
+  MOMENTUM_WINDOW_LANES,
+  MOMENTUM_PER_TEAM_CAP,
   openerPriority,
   knobFor,
   PERIOD_MARKET,
@@ -73,6 +75,8 @@ import {
   momentumMarketSpec,
   type MomentumRead,
 } from './ai/momentum';
+import { QuestionEnhancer } from './ai/enhancer';
+import { CommentaryBuffer } from './ai/commentaryBuffer';
 import { AuditLog } from './observability/auditLog';
 import { FeedMetrics } from './observability/metrics';
 import { LagMeter } from './observability/lagMeter';
@@ -82,14 +86,19 @@ import { createChainOperator, type FeedChainOperator } from './chain';
 import { FeedServer } from './server';
 import { momentKey, parseClockKey } from './feed/espn';
 
-/** Betting window for a momentum-opened market (short — the play is live). */
-const MOMENTUM_BET_WINDOW_MS = 10_000;
+/**
+ * Betting window for a momentum-opened market — kept SHORT (the play is live), but
+ * lifted 10s→20s as the measured sweet spot: meaningfully more bettable time without
+ * abandoning a snappy live window. (True 80% BETTABLE is unreachable with short windows;
+ * 80%+ VISIBLE is — see the keep-alive opener + 2 lanes.)
+ */
+const MOMENTUM_BET_WINDOW_MS = 20_000;
 /**
  * Min gap between momentum-opened markets for the SAME team. Tuned DOWN for volume
  * (momentum time-boxed markets are now the main opener path) — this just stops ONE
  * spell printing the same line back-to-back.
  */
-const MOMENTUM_OPEN_COOLDOWN_MS = 12_000;
+const MOMENTUM_OPEN_COOLDOWN_MS = 8_000;
 /**
  * After a team SCORES, suppress its momentum "to SCORE in N min?" market for this long.
  * A score market that pops right after a goal reads as an instant open+shut (and the
@@ -98,8 +107,12 @@ const MOMENTUM_OPEN_COOLDOWN_MS = 12_000;
 const SCORE_COOLOFF_MS = 25_000;
 /** Per-player FORM tracking (mirrors team momentum, keyed by ESPN athlete id). */
 const PLAYER_DECAY = 0.85;
-const PLAYER_HOT_THRESHOLD = 3.0; // a shot (3) or two involvements opens a player market
-const PLAYER_OPEN_COOLDOWN_MS = 90_000; // per-player, so one player doesn't spam the slot
+const PLAYER_HOT_THRESHOLD = 4.25; // sustained threat, not one shot or one goal
+const PLAYER_OPEN_COOLDOWN_MS = 150_000; // per-player, so one player doesn't spam the slot
+const PLAYER_BACK_TO_BACK_COOLDOWN_MS = 120_000;
+const SET_PIECE_UNTAKEN_GRACE_MS = 20_000;
+const SET_PIECE_AFTER_TAKEN_GRACE_MS = 25_000;
+const SET_PIECE_MAX_UNCONFIRMED_MS = 180_000;
 /** Hydration/cooling break can't run longer than this — auto-resume so a missed ESPN
  *  "end delay" marker never freezes the board for the rest of the match. */
 const MAX_BREAK_MS = 180_000;
@@ -140,6 +153,8 @@ interface TrackedMarket {
   /** Player market (kind 'player_to_score'): the ESPN athlete id that must score for
    *  YES — resolution matches a goal's scorer participant by this id. */
   playerId?: string;
+  /** Set-piece goal markets do not time out NO until the kick/corner is actually taken. */
+  setPieceTakenAt?: number;
   /**
    * Monotonic event index at open. A market may ONLY be resolved by events strictly
    * after this — the event that opens "a shot this spell?" can never be its own YES.
@@ -214,6 +229,10 @@ export class Orchestrator {
   private playPhase: PlayPhaseState = 'calm';
   /** The agent's live read of who's pressing — drives the bar AND momentum markets. */
   private readonly momentum = new MomentumTracker();
+  private readonly commentary = new CommentaryBuffer();
+  /** AI question enhancer (off-hot-path, fail-open). Constructed in the constructor. */
+  private enhancer!: QuestionEnhancer;
+  private enhancerTimer?: ReturnType<typeof setInterval>;
   /** Wall-clock of the last momentum-opened market per team (cooldown). */
   private readonly lastMomentumOpenAt = new Map<Team, number>();
   /** Wall-clock of each team's last goal — gates the post-goal score-market cool-off. */
@@ -223,6 +242,8 @@ export class Orchestrator {
     string,
     { name: string; team: Team; score: number; lastOpenAt: number }
   >();
+  private lastPlayerMarketId: string | undefined;
+  private lastPlayerMarketAt = 0;
   /** True during a hydration/cooling break — openers + the NO sweep pause. */
   private breakPaused = false;
   /** Wall-clock the current break started (for the MAX_BREAK_MS auto-resume). */
@@ -271,7 +292,13 @@ export class Orchestrator {
       }),
       getOps: () => ({
         feedKind: this.feed.kind,
-        watcher: this.config.anthropicApiKey ? 'ai' : 'rules',
+        // HONEST label: markets are ALWAYS decided by rules; AI (if active) only
+        // polishes question text. Reports the enhancer's real state, not key-presence.
+        watcher: this.enhancer.active
+          ? this.enhancer.producing
+            ? 'rules+ai-enhance'
+            : 'rules+ai-enhance(idle)'
+          : 'rules',
         metrics: this.metrics.snapshot(
           this.server.clientCount(),
           this.server.roomManager.roomCount(),
@@ -282,6 +309,20 @@ export class Orchestrator {
       getOpenGlobalMarkets: () =>
         this.engine.list().filter((m) => m.status === 'open' || m.status === 'locked'),
       betDelayMs: this.config.betDelayMs,
+    });
+
+    // AI question ENHANCER — off the hot path, fail-open. OFF unless explicitly enabled
+    // (AI_ENHANCER=1) AND keyed. Only ever rewrites question TEXT; never decides/resolves.
+    this.enhancer = new QuestionEnhancer({
+      apiKey: this.config.anthropicApiKey,
+      enabled: this.config.aiEnhancerEnabled,
+      model: this.config.aiModel,
+      timeoutMs: this.config.aiTimeoutMs,
+      refreshMs: this.config.aiRefreshMs,
+      matchTokenBudget: this.config.aiMatchTokenBudget,
+      scoreWindowMins: Math.max(1, Math.round(resolveDeadlineMs('score_in_window') / 60_000)),
+      commentary: this.commentary,
+      getContext: () => ({ game: this.feed.state(), momentum: this.momentum.read() }),
     });
 
     this.wireEngineBroadcasts();
@@ -319,6 +360,14 @@ export class Orchestrator {
     // interval for the cadence; the sim is cheap so over-polling is harmless.
     const intervalMs = this.feed.kind === 'espn' ? this.config.espnPollMs : 500;
     this.tickTimer = setInterval(() => void this.tick(), intervalMs);
+
+    // Enhancer's SLOW background generator — its own timer, never on the open path.
+    if (this.enhancer.active) {
+      this.enhancerTimer = setInterval(
+        () => void this.enhancer.refresh(Date.now()),
+        this.config.aiRefreshMs,
+      );
+    }
   }
 
   /**
@@ -348,6 +397,7 @@ export class Orchestrator {
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.tickTimer) clearInterval(this.tickTimer);
+    if (this.enhancerTimer) clearInterval(this.enhancerTimer);
     for (const t of this.tracked.values()) {
       t.bots.cancel();
       clearTimeout(t.lockTimer);
@@ -383,9 +433,21 @@ export class Orchestrator {
     this.server.roomManager.lockExpiredMarkets();
     await this.checkPeriodMarkets(game);
 
-    // HEARTBEAT: push a momentum frame every tick (not just on events) so the bar
-    // keeps breathing through quiet spells instead of freezing between sparse polls.
+    const livePlay = game.status === 'live' && !this.breakPaused;
+
+    // HEARTBEAT: relax momentum one tick BEFORE broadcasting so the bar keeps breathing
+    // and a quiet spell drifts back toward neutral (observe() only decays per-event).
+    if (livePlay) this.momentum.decayTick();
     this.broadcastMomentum();
+
+    // CADENCE — the fix for the dead board: open the momentum (WINDOW) market on the
+    // HEARTBEAT, not only on sparse feed events. Real fixtures supply openable events
+    // 5–13 match-minutes apart, so an event-only opener left the board EMPTY 55–61% of
+    // the match (gaps up to ~10 min). Running it each tick off the standing read keeps a
+    // market basically always live WITHOUT spam: the single-slot lock (a window market
+    // stays LOCKED 90–120s after its 10s bet window) caps volume, not the cooldown. The
+    // per-tick decay above keeps it honest — it only fires while pressure is still real.
+    if (livePlay) await this.maybeOpenMomentumMarket(this.momentum.read());
 
     const ordered = sortFeedEvents(events);
     this.samePollResolverSeqs = new Set(
@@ -438,6 +500,7 @@ export class Orchestrator {
     this.metrics.playPhase = this.playPhase;
 
     this.recent.push(ev);
+    this.commentary.push(ev); // feeds the off-path enhancer's narrative context
     if (this.recent.length > 30) this.recent.shift();
 
     // The agent reads momentum off every event, then pushes it to the bar. Markets
@@ -585,15 +648,22 @@ export class Orchestrator {
   }
 
   /** True when the pressing team already has a live (open/locked) momentum market. */
-  private hasOpenMomentumMarketFor(team: Team): boolean {
+  /** Count live (open|locked) momentum WINDOW markets, optionally for one team. */
+  private countOpenMomentumMarkets(team?: Team): number {
+    let n = 0;
     for (const t of this.tracked.values()) {
       const m = this.engine.get(t.marketId);
       if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
-      if (t.team === team && (m.kind === 'shot_in_window' || m.kind === 'score_in_window')) {
-        return true;
-      }
+      if ((m.slot ?? t.slot) !== 'window') continue;
+      if (team !== undefined && t.team !== team) continue;
+      n++;
     }
-    return false;
+    return n;
+  }
+
+  /** A team is at its momentum cap (=1) when it already holds a live window market. */
+  private hasOpenMomentumMarketFor(team: Team): boolean {
+    return this.countOpenMomentumMarkets(team) >= MOMENTUM_PER_TEAM_CAP;
   }
 
   /**
@@ -638,9 +708,13 @@ export class Orchestrator {
     ) {
       return;
     }
+    // ENHANCER: swap ONLY the human question for a richer AI line if one is pooled,
+    // else keep the deterministic template. Chosen BEFORE open so the on-chain
+    // question_hash matches the displayed text. Everything else stays template-decided.
+    const question = this.enhancer.pick(team, spec.kind, spec.question, Date.now());
     const trigger: MarketTrigger = {
       gameId: game.gameId,
-      question: spec.question,
+      question,
       kind: spec.kind,
       slot: 'window',
       team,
@@ -664,7 +738,12 @@ export class Orchestrator {
    */
   private observePlayer(ev: FeedEvent): void {
     const p = ev.meta?.player as { id?: string; name?: string } | undefined;
-    const w = ev.type === 'goal' ? 4 : ev.type === 'shot' ? 3 : ev.type === 'miss' ? 2.5 : 0;
+    const w =
+      ev.type === 'shot' ? 2.8 :
+      ev.type === 'miss' ? 2.5 :
+      ev.type === 'dangerous_attack' ? 1.2 :
+      ev.type === 'attack' ? 0.8 :
+      0;
     if (!p?.id || !p.name || !ev.team || w === 0) return;
     for (const f of this.playerForm.values()) f.score *= PLAYER_DECAY;
     const prev = this.playerForm.get(p.id);
@@ -685,15 +764,23 @@ export class Orchestrator {
    */
   private async maybeOpenPlayerMarket(): Promise<void> {
     if (this.hasBlockingMarket('player')) return;
-    let best: { id: string; name: string; team: Team; score: number } | undefined;
+    const candidates: { id: string; name: string; team: Team; score: number }[] = [];
     for (const [id, f] of this.playerForm) {
       if (f.score < PLAYER_HOT_THRESHOLD) continue;
       if (Date.now() - f.lastOpenAt < PLAYER_OPEN_COOLDOWN_MS) continue;
-      if (!best || f.score > best.score) best = { id, name: f.name, team: f.team, score: f.score };
+      candidates.push({ id, name: f.name, team: f.team, score: f.score });
+    }
+    candidates.sort((a, b) => b.score - a.score);
+
+    let best = candidates[0];
+    if (
+      best &&
+      best.id === this.lastPlayerMarketId &&
+      Date.now() - this.lastPlayerMarketAt < PLAYER_BACK_TO_BACK_COOLDOWN_MS
+    ) {
+      best = candidates.find((c) => c.id !== this.lastPlayerMarketId) ?? best;
     }
     if (!best) return;
-    // (No post-goal cool-off here: "will the in-form scorer strike again?" is a fair,
-    // player-specific market — the per-player cooldown above already prevents spam.)
 
     const game = this.feed.state();
     const oc = parseClockKey(game.clock);
@@ -709,6 +796,8 @@ export class Orchestrator {
     };
     const f = this.playerForm.get(best.id);
     if (f) f.lastOpenAt = Date.now();
+    this.lastPlayerMarketId = best.id;
+    this.lastPlayerMarketAt = Date.now();
     await this.openTriggeredMarket(trigger, {
       team: best.team,
       slot: 'player',
@@ -792,6 +881,10 @@ export class Orchestrator {
 
   /** True when another unsettled market already owns this slot. */
   private hasBlockingMarket(slot: MarketSlot): boolean {
+    // The 'window' (momentum) slot is MULTI-LANE: allow up to MOMENTUM_WINDOW_LANES
+    // concurrent momentum markets so the board stays populated (one per team). Every
+    // other slot stays strictly single-occupancy.
+    if (slot === 'window') return this.countOpenMomentumMarkets() >= MOMENTUM_WINDOW_LANES;
     for (const t of this.tracked.values()) {
       const m = this.engine.get(t.marketId);
       if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
@@ -966,6 +1059,15 @@ export class Orchestrator {
       if (!m || m.status !== 'locked') continue;
       if (now < m.resolveAt) continue;
 
+      if (isSetPieceGoalKind(m.kind) && !t.setPieceTakenAt) {
+        const maxUnconfirmedAt = m.lockAt + SET_PIECE_MAX_UNCONFIRMED_MS;
+        if (now < maxUnconfirmedAt) {
+          this.extendMarketResolve(t, Math.min(now + SET_PIECE_UNTAKEN_GRACE_MS, maxUnconfirmedAt));
+          continue;
+        }
+        console.log(`[golazo/feed] market_deadline_no_unconfirmed_set_piece id=${m.id} kind=${m.kind}`);
+      }
+
       // Late-goal rescue: for kinds where ANY goal by the team in-window counts
       // (momentum / open-play / extra-time), if a goal was recorded at/after the
       // market opened, settle YES instead of NO. Strict set-piece kinds require
@@ -984,6 +1086,19 @@ export class Orchestrator {
       console.log(`[golazo/feed] market_deadline_no id=${m.id} kind=${m.kind}`);
       this.finalizeMarket(t, 'NO');
     }
+  }
+
+  private markSetPieceTaken(target: TrackedMarket, m: Market): void {
+    if (!isSetPieceGoalKind(m.kind) || target.setPieceTakenAt) return;
+    target.setPieceTakenAt = Date.now();
+    this.extendMarketResolve(target, Date.now() + SET_PIECE_AFTER_TAKEN_GRACE_MS);
+  }
+
+  private extendMarketResolve(target: TrackedMarket, resolveAt: number): void {
+    const m = this.engine.extendResolve(target.marketId, resolveAt);
+    console.log(
+      `[golazo/feed] market_deadline_extend id=${m.id} kind=${m.kind} to=${Math.round(resolveAt - Date.now())}ms`,
+    );
   }
 
   /**
@@ -1058,6 +1173,27 @@ export class Orchestrator {
       return ev.type === 'red_card' ? { outcome: 'YES' } : undefined;
     }
 
+    if (isSetPieceInvalidation(ev, m.kind)) {
+      return {
+        outcome: 'VOID',
+        voidCause: 'set_piece_invalidated',
+        voidReason: ev.text.slice(0, 80),
+      };
+    }
+
+    if (isSetPieceGoalKind(m.kind)) {
+      if (ev.type === 'goal') return { outcome: 'YES' };
+      if (ev.type === 'shot' || ev.type === 'miss') {
+        this.markSetPieceTaken(target, m);
+        return undefined;
+      }
+      if (ev.type === 'play_end') {
+        this.markSetPieceTaken(target, m);
+        return { outcome: 'NO' };
+      }
+      return undefined;
+    }
+
     // A genuine end-of-play (the set piece was CLEARED) settles a goal-question NO
     // fast. A 'miss' (saved/blocked) does NOT — it can REBOUND into a goal that ESPN
     // reports a poll later, so letting a miss settle NO here pre-empts a real YES.
@@ -1066,8 +1202,9 @@ export class Orchestrator {
       return { outcome: 'NO' };
     }
 
-    // Goal attribution for strict goal-question kinds: ESPN's own goal text decides.
-    // 'yes' → YES; 'no' → NO; 'ambiguous' → VOID/refund.
+    // Goal attribution for open-play goal-question kinds: ESPN's own goal text decides.
+    // Set-pieces are handled above by timing from the awarded kick/corner because ESPN
+    // prose can mislabel "following a corner" after a free kick.
     if (ev.type === 'goal' && isGoalQuestionKind(m.kind)) {
       const verdict = parseGoalSource(ev.text, m.kind);
       if (verdict === 'yes') return { outcome: 'YES' };
@@ -1117,6 +1254,7 @@ export class Orchestrator {
     }
     if (m.kind === 'penalty_awarded') return ev.type === 'penalty' || ev.type === 'var_penalty_denied';
     if (m.kind === 'red_card_given') return ev.type === 'red_card';
+    if (isSetPieceInvalidation(ev, m.kind)) return true;
     if (t.team && ev.team && t.team !== ev.team) return false;
     if (ev.team && t.team !== ev.team) return false;
     if (m.kind === 'player_to_score') {
@@ -1125,6 +1263,9 @@ export class Orchestrator {
     }
     if (m.kind === 'shot_in_window') return ev.type === 'goal' || ev.type === 'shot' || ev.type === 'miss';
     if (m.kind === 'score_in_window') return ev.type === 'goal';
+    if (isSetPieceGoalKind(m.kind)) {
+      return ev.type === 'goal' || ev.type === 'shot' || ev.type === 'miss' || ev.type === 'play_end';
+    }
     if (isGoalQuestionKind(m.kind)) return ev.type === 'goal' || ev.type === 'miss' || ev.type === 'play_end';
     if (m.kind === 'chance_from_play') return ev.type === 'goal' || ev.type === 'shot' || ev.type === 'miss';
     return false;
@@ -1242,6 +1383,18 @@ export class Orchestrator {
     this.openedMoments.clear();
     this.lastResolverByTeam.clear();
     this.lastMomentumOpenAt.clear();
+    // CRITICAL: per-match state that MUST NOT carry into the next match — otherwise a
+    // hot player (or momentum) from the previous game keeps opening markets for someone
+    // who isn't even on the pitch (the "Hélio Varela in New Zealand vs Egypt" bug).
+    this.playerForm.clear();
+    this.lastPlayerMarketId = undefined;
+    this.lastPlayerMarketAt = 0;
+    this.lastGoalAt.clear();
+    this.momentum.reset();
+    this.commentary.clear();
+    this.enhancer.resetForMatch(); // drop a prior fixture's pooled lines
+    this.breakPaused = false;
+    this.breakStartedAt = 0;
     this.extraTimeEntered = false;
     this.periodMarketPending = false;
     this.recent.length = 0;
@@ -1567,6 +1720,31 @@ function seqIdOf(ev: FeedEvent): string | undefined {
 /** Kinds that resolve on a team shot/goal in their wall-clock window or play phase. */
 function isWindowOrPlayKind(kind: string): boolean {
   return isPlayMarketKind(kind) || kind === 'shot_in_window' || kind === 'score_in_window';
+}
+
+function isSetPieceGoalKind(kind: string | undefined): boolean {
+  return kind === 'goal_from_corner' || kind === 'goal_from_free_kick' || kind === 'penalty_scored';
+}
+
+function isSetPieceInvalidation(ev: FeedEvent, kind: string | undefined): boolean {
+  if (ev.type !== 'var_penalty_denied' || !isSetPieceGoalKind(kind)) return false;
+  const t = ev.text.toLowerCase();
+  if (kind === 'goal_from_corner') {
+    return /\b(no corner|not a corner|corner (?:overturned|cancelled|rescinded)|goal kick after (?:a )?var)\b/.test(
+      t,
+    );
+  }
+  if (kind === 'goal_from_free_kick') {
+    return /\b(no free[- ]?kick|not a free[- ]?kick|free[- ]?kick (?:overturned|cancelled|rescinded))\b/.test(
+      t,
+    );
+  }
+  if (kind === 'penalty_scored') {
+    return /\b(no penalty|not a penalty|penalty (?:overturned|cancelled|rescinded|denied))\b/.test(
+      t,
+    );
+  }
+  return false;
 }
 
 /**

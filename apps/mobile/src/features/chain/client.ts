@@ -299,10 +299,19 @@ export async function withdrawSol(
   toAddress: string,
   sol: number,
 ): Promise<TxResult> {
+  // Irreversible-loss guard: validate the destination is a real pubkey before building
+  // the transfer. The UI's base58 regex doesn't verify length/curve; new PublicKey
+  // rejects anything that isn't a 32-byte key, catching most typos.
+  let destination: PublicKey;
+  try {
+    destination = new PublicKey(toAddress);
+  } catch {
+    throw new Error("That doesn't look like a valid Solana address.");
+  }
   const lamports = Math.round(sol * LAMPORTS_PER_SOL);
   const ix = SystemProgram.transfer({
     fromPubkey: ctx.wallet.publicKey,
-    toPubkey: new PublicKey(toAddress),
+    toPubkey: destination,
     lamports,
   });
   const tx = new Transaction().add(ix);

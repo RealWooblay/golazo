@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PointsManager } from './points';
+import { HOUSE_SEED_POINTS, PointsManager } from './points';
 import type { Market } from '@golazo/core';
 import { POINTS_START_BALANCE } from '@golazo/core';
 
@@ -60,6 +60,29 @@ describe('PointsManager', () => {
     expect(bob!.balance).toBe(POINTS_START_BALANCE - 500);
   });
 
+  it('pays a SOLO winner MORE than their stake out of house liquidity', () => {
+    const pm = new PointsManager();
+    pm.register('u1', 'Alice');
+    pm.onMarketOpen(fakeMarket('m1')); // trueProb 0.5 → seeded 75/75
+    pm.placeBet('u1', 'm1', 'NO', 100); // the ONLY human bet — no opponent
+
+    const resolved = fakeMarket('m1', 'resolved');
+    resolved.settlement = {
+      outcome: 'NO',
+      rakeTaken: 0,
+      distributable: 0,
+      totalPayouts: 0,
+      operatorPnl: 0,
+      payouts: [],
+    };
+    pm.onMarketResolve(resolved);
+
+    // Won NO with nobody on the other side — paid from the house's YES seed, so the
+    // balance lands ABOVE the starting balance (real winnings, not a bare refund,
+    // which is exactly the "I only got my points back" bug).
+    expect(pm.leaderboard()[0]!.balance).toBeGreaterThan(POINTS_START_BALANCE);
+  });
+
   it('rejects when balance is insufficient', () => {
     const pm = new PointsManager();
     pm.register('u1', 'Alice');
@@ -87,7 +110,7 @@ describe('PointsManager', () => {
     expect(hold.marketUpdate).toBeUndefined();
 
     const confirm = pm.confirmHeldBet('u1', 'm1');
-    expect(confirm.marketUpdate?.poolYes).toBe(100);
+    expect(confirm.marketUpdate?.poolYes).toBe(HOUSE_SEED_POINTS / 2 + 100); // house seed + stake
     expect(confirm.state?.balance).toBe(POINTS_START_BALANCE - 100);
   });
 
@@ -109,7 +132,7 @@ describe('PointsManager', () => {
     pm.holdBet('u1', 'm1', 'YES', 100);
     pm.onMarketLock('m1');
     const fx = pm.confirmHeldBet('u1', 'm1');
-    expect(fx.marketUpdate?.poolYes).toBe(100);
+    expect(fx.marketUpdate?.poolYes).toBe(HOUSE_SEED_POINTS / 2 + 100); // house seed + stake
     expect(fx.state?.balance).toBe(POINTS_START_BALANCE - 100);
   });
 
@@ -145,7 +168,7 @@ describe('PointsManager', () => {
 
     pm.confirmHeldBet('u1', 'm1');
     const confirm2 = pm.confirmHeldBet('u1', 'm2');
-    expect(confirm2.marketUpdate?.poolNo).toBe(100);
+    expect(confirm2.marketUpdate?.poolNo).toBe(HOUSE_SEED_POINTS / 2 + 100); // house seed + stake
   });
 
   it('moves cross-mode points on a settled REAL bet (win + loss)', () => {

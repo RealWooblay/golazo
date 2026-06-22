@@ -68,10 +68,8 @@ else
 fi
 
 cd /opt/golazo/apps/mobile
-if [ -f dist/index.html ]; then
-  echo "GOLAZO_WEB using prebuilt dist/"
-else
-  if [ -n "$GOLAZO_DOMAIN" ]; then
+rm -rf dist
+if [ -n "$GOLAZO_DOMAIN" ]; then
     EXPO_USE_METRO_WORKSPACE_ROOT=1 \
     EXPO_PUBLIC_FEED_URL="${FEED_URL}" \
     EXPO_PUBLIC_CHAIN_ENABLED=1 \
@@ -86,7 +84,6 @@ else
     EXPO_PUBLIC_GOLAZO_PROGRAM_ID=GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu \
     EXPO_PUBLIC_BET_DELAY_MS=5000 \
     npx expo export -p web
-  fi
 fi
 
 cat >/opt/golazo/static-server.mjs <<'JS'

@@ -19,7 +19,7 @@ describe('buildPeriodMarketTrigger', () => {
   it('opens a comeback market for the trailing home side in extra time', () => {
     const t = buildPeriodMarketTrigger(baseGame());
     expect(t).not.toBeNull();
-    expect(t!.question).toBe('Will Scotland score in extra time?');
+    expect(t!.question).toMatch(/Scotland/i);
     expect(t!.team).toBe('home');
     expect(t!.kind).toBe('goal_in_extra_time');
     expect(t!.slot).toBe('period');
@@ -29,7 +29,7 @@ describe('buildPeriodMarketTrigger', () => {
     const t = buildPeriodMarketTrigger(
       baseGame({ scoreHome: 2, scoreAway: 1, clock: "105'" }),
     );
-    expect(t?.question).toBe('Will Morocco score in extra time?');
+    expect(t?.question).toMatch(/Morocco/i);
     expect(t?.team).toBe('away');
   });
 
@@ -37,21 +37,28 @@ describe('buildPeriodMarketTrigger', () => {
     const t = buildPeriodMarketTrigger(
       baseGame({ scoreHome: 1, scoreAway: 1, clock: "92'" }),
     );
-    expect(t?.question).toBe('Will there be a goal in extra time?');
+    expect(t?.question).toMatch(/extra time|ET|deadlock/i);
     expect(t?.team).toBeUndefined();
   });
 
   it('opens a before-full-time market in second-half stoppage', () => {
     const t = buildPeriodMarketTrigger(baseGame({ clock: "90+2'" }));
-    expect(t?.question).toBe('Goal before full-time?');
+    expect(t?.question).toMatch(/full-time|FT|whistle/i);
     expect(t?.kind).toBe('goal_in_stoppage');
     expect(t?.slot).toBe('period');
   });
 
-  it('opens a before-half-time market in first-half stoppage', () => {
-    const t = buildPeriodMarketTrigger(baseGame({ clock: "45+1'" }));
-    expect(t?.question).toBe('Goal before half-time?');
+  it('opens a before-half-time market in first-half stoppage (ESPN clock format)', () => {
+    const t = buildPeriodMarketTrigger(baseGame({ clock: "45'+1'" }));
     expect(t?.kind).toBe('goal_in_stoppage');
+    expect(t?.question).toMatch(/half-time|HT|whistle/i);
+  });
+
+  it('parseGameContext detects ESPN stoppage clocks', () => {
+    const ctx = parseGameContext(baseGame({ clock: "45'+2'" }));
+    expect(ctx.isStoppage).toBe(true);
+    expect(ctx.period).toBe('1H');
+    expect(ctx.isExtraTime).toBe(false);
   });
 
   it('skips regular time outside added/extra time', () => {

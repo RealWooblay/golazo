@@ -11,7 +11,15 @@ import { isWhistleBound, laneOf, whistleLabel } from "../marketMeta";
  * creating zero missed-bet pressure. Period markets read "until half-time" instead of
  * a fake timer.
  */
-export function LockedStrip({ market, now }: { market: MarketVM; now: number }) {
+export function LockedStrip({
+  market,
+  now,
+  betLabel,
+}: {
+  market: MarketVM;
+  now: number;
+  betLabel?: string;
+}) {
   const lane = laneOf(market.kind, market.slot);
   const whistle = isWhistleBound(market.kind);
   const left = Math.max(0, market.resolveAt - now);
@@ -31,6 +39,11 @@ export function LockedStrip({ market, now }: { market: MarketVM; now: number }) 
       <Text style={styles.q} numberOfLines={1}>
         {market.question}
       </Text>
+      {betLabel ? (
+        <Text style={styles.bet} numberOfLines={1}>
+          {betLabel}
+        </Text>
+      ) : null}
       <Text style={styles.count} numberOfLines={1}>
         {countdown}
       </Text>
@@ -58,5 +71,6 @@ const styles = StyleSheet.create({
     minWidth: 54,
   },
   q: { ...type.body, fontSize: 13, color: colors.textSecondary, flex: 1 },
+  bet: { ...type.caption, fontSize: 11.5, color: colors.textPrimary },
   count: { ...type.caption, fontSize: 11.5, color: colors.textMuted },
 });
