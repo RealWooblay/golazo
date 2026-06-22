@@ -113,6 +113,16 @@ const PLAYER_BACK_TO_BACK_COOLDOWN_MS = 120_000;
 const SET_PIECE_UNTAKEN_GRACE_MS = 20_000;
 const SET_PIECE_AFTER_TAKEN_GRACE_MS = 25_000;
 const SET_PIECE_MAX_UNCONFIRMED_MS = 180_000;
+/**
+ * FLOW PACING — minimum gap between any two market opens, so the board drips at a clean,
+ * deliberate rhythm instead of dumping a whole ESPN poll-batch at once ("nothing, then 2
+ * at once"). The high-frequency, fungible openers (momentum, player) are GATED by this;
+ * concrete event-driven markets (set-piece/penalty/VAR/period) still open promptly but
+ * RESET the timer, so nothing else lands right on top of them. Pure presentation pacing —
+ * volume is unchanged (the slot/cooldown guards already cap concurrency); this only
+ * staggers WHEN opens surface, which is most of the "feels clean" perception win.
+ */
+const MIN_OPEN_SPACING_MS = 8_000;
 /** Hydration/cooling break can't run longer than this — auto-resume so a missed ESPN
  *  "end delay" marker never freezes the board for the rest of the match. */
 const MAX_BREAK_MS = 180_000;
@@ -244,6 +254,8 @@ export class Orchestrator {
   >();
   private lastPlayerMarketId: string | undefined;
   private lastPlayerMarketAt = 0;
+  /** Wall-clock of the last market that surfaced — drives the FLOW PACING min-gap. */
+  private lastOpenReleaseAt = 0;
   /** True during a hydration/cooling break — openers + the NO sweep pause. */
   private breakPaused = false;
   /** Wall-clock the current break started (for the MAX_BREAK_MS auto-resume). */
@@ -677,6 +689,10 @@ export class Orchestrator {
     const team = read.leader;
     if (!team) return;
     if (read.intensity < MOMENTUM_OPEN_THRESHOLD) return;
+    // FLOW PACING: drip momentum markets at a clean rhythm — never stack a second one (e.g.
+    // the other lane) onto the same beat. The keep-alive re-offers next tick, so this only
+    // staggers timing, not volume.
+    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return;
 
     const last = this.lastMomentumOpenAt.get(team) ?? 0;
     if (Date.now() - last < MOMENTUM_OPEN_COOLDOWN_MS) return;
@@ -764,6 +780,8 @@ export class Orchestrator {
    */
   private async maybeOpenPlayerMarket(): Promise<void> {
     if (this.hasBlockingMarket('player')) return;
+    // NOTE: player markets are NOT flow-gated — they're already rare (150s per-player
+    // cooldown, single slot) so they never burst; gating them only blocks a legit one.
     const candidates: { id: string; name: string; team: Team; score: number }[] = [];
     for (const [id, f] of this.playerForm) {
       if (f.score < PLAYER_HOT_THRESHOLD) continue;
@@ -909,6 +927,12 @@ export class Orchestrator {
   ): Promise<void> {
     const slot = opts.slot ?? trigger.slot ?? marketSlot(trigger.kind);
     if (this.hasBlockingMarket(slot)) return;
+
+    // FLOW PACING: this market is committing to the board — stamp the release time so the
+    // paced (momentum/player) openers hold off for MIN_OPEN_SPACING_MS and nothing lands
+    // right on top of it. (Set-pieces reach here un-gated but still stamp, so a momentum
+    // market won't surface in the same beat as a corner.)
+    this.lastOpenReleaseAt = Date.now();
 
     const deadline = resolveDeadlineMs(trigger.kind);
     const armed: MarketTrigger = { ...trigger, slot, resolveWindowMs: deadline };
@@ -1107,6 +1131,18 @@ export class Orchestrator {
    */
   private async resolveFromEvent(ev: FeedEvent): Promise<boolean> {
     this.recordResolverClock(ev);
+
+    // TIMING TELEMETRY: log Golazo's true lag at each resolving moment — how far behind
+    // the real event-time (ESPN wallclock) we are when we act on it. This is the number
+    // that decides whether we sit ahead of or behind a viewer's stream; the presentation
+    // buffer is tuned off it. Resolver events only (goals/shots), so it's low-volume.
+    const wc = typeof ev.meta?.wallclock === 'string' ? Date.parse(ev.meta.wallclock) : NaN;
+    if (!Number.isNaN(wc)) {
+      console.log(
+        `[golazo/feed] resolver_lag type=${ev.type}${ev.team ? '/' + ev.team : ''} ` +
+          `lagSec=${Math.round((Date.now() - wc) / 1000)} clock=${String(ev.meta?.clock ?? '')}`,
+      );
+    }
 
     const targets = this.findMarketsFor(ev);
     let settled = false;
@@ -1391,6 +1427,7 @@ export class Orchestrator {
     this.lastPlayerMarketAt = 0;
     this.lastGoalAt.clear();
     this.momentum.reset();
+    this.lastOpenReleaseAt = 0;
     this.commentary.clear();
     this.enhancer.resetForMatch(); // drop a prior fixture's pooled lines
     this.breakPaused = false;
