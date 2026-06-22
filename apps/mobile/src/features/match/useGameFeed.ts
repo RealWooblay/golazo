@@ -381,6 +381,12 @@ export function useGameFeed(): GameFeedApi {
     // sequenceId -> marketId, so a later goal/miss resolves the right market.
     const seqToMarket = new Map<string, string>();
     let deadlineTimer: ReturnType<typeof setTimeout> | null = null;
+    // Decaying attacking momentum per side — drives the demo's "spell" markets so the
+    // demo showcases the SAME market types the live engine opens (shot/score windows),
+    // not just set-pieces.
+    let momHome = 0;
+    let momAway = 0;
+    let lastMomOpenAt = 0;
 
     const clearDeadlineTimer = () => {
       if (deadlineTimer) {
@@ -431,10 +437,29 @@ export function useGameFeed(): GameFeedApi {
       scheduleDeadlineNo(m.id);
     };
 
+    const MOM_W: Record<string, number> = {
+      goal: 4,
+      dangerous_attack: 3,
+      shot: 2.5,
+      miss: 2,
+      corner: 1.6,
+      attack: 1.4,
+      free_kick: 1,
+    };
+
     const handleEvent = (ev: FeedEvent) => {
       if (cancelled) return;
       setCommentary(ev.text);
       recordPlay(ev.text);
+
+      // Fold the event into attacking momentum (decay both, add weight to the actor).
+      const mw = MOM_W[ev.type];
+      if (ev.team && mw) {
+        momHome *= 0.8;
+        momAway *= 0.8;
+        if (ev.team === "home") momHome += mw;
+        else momAway += mw;
+      }
 
       // Goal -> scoreboard. (The clock is advanced by the tick loop below.)
       if (ev.type === "goal" && ev.team) {
@@ -455,6 +480,28 @@ export function useGameFeed(): GameFeedApi {
         if (m && (m.status === "open" || m.status === "locked")) {
           clearDeadlineTimer();
           engine.resolve(openMarket.id, "VOID");
+        }
+      }
+
+      // (a0) Momentum "spell" markets aren't tied to one play — they resolve on any
+      // shot/goal/miss by the pressing team (YES), else the deadline sweep (NO).
+      if (openMarket) {
+        const wm = engine.get(openMarket.id);
+        if (
+          wm &&
+          (wm.status === "open" || wm.status === "locked") &&
+          (wm.kind === "shot_in_window" ||
+            wm.kind === "score_in_window" ||
+            wm.kind === "chance_from_play") &&
+          (ev.type === "goal" || ev.type === "shot" || ev.type === "miss") &&
+          (!wm.team || ev.team === wm.team)
+        ) {
+          const decision = offlineOutcomeForEvent(ev, wm.kind);
+          if (decision) {
+            clearDeadlineTimer();
+            engine.resolve(wm.id, decision);
+            return;
+          }
         }
       }
 
@@ -481,6 +528,37 @@ export function useGameFeed(): GameFeedApi {
 
       // (b) Is this a BETTABLE moment? Open a market (only one card at a time).
       if (openMarket) return;
+
+      // Momentum "spell" market first — when a side is pressing, open a window market
+      // (the lane that dominates the live board). Light pressure → "a SHOT this spell?",
+      // a real siege → "to SCORE soon?".
+      const momLeader =
+        momHome > momAway ? "home" : momAway > momHome ? "away" : null;
+      const momIntensity =
+        momLeader === "home" ? momHome : momLeader === "away" ? momAway : 0;
+      if (momLeader && momIntensity >= 2.0 && Date.now() - lastMomOpenAt > 8000) {
+        const teamName = momLeader === "home" ? ctx.homeName : ctx.awayName;
+        const big = momIntensity >= 5.0;
+        const m = engine.openMarket({
+          gameId: ev.gameId,
+          kind: big ? "score_in_window" : "shot_in_window",
+          slot: "window",
+          team: momLeader,
+          question: big
+            ? `${teamName} laying siege — to SCORE soon?`
+            : `${teamName} on top — a SHOT this spell?`,
+          windowMs: 9000,
+          trueProb: big ? 0.22 : 0.4,
+          resolveWindowMs: 16000,
+        });
+        openMarket = m;
+        openMarketIdRef.current = m.id;
+        lastMomOpenAt = Date.now();
+        upsertMarket({ ...toVM(m), subtitle: ev.text });
+        bots = runBots(engine, m);
+        return;
+      }
+
       const trigger = triggerFromEvent(ev, ctx);
       if (!trigger) return;
       const m = engine.openMarket({
