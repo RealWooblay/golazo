@@ -83,6 +83,7 @@ import {
   type MomentumRead,
 } from './ai/momentum';
 import { QuestionEnhancer } from './ai/enhancer';
+import { MarketDirector, type MarketProposal } from './ai/director';
 import { CommentaryBuffer } from './ai/commentaryBuffer';
 import { AuditLog } from './observability/auditLog';
 import { FeedMetrics } from './observability/metrics';
@@ -261,6 +262,9 @@ export class Orchestrator {
   /** AI question enhancer (off-hot-path, fail-open). Constructed in the constructor. */
   private enhancer!: QuestionEnhancer;
   private enhancerTimer?: ReturnType<typeof setInterval>;
+  /** AI market director (off-hot-path, fail-open, palette-bounded). Constructed below. */
+  private director!: MarketDirector;
+  private directorTimer?: ReturnType<typeof setInterval>;
   /** Wall-clock of the last momentum-opened market per team (cooldown). */
   private readonly lastMomentumOpenAt = new Map<Team, number>();
   /** Wall-clock of each team's last goal — gates the post-goal score-market cool-off. */
@@ -337,6 +341,13 @@ export class Orchestrator {
             ? 'rules+ai-enhance'
             : 'rules+ai-enhance(idle)'
           : 'rules',
+        // The director's HONEST state: markets it proposes are still validated + opened by
+        // the deterministic engine; this reports whether the AI is actively proposing.
+        director: this.director.active
+          ? this.director.producing
+            ? `ai-direct(${this.director.queued} queued)`
+            : 'ai-direct(idle)'
+          : 'off',
         metrics: this.metrics.snapshot(
           this.server.clientCount(),
           this.server.roomManager.roomCount(),
@@ -361,6 +372,19 @@ export class Orchestrator {
       scoreWindowMins: Math.max(1, Math.round(resolveDeadlineMs('score_in_window') / 60_000)),
       commentary: this.commentary,
       getContext: () => ({ game: this.feed.state(), momentum: this.momentum.read() }),
+    });
+
+    this.director = new MarketDirector({
+      apiKey: this.config.anthropicApiKey,
+      enabled: this.config.aiDirectorEnabled,
+      model: this.config.aiModel,
+      timeoutMs: this.config.aiTimeoutMs,
+      refreshMs: this.config.aiRefreshMs,
+      matchTokenBudget: this.config.aiMatchTokenBudget,
+      commentary: this.commentary,
+      getContext: () => ({ game: this.feed.state(), momentum: this.momentum.read() }),
+      onReject: (reason, raw) =>
+        this.audit.record('director_reject', { reason, raw: JSON.stringify(raw).slice(0, 200) }),
     });
 
     this.wireEngineBroadcasts();
@@ -406,6 +430,15 @@ export class Orchestrator {
         this.config.aiRefreshMs,
       );
     }
+
+    // Director's SLOW proposal generator — its own timer, never on the open path. The opener
+    // reads pre-validated proposals synchronously (proposeNext); this just refills the pool.
+    if (this.director.active) {
+      this.directorTimer = setInterval(
+        () => void this.director.refresh(Date.now()),
+        this.config.aiRefreshMs,
+      );
+    }
   }
 
   /**
@@ -441,6 +474,7 @@ export class Orchestrator {
     this.stopped = true;
     if (this.tickTimer) clearInterval(this.tickTimer);
     if (this.enhancerTimer) clearInterval(this.enhancerTimer);
+    if (this.directorTimer) clearInterval(this.directorTimer);
     for (const t of this.tracked.values()) {
       t.bots.cancel();
       t.pointsBots.cancel();
@@ -624,6 +658,9 @@ export class Orchestrator {
     // opens and let the "goal before the half?" period market carry that moment.
     const liveGame = this.feed.state();
     if (!this.breakPaused && !inWhistleZone(liveGame)) {
+      // The AI DIRECTOR gets FIRST pick of free slots (its proposals are mood/clock-aware);
+      // whatever it doesn't fill, the deterministic rule openers below cover (fail-open floor).
+      await this.maybeOpenDirectorMarket(liveGame);
       await this.maybeOpenMomentumMarket(this.momentum.read());
       await this.maybeOpenPlayerMarket();
       // WHICH-SIDE-NEXT contest — opened EVENT-DRIVEN off a build-up attacking move, so a
@@ -1104,6 +1141,38 @@ export class Orchestrator {
       this.lastCountSlotOpenAt = Date.now();
       this.countSlotCounter++;
     }
+  }
+
+  /**
+   * AI DIRECTOR open path — SYNCHRONOUSLY read one pre-validated proposal for a FREE slot and
+   * open it. Never awaits the model (the proposal pool is filled off-timer); fails open to the
+   * rule openers when the director is off/empty. Respects the same single-occupancy slots and
+   * the global flow pacer, so the AI can never burst or double-fill. The proposal already
+   * passed the palette validation wall, so kind/slot/deadline/team/question are all sound.
+   */
+  private async maybeOpenDirectorMarket(game: GameState): Promise<void> {
+    if (!this.director.active) return;
+    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
+    const proposal: MarketProposal | undefined = this.director.proposeNext(
+      Date.now(),
+      (slot) => !this.hasBlockingMarket(slot),
+    );
+    if (!proposal) return;
+
+    const trigger: MarketTrigger = {
+      gameId: game.gameId,
+      question: proposal.question,
+      kind: proposal.kind,
+      slot: proposal.slot,
+      ...(proposal.team ? { team: proposal.team } : {}),
+      windowMs: proposal.windowMs,
+      trueProb: proposal.trueProb,
+    };
+    await this.openTriggeredMarket(trigger, {
+      slot: proposal.slot,
+      ...(proposal.team ? { team: proposal.team } : {}),
+      logLabel: `director kind=${proposal.kind}${proposal.team ? ' team=' + proposal.team : ''} rel=${proposal.relevance.toFixed(2)}`,
+    });
   }
 
   /**
@@ -1736,6 +1805,7 @@ export class Orchestrator {
     this.heartbeatSeeded = false;
     this.commentary.clear();
     this.enhancer.resetForMatch(); // drop a prior fixture's pooled lines
+    this.director.resetForMatch(); // drop a prior fixture's pooled proposals
     this.breakPaused = false;
     this.breakStartedAt = 0;
     this.extraTimeEntered = false;

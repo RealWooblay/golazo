@@ -12,7 +12,8 @@ export type AuditKind =
   | 'lag_void'
   | 'batch_judge'
   | 'feed_poll'
-  | 'play_phase';
+  | 'play_phase'
+  | 'director_reject';
 
 export interface AuditEntry {
   ts: number;
