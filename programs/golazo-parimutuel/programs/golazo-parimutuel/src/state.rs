@@ -51,10 +51,11 @@ pub enum Outcome {
 
 /// PDA seeds: ["market", authority, market_seed].
 ///
-/// Holds the pool accounting plus lifecycle. Lamports are NOT stored here — they
-/// live in a dedicated, data-less, system-owned vault PDA (see `Vault` doc on
-/// the accounts) so the market's own rent-exempt balance can never be confused
-/// with bettor funds and so we can derive a clean signer for withdrawals.
+/// Holds the pool accounting plus lifecycle. USX tokens are NOT stored here —
+/// they live in a dedicated PDA-owned USX token account (the vault, authority =
+/// this Market PDA; see `initialize_market`) so the market's own SOL rent can
+/// never be confused with bettor funds and so we can derive a clean signer for
+/// payouts.
 #[account]
 pub struct Market {
     /// The operator that may lock/resolve/void this market. Enforced via `has_one`.
@@ -70,9 +71,9 @@ pub struct Market {
     pub status: MarketStatus,
     /// Settled side (None until Resolved).
     pub outcome: Outcome,
-    /// Total lamports staked on YES.
+    /// Total USX base units staked on YES.
     pub pool_yes: u64,
-    /// Total lamports staked on NO.
+    /// Total USX base units staked on NO.
     pub pool_no: u64,
     /// Optional original YES seed (normally zero in zero-capital mode).
     pub seed_yes: u64,
@@ -136,7 +137,7 @@ pub struct Bet {
     pub bettor: Pubkey,
     /// Which side they backed.
     pub side: Side,
-    /// Lamports staked.
+    /// USX base units staked.
     pub stake: u64,
     /// Double-spend guard: flipped true the first time this bet is claimed.
     pub claimed: bool,

@@ -3,6 +3,12 @@
 //! A pure **parimutuel binary market**, the on-chain mirror of
 //! `packages/core/src/parimutuel.ts`.
 //!
+//! ## Settlement asset
+//! The protocol settles in the **USX stablecoin** (an SPL *classic* token), not
+//! native SOL. Every stake, payout, refund, and rake is denominated in USX base
+//! units. The single mint is pinned program-wide via [`USX_MINT`]; the per-market
+//! vault is a PDA-owned USX token account whose authority is the Market PDA.
+//!
 //! ## Mechanism (why this, not a bonding curve)
 //! All YES + NO stakes form ONE pool. The operator skims a fixed `rake` off the
 //! gross pool on non-void settlement. Winners claim their proportional share of
@@ -41,12 +47,28 @@ use state::{Outcome, Side};
 // declared id, and every PDA derivation agree. Keep Anchor.toml in sync.
 declare_id!("GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu");
 
+/// The one stablecoin the whole protocol settles in: **USX** (SPL classic).
+///
+/// Pinned program-wide so a market vault, a bet deposit, or a payout can only
+/// ever move USX — every token account in every instruction is constrained to
+/// this mint (`token::mint = USX_MINT` / `address = USX_MINT`), making a
+/// wrong-mint vault unconstructable. Changing the settlement asset is a redeploy.
+///
+/// The real mainnet USX mint can't be recreated on a local validator (we don't
+/// hold its keypair), so integration tests build with `--features local-mint`,
+/// which swaps in a committed test mint (`tests/fixtures/usx-mint.json`) we can
+/// mint freely. Production builds (no feature) always use the real USX mint.
+#[cfg(not(feature = "local-mint"))]
+pub const USX_MINT: Pubkey = pubkey!("6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG");
+#[cfg(feature = "local-mint")]
+pub const USX_MINT: Pubkey = pubkey!("3kuxNXDwqUyyUeJVGxKa1judTjoe3u4Zu8Mgmbmi28S7");
+
 #[program]
 pub mod golazo_parimutuel {
     use super::*;
 
-    /// Create a market + its lamport vault and open for betting.
-    /// `rake_bps` must be < 10_000; seeds may be zero.
+    /// Create a market + its USX token vault and open for betting.
+    /// `rake_bps` must be < 10_000; seeds (USX base units) may be zero.
     pub fn initialize_market(
         ctx: Context<InitializeMarket>,
         market_seed: u64,
@@ -65,8 +87,8 @@ pub mod golazo_parimutuel {
         )
     }
 
-    /// Back `side` with `stake` lamports. Moves the stake into the vault, then
-    /// grows the side pool.
+    /// Back `side` with `stake` USX base units. Moves the stake into the vault,
+    /// then grows the side pool.
     /// One bet per (market, bettor). Requires the market to be Open.
     pub fn place_bet(ctx: Context<PlaceBet>, side: Side, stake: u64) -> Result<()> {
         instructions::place_bet::handler(ctx, side, stake)
