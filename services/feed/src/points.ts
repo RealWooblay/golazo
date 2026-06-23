@@ -56,6 +56,8 @@ export class PointsManager {
   private readonly lastRefill = new Map<string, number>();
   /** Stakes reserved during the anti-latency hold (deducted, not yet in pool). */
   private readonly heldStakes = new Map<string, { userId: string; side: Side; stake: number }>();
+  /** Monotonic id source for house-liquidity bot bets. */
+  private botSeq = 0;
 
   private holdKey(marketId: string, userId: string): string {
     return `${marketId}:${userId}`;
@@ -306,6 +308,31 @@ export class PointsManager {
       ...this.effectsFor(userId, true),
       marketUpdate: snapshotPointsMarket(pm!),
     };
+  }
+
+  /** Current implied YES probability from the points pool (drives bot leaning). */
+  marketImpliedYes(marketId: string): number | undefined {
+    const pm = this.markets.get(marketId);
+    if (!pm) return undefined;
+    const gross = pm.pool.yes + pm.pool.no;
+    return gross > 0 ? pm.pool.yes / gross : 0.5;
+  }
+
+  /**
+   * HOUSE LIQUIDITY bet — random two-sided money so a points market's multiple actually
+   * MOVES and is meaningful (the fixed seed alone pins it near ~1.1x). No player/balance
+   * checks (bots have no balance); tracked in `bets` under a synthetic `pbot_*` id so on
+   * settle the bots' LOSING side funds real winners and their winning share is absorbed
+   * (a `pbot_*` id isn't a registered player, so no balance is ever credited). Returns the
+   * marketUpdate so the live pool/odds broadcast to clients exactly like a human bet.
+   */
+  placeBotBet(marketId: string, side: Side, stake: number): PointsEffects {
+    const pm = this.markets.get(marketId);
+    if (!pm || pm.status !== 'open' || stake <= 0) return {};
+    pm.bets.push({ userId: `pbot_${(this.botSeq++).toString(36)}`, side, stake });
+    if (side === 'YES') pm.pool.yes += stake;
+    else pm.pool.no += stake;
+    return { marketUpdate: snapshotPointsMarket(pm) };
   }
 
   leaderboard(limit = 50): PointsPlayer[] {

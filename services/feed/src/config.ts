@@ -87,8 +87,14 @@ export interface Config {
   /** Deterministic seed base for the engine / sim, so runs are reproducible. */
   baseSeed: number;
 
-  /** How many simulated bots trickle bets into each market. */
+  /** How many simulated bots trickle bets into each market (real-money engine pool). */
   botCount: number;
+
+  /** House-liquidity bots for the POINTS pool — random two-sided money so the points
+   *  multiple actually moves (fixes the always-~1.1x pin). Count + stake range. */
+  pointsBotCount: number;
+  pointsBotMinStake: number;
+  pointsBotMaxStake: number;
 
   /**
    * If a market locks but no resolving goal/miss event arrives within this
@@ -204,6 +210,9 @@ export const config: Config = {
   feeRecipient: process.env.FEE_RECIPIENT?.trim() || '5kBBKSV2EUyLsa2sXoK9E1VVzmDXCaHnQiMfz8B8yJtP',
   baseSeed: num('BASE_SEED', 12345),
   botCount: num('BOT_COUNT', 24),
+  pointsBotCount: num('POINTS_BOT_COUNT', 12),
+  pointsBotMinStake: num('POINTS_BOT_MIN_STAKE', 8),
+  pointsBotMaxStake: num('POINTS_BOT_MAX_STAKE', 60),
   resolveTimeoutMs: num('RESOLVE_TIMEOUT_MS', 12000),
   betDelayMs: num('BET_DELAY_MS', 5000),
   /** Paper bets use the same anti-snipe hold as real money unless overridden. */
