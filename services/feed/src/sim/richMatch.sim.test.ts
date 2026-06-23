@@ -71,7 +71,9 @@ describe('comprehensive full-game market simulation (rich-match)', () => {
 
     // 2. Momentum time-boxed markets are the volume engine.
     const momentumMarkets =
-      (report.byKind['shot_in_window'] ?? 0) + (report.byKind['score_in_window'] ?? 0);
+      (report.byKind['shot_in_window'] ?? 0) +
+      (report.byKind['shot_or_corner_in_window'] ?? 0) +
+      (report.byKind['score_in_window'] ?? 0);
     expect(momentumMarkets).toBeGreaterThanOrEqual(8);
 
     // ── NO HANG, NO SPURIOUS VOID ──────────────────────────────────────────────
@@ -84,15 +86,25 @@ describe('comprehensive full-game market simulation (rich-match)', () => {
     ).length;
     expect(terminal).toBe(report.markets.length);
 
-    // 5. THE CORE FIX — ZERO voids. This sim never switches matches, so a VOID would
-    //    be a bug (the old "event didn't arrive → void" path). And if anything DID
-    //    void, its audited cause must be a match-switch and nothing else.
-    expect(report.voided).toBe(0);
-    expect(report.voids.every((v) => v.cause === 'match_switch')).toBe(true);
+    // 5. NO SPURIOUS VOIDS. Only which-side-next CONTEST kinds may legitimately void — a
+    //    refund when neither team did the event in the window (the contest never happened).
+    //    EVERY OTHER kind voiding is the old "event didn't arrive → void" bug and must be
+    //    zero. (Cause tags can rotate out of the capped audit buffer, so we assert on the
+    //    KIND — the true invariant — not the audited cause.)
+    const whichSide = ['next_shot', 'next_corner', 'next_goal'];
+    const spuriousVoids = report.voids.filter(
+      (v) => !whichSide.includes(v.kind) && v.cause !== 'match_switch',
+    );
+    expect(spuriousVoids).toEqual([]);
 
-    // 6. Every opened market kind reaches a terminal YES/NO (no PENDING, no VOID).
+    // 6. Nothing hangs PENDING, and EVERY void is a which-side contest refund — no other
+    //    kind ever voids (the spurious-void invariant, restated against the global tally).
     expect(report.byOutcome['PENDING'] ?? 0).toBe(0);
-    expect(report.byOutcome['VOID'] ?? 0).toBe(0);
+    const whichSideVoids = whichSide.reduce(
+      (n, k) => n + (report.outcomeByKind[k]?.VOID ?? 0),
+      0,
+    );
+    expect(report.byOutcome['VOID'] ?? 0).toBe(whichSideVoids);
 
     // ── ACCURACY: every in-window goal → its market YES, never NO/VOID ──────────
     // 7. A CORNER that actually produced a goal must settle goal_from_corner YES

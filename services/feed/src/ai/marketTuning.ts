@@ -179,6 +179,31 @@ export function isCountKind(kind: string): boolean {
 }
 
 /**
+ * WHICH-SIDE-NEXT markets ("next shot/corner/goal — which team?"). Unlike "will X happen"
+ * kinds, these resolve on a DECISIVE event by EITHER team: the market's team doing it first
+ * → YES, the OTHER team doing it first → NO (a scoped, audited event-NO; see the
+ * orchestrator's decisiveOutcomeFor). Neither team by the deadline → VOID/refund. This is
+ * the ONLY family whose NO can come from an event rather than the deadline sweep.
+ */
+export function isWhichSideNextKind(kind: string): boolean {
+  return kind === 'next_shot' || kind === 'next_corner' || kind === 'next_goal';
+}
+
+/** Feed event types that DECIDE a which-side-next market (whichever team does it first). */
+export function decisiveEventTypes(kind: string): ReadonlySet<FeedEventType> {
+  // next_shot is the BROAD "who threatens next?" contest — any real attacking THREAT
+  // (a shot/miss/goal, a corner, or a dangerous attack) decides it, so the window reliably
+  // catches one and the contest resolves YES/NO instead of voiding. next_corner/next_goal
+  // are narrow variants kept for the AI director to open with sharper timing (they VOID
+  // often on a blind clock).
+  if (kind === 'next_shot')
+    return new Set<FeedEventType>(['shot', 'miss', 'goal', 'corner', 'dangerous_attack']);
+  if (kind === 'next_corner') return new Set<FeedEventType>(['corner']);
+  if (kind === 'next_goal') return new Set<FeedEventType>(['goal']);
+  return new Set<FeedEventType>();
+}
+
+/**
  * Parallel momentum "window" lanes. The board is BETTABLE only during a market's short
  * window (then locked 90–120s while it resolves), so a single lane can't keep something
  * bettable — two lanes (one per team, naturally) roughly double bettable coverage and
@@ -241,6 +266,16 @@ export function resolveDeadlineMs(kind: string): number {
     case 'over_shots':
       // Over/under count — the counting window + feed lag (YES on crossing, else NO).
       return COUNT_WINDOW_MS + COUNT_LAG_MS;
+    case 'next_shot':
+      // "Next shot — which team?" — give a shot time to land before VOID; shots are
+      // frequent enough that this usually resolves YES/NO within the window.
+      return 150_000;
+    case 'next_corner':
+      return 210_000;
+    case 'next_goal':
+      // "Next goal — which team?" — a long contest; goals are rare so it often VOIDs,
+      // which is why it's NOT auto-opened on the heartbeat (kept for the AI director).
+      return 480_000;
     case 'goal_in_stoppage':
       return STOPPAGE_EXTEND_MS;
     case 'goal_in_extra_time':
@@ -282,6 +317,8 @@ export function marketSlot(kind: string): MarketSlot {
   // the over/under "count" lane (more than N corners / shots). Each single-occupancy.
   if (kind === 'card_in_window' || kind === 'goal_in_window') return 'event';
   if (kind === 'over_corners' || kind === 'over_shots') return 'count';
+  // WHICH-SIDE-NEXT contest lane (next shot/corner/goal — which team?).
+  if (kind === 'next_shot' || kind === 'next_corner' || kind === 'next_goal') return 'versus';
   return 'moment';
 }
 

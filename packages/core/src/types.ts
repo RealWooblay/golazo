@@ -10,7 +10,14 @@ export type Side = 'YES' | 'NO';
 export type Outcome = 'YES' | 'NO' | 'VOID';
 export type Team = 'home' | 'away';
 export type Sport = 'soccer' | 'nfl';
-export type MarketSlot = 'moment' | 'window' | 'period' | 'player' | 'event' | 'count';
+export type MarketSlot =
+  | 'moment'
+  | 'window'
+  | 'period'
+  | 'player'
+  | 'event'
+  | 'count'
+  | 'versus';
 
 /** A team, normalized across feeds. */
 export interface TeamRef {
