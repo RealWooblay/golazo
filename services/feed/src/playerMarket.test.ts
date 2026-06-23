@@ -50,7 +50,9 @@ const ev = (type: FeedEvent['type'], team: Team, extra: Partial<FeedEvent> = {})
 const goal = (team: Team, id: string, name: string, seq: string): FeedEvent =>
   ev('goal', team, {
     text: `Goal! ${name} scores.`,
-    meta: { player: { id, name }, clock: "30'", sequenceId: seq, source: 'espn.keyEvent' },
+    // 32' — after the 30' market open, so the anti-arb match-clock check counts it as a clean
+    // after-betting goal even though this fixture keyEvent omits an exact wallclock.
+    meta: { player: { id, name }, clock: "32'", sequenceId: seq, source: 'espn.keyEvent' },
   });
 
 const playerEvent = (

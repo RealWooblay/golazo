@@ -13,7 +13,7 @@ import { money, multiple } from "@/lib/format";
 import { RAKE, bettingClosesAt, bettingSafetyBufferMs } from "@/lib/config";
 import type { MarketVM, PendingBet } from "@/state/types";
 import { BetButton } from "./BetButton";
-import { betLabels, laneOf, withAlpha } from "../marketMeta";
+import { betLabels, isEventDecided, laneOf, sideDisplayLabel, withAlpha } from "../marketMeta";
 
 /**
  * MarketCard — the compact, one-tap betting card. A short window made catchable:
@@ -48,6 +48,7 @@ export function MarketCard({
 }) {
   const lane = laneOf(market.kind, market.slot);
   const labels = betLabels(market.kind, market.question);
+  const eventDecided = isEventDecided(market.kind, market.question);
 
   const locked = market.phase !== "open";
   const betCutoff = bettingClosesAt(market.lockAt, market.windowMs);
@@ -102,7 +103,7 @@ export function MarketCard({
           <Text style={[styles.tag, { color: lane.color }]}>{lane.label}</Text>
           <View style={{ flex: 1 }} />
           <Text style={[styles.count, urgent && { color: colors.no }]}>
-            {closing ? "closing" : `${seconds}s`}
+            {closing ? "closing" : eventDecided ? `${seconds}s to bet` : `${seconds}s`}
           </Text>
         </View>
 
@@ -111,7 +112,13 @@ export function MarketCard({
         </Text>
 
         {betPlaced ? (
-          <BetConfirmation pending={pending!} mult={liveMult} format={formatStake} />
+          <BetConfirmation
+            pending={pending!}
+            mult={liveMult}
+            format={formatStake}
+            kind={market.kind}
+            question={market.question}
+          />
         ) : (
           <View style={styles.btns}>
             <BetButton
@@ -141,15 +148,20 @@ function BetConfirmation({
   pending,
   mult,
   format = money,
+  kind,
+  question,
 }: {
   pending: PendingBet;
   /** LIVE multiple from the current pool (drifts until lock); falls back to bet-time est. */
   mult: number;
   format?: (n: number) => string;
+  kind?: string;
+  question?: string;
 }) {
   const isYes = pending.side === "YES";
   const tint = isYes ? colors.yes : colors.no;
   const fill = isYes ? colors.alpha.yes : colors.alpha.no;
+  const pickLabel = sideDisplayLabel(pending.side, kind, question);
   const scale = useSharedValue(0.9);
   useEffect(() => {
     scale.value = withSequence(withSpring(1.04, spring.bouncy), withSpring(1, spring.smooth));
@@ -163,7 +175,7 @@ function BetConfirmation({
     >
       <View style={[styles.lockedDot, { backgroundColor: tint }]} />
       <Text style={[styles.lockedText, { color: tint }]}>
-        {pending.side} · {multiple(mult > 0 ? mult : pending.estimatedMult)}
+        {pickLabel} · {multiple(mult > 0 ? mult : pending.estimatedMult)}
       </Text>
       <Text style={styles.lockedStake}>{format(pending.stake)} in</Text>
     </Animated.View>

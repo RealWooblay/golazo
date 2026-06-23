@@ -14,7 +14,6 @@ import type {
   DepositMethod,
   FeedMode,
   HistoryItem,
-  HistoryRow,
   MoneyMode,
   TransactionRow,
   WithdrawDestination,
@@ -255,8 +254,6 @@ export interface Store extends StoreState {
   // ledger
   addBet: (row: BetRow) => void;
   addTransaction: (row: TransactionRow) => void;
-  /** @deprecated legacy match-loop path; wraps addBet. */
-  addHistory: (row: HistoryRow) => void;
   // session / wallet
   setStake: (stake: number) => void;
   setMode: (mode: FeedMode) => void;
@@ -387,25 +384,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [],
   );
 
-  // Legacy bridge: the current match loop calls addHistory(HistoryRow). Map it to
-  // a BetRow so old + new ledgers stay unified until the match agent migrates.
-  const addHistory = useCallback((row: HistoryRow) => {
-    const bet: BetRow = {
-      kind: "bet",
-      id: rowId("bet"),
-      marketId: row.id,
-      label: row.label,
-      side: row.label.startsWith("NO") ? "NO" : "YES",
-      stake: Math.abs(row.delta),
-      payoutMult: 0,
-      outcome: row.outcome,
-      won: row.won,
-      delta: row.delta,
-      at: Date.now(),
-    };
-    dispatch({ type: "addBet", row: bet });
-  }, []);
-
   const setStake = useCallback(
     (stake: number) => dispatch({ type: "setStake", stake }),
     [],
@@ -472,7 +450,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       withdraw,
       addBet,
       addTransaction,
-      addHistory,
       setStake,
       setMode,
       setMoneyMode,
@@ -496,7 +473,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       withdraw,
       addBet,
       addTransaction,
-      addHistory,
       setStake,
       setMode,
       setMoneyMode,

@@ -15,6 +15,7 @@ import {
   type Settlement,
   type Side,
 } from "@golazo/core";
+import { sideDisplayLabel } from "./marketMeta";
 import { useStore } from "@/state/store";
 import { usePointsIdentity } from "@/features/points/usePointsIdentity";
 import { runBots, type BotRunner } from "@/lib/bots";
@@ -304,6 +305,7 @@ export function useGameFeed(): GameFeedApi {
       return {
         marketId: m.id,
         question: m.question,
+        kind: m.kind,
         team: m.team,
         side: p.side,
         stake: p.stake,
@@ -312,6 +314,20 @@ export function useGameFeed(): GameFeedApi {
         won,
         payout,
       };
+    },
+    [],
+  );
+
+  const netBetDelta = useCallback(
+    (
+      outcome: Outcome,
+      side: Side,
+      stake: number,
+      payout: number,
+      won: boolean,
+    ): number => {
+      if (outcome === "VOID") return 0;
+      return won ? payout - stake : -stake;
     },
     [],
   );
@@ -331,11 +347,12 @@ export function useGameFeed(): GameFeedApi {
     const gross = yes + no;
     const net = gross * (1 - RAKE);
     const p = pendingByMarketRef.current[m.id];
-    const userSide =
-      p && p.marketId === m.id ? p.side : undefined;
+    const userSide = p && p.marketId === m.id ? p.side : undefined;
+    const userStake = p && p.marketId === m.id ? p.stake : undefined;
     const closed: ClosedMarketVM = {
       marketId: m.id,
       question: m.question,
+      kind: m.kind,
       outcome: m.settlement.outcome,
       oddsYes: yes > 0 ? net / yes : 1,
       oddsNo: no > 0 ? net / no : 1,
@@ -345,6 +362,7 @@ export function useGameFeed(): GameFeedApi {
       yesShare: gross > 0 ? (100 * yes) / gross : 50,
       settledAt: Date.now(),
       ...(userSide ? { userSide } : {}),
+      ...(userStake ? { userStake } : {}),
     };
     setClosedMarkets((prev) =>
       prev.some((item) => item.marketId === closed.marketId)
@@ -352,6 +370,17 @@ export function useGameFeed(): GameFeedApi {
         : [closed, ...prev],
     );
   }, []);
+
+  const patchClosedMarket = useCallback(
+    (marketId: string, patch: Partial<ClosedMarketVM>) => {
+      setClosedMarkets((prev) =>
+        prev.map((item) =>
+          item.marketId === marketId ? { ...item, ...patch } : item,
+        ),
+      );
+    },
+    [],
+  );
 
   // ================================================================
   // OFFLINE engine: SimMatch + MarketEngine, pumped by a tick loop.
@@ -751,9 +780,35 @@ export function useGameFeed(): GameFeedApi {
               break;
             case "market_resolve": {
               const settlement = msg.market.settlement;
+              const pending = pendingByMarketRef.current[msg.market.id];
+              const hadBet = !!pending;
               recordClosedMarket(msg.market);
-              const hadBet = !!pendingByMarketRef.current[msg.market.id];
               if (hadBet) pendingMarketQuestionRef.current = msg.market.question;
+              if (pending && settlement) {
+                const bettorId = pointsMode ? pointsUserId : USER_ID;
+                const won =
+                  settlement.outcome !== "VOID" &&
+                  pending.side === settlement.outcome;
+                const mine = settlement.payouts.find(
+                  (x) => x.userId === bettorId && x.side === pending.side,
+                );
+                const payout =
+                  settlement.outcome === "VOID"
+                    ? pending.stake
+                    : (mine?.payout ?? 0);
+                patchClosedMarket(msg.market.id, {
+                  userStake: pending.stake,
+                  userSide: pending.side,
+                  kind: msg.market.kind,
+                  userDelta: netBetDelta(
+                    settlement.outcome,
+                    pending.side,
+                    pending.stake,
+                    payout,
+                    won,
+                  ),
+                });
+              }
               if (settlement && !catchingUpRef.current && !pointsMode) {
                 const r = buildReveal(msg.market, settlement);
                 if (r) enqueueReveal(r);
@@ -813,9 +868,21 @@ export function useGameFeed(): GameFeedApi {
                 const won = msg.outcome !== "VOID" && p.side === msg.outcome;
                 const payout =
                   msg.outcome === "VOID" ? p.stake : msg.payout;
+                const userDelta = netBetDelta(
+                  msg.outcome,
+                  p.side,
+                  p.stake,
+                  payout,
+                  won,
+                );
+                patchClosedMarket(msg.marketId, {
+                  userStake: p.stake,
+                  userDelta,
+                });
                 enqueueReveal({
                   marketId: msg.marketId,
                   question: pendingMarketQuestionRef.current || "Play moment",
+                  kind: undefined,
                   team: undefined,
                   side: p.side,
                   stake: p.stake,
@@ -955,7 +1022,9 @@ export function useGameFeed(): GameFeedApi {
         setPendingForMarket(bet);
       }
 
-      setToast(`Bet ${side} · est. ${multiple(estimatedMult)}`);
+      setToast(
+        `Bet ${sideDisplayLabel(side, m.kind, m.question)} · est. ${multiple(estimatedMult)}`,
+      );
       return estimatedMult;
     },
     [
@@ -986,30 +1055,40 @@ export function useGameFeed(): GameFeedApi {
       id: betRowId(),
       marketId: reveal.marketId,
       gameId: game?.gameId, // scope the match "YOUR RUN" rail to this game only
-      label: `${reveal.side} · ${teamWord(reveal.team)} attack`,
+      label: sideDisplayLabel(reveal.side, reveal.kind, reveal.question),
       question: reveal.question,
       side: reveal.side,
       stake: reveal.stake,
       payoutMult: reveal.payoutMult,
       outcome: reveal.outcome,
       won: reveal.won,
-      delta:
-        reveal.outcome === "VOID"
-          ? 0
-          : reveal.won
-            ? reveal.payout
-            : -reveal.stake,
+      delta: netBetDelta(
+        reveal.outcome,
+        reveal.side,
+        reveal.stake,
+        reveal.payout,
+        reveal.won,
+      ),
       at: Date.now(),
     };
     store.addBet(row);
+    setClosedMarkets((prev) => {
+      const idx = prev.findIndex((m) => m.marketId === marketId);
+      if (idx < 0) return prev;
+      const item = { ...prev[idx], revealedAt: Date.now() };
+      return [item, ...prev.filter((_, i) => i !== idx)];
+    });
     setReveals((prev) => prev.filter((item) => item.marketId !== marketId));
     clearPendingForMarket(reveal.marketId);
   }, [reveals, store, teamWord, game, pointsMode, clearPendingForMarket]);
 
   const activeReveal = catchingUp ? null : (reveals[0] ?? null);
-  const historicMarkets = closedMarkets.filter(
-    (m) => !reveals.some((r) => r.marketId === m.marketId),
-  );
+  const historicMarkets = closedMarkets
+    .filter((m) => !reveals.some((r) => r.marketId === m.marketId))
+    .sort(
+      (a, b) =>
+        (b.revealedAt ?? b.settledAt) - (a.revealedAt ?? a.settledAt),
+    );
 
   return {
     game,

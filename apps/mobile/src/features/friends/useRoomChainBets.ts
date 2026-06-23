@@ -8,7 +8,7 @@ import { LAMPORTS_PER_SOL } from "@/features/chain/config";
 import { holdBeforeChainBet } from "@/features/chain/betHold";
 import type { UseChain } from "@/features/chain/useChain";
 import type { OnChainSide } from "@/features/chain/types";
-import type { ChainBetVM, ChainOdds } from "@/features/match/useChainBet";
+import type { ChainBetVM, ChainOdds } from "@/features/match/chainBetTypes";
 
 const SOL_PER_UNIT = 0.01;
 const FEE_HEADROOM_SOL = 0.01;

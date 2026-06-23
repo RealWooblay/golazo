@@ -91,7 +91,7 @@ describe('comprehensive full-game market simulation (rich-match)', () => {
     //    EVERY OTHER kind voiding is the old "event didn't arrive → void" bug and must be
     //    zero. (Cause tags can rotate out of the capped audit buffer, so we assert on the
     //    KIND — the true invariant — not the audited cause.)
-    const whichSide = ['next_shot', 'next_corner', 'next_goal'];
+    const whichSide = ['next_shot', 'next_corner', 'next_goal', 'next_card'];
     const spuriousVoids = report.voids.filter(
       (v) => !whichSide.includes(v.kind) && v.cause !== 'match_switch',
     );

@@ -71,6 +71,7 @@ export interface PendingBet {
 export interface RevealVM {
   marketId: string;
   question: string;
+  kind?: string;
   team: "home" | "away" | undefined;
   side: Side;
   stake: number;
@@ -84,6 +85,7 @@ export interface RevealVM {
 export interface ClosedMarketVM {
   marketId: string;
   question: string;
+  kind?: string;
   outcome: Outcome;
   oddsYes: number;
   oddsNo: number;
@@ -94,6 +96,12 @@ export interface ClosedMarketVM {
   settledAt: number;
   /** Set when you had a bet on this market — highlights your side in the list. */
   userSide?: Side;
+  /** Stake locked in when the market settled (from your pending bet). */
+  userStake?: number;
+  /** Net P/L for this market (+profit, −stake on loss, 0 void). */
+  userDelta?: number;
+  /** When you acknowledged the reveal (bet markets); drives session list order. */
+  revealedAt?: number;
 }
 
 // ── Persisted ledger (Profile screen + history) ──────────────────────────────
@@ -142,16 +150,3 @@ export interface TransactionRow {
 
 /** The unified ledger row — either a bet or a transaction. Discriminate on `kind`. */
 export type HistoryItem = BetRow | TransactionRow;
-
-// ── Legacy alias ─────────────────────────────────────────────────────────────
-/**
- * @deprecated The original lightweight history row. The match agent should move
- * to {@link BetRow} via `addBet`. Kept so existing match components compile.
- */
-export interface HistoryRow {
-  id: string;
-  label: string;
-  outcome: Outcome;
-  won: boolean;
-  delta: number;
-}

@@ -4,6 +4,7 @@ import { colors, radius, spacing, type } from "@/theme";
 import { Text } from "@/ui";
 import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
 import type { BetRow, ClosedMarketVM } from "@/state/types";
+import { outcomeDisplayLabel, sideDisplayLabel } from "../marketMeta";
 
 function userResult(
   m: ClosedMarketVM,
@@ -14,6 +15,24 @@ function userResult(
   if (m.outcome === "VOID" || bet?.outcome === "VOID") return "void";
   if (side === m.outcome) return "won";
   return "lost";
+}
+
+/** Net P/L for the session row — stake captured at settle, not ledger guesswork. */
+function sessionNet(
+  m: ClosedMarketVM,
+  bet: BetRow | undefined,
+  result: ReturnType<typeof userResult>,
+): number | undefined {
+  if (result === "none") return undefined;
+  if (m.userDelta !== undefined) return m.userDelta;
+  if (result === "void") return 0;
+  const stake = m.userStake ?? bet?.stake;
+  if (result === "lost") return stake != null ? -stake : bet?.delta;
+  if (bet) {
+    if (bet.stake > 0 && bet.delta > bet.stake) return bet.delta - bet.stake;
+    return bet.delta;
+  }
+  return undefined;
 }
 
 /**
@@ -67,8 +86,12 @@ export function ClosedMarketsList({
           const voided = m.outcome === "VOID";
           const yesWon = m.outcome === "YES";
           const tint = voided ? colors.cyan : yesWon ? colors.yes : colors.no;
-          const label = voided ? "VOID" : yesWon ? "YES" : "NO";
+          const label = outcomeDisplayLabel(m.outcome, m.kind, m.question);
           const side = m.userSide ?? bet?.side;
+          const sideLabel = side
+            ? sideDisplayLabel(side, m.kind, m.question)
+            : null;
+          const net = sessionNet(m, bet, result);
           const rowBorder =
             result === "won"
               ? styles.rowWon
@@ -82,13 +105,13 @@ export function ClosedMarketsList({
                 <Text style={[styles.question, side ? styles.questionMine : null]} numberOfLines={1}>
                   {m.question}
                 </Text>
-                {side ? (
+                {sideLabel ? (
                   <Text style={styles.youLine} numberOfLines={1}>
-                    You · {side}
-                    {bet && result !== "none"
+                    You · {sideLabel}
+                    {net !== undefined && result !== "none"
                       ? result === "void"
                         ? " · refund"
-                        : ` · ${signedFormat(bet.delta)}`
+                        : ` · ${signedFormat(net)}`
                       : ""}
                   </Text>
                 ) : null}

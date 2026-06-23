@@ -29,6 +29,12 @@ export class LagMeter {
     }
   }
 
+  /** Wipe the lag readings — called on a match switch so a prior fixture's lag never carries. */
+  reset(): void {
+    this.lastWallclockLagSec = null;
+    this.lastClockLagMin = 0;
+  }
+
   clockLagMin(): number {
     return this.lastClockLagMin;
   }

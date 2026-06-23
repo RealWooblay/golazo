@@ -21,6 +21,4 @@ export type {
   DepositMethod,
   WithdrawDestination,
   TransactionStatus,
-  // legacy
-  HistoryRow,
 } from "./types";

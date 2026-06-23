@@ -84,7 +84,7 @@ describe('full-game market simulation (Paraguay vs Türkiye replay)', () => {
     //    (neither team did the event in the window). Any OTHER kind voiding is the old
     //    "event didn't arrive" bug and must be ≈0. We assert on the KIND, not the audited
     //    cause (cause tags can rotate out of the capped audit buffer).
-    const whichSide = ['next_shot', 'next_corner', 'next_goal'];
+    const whichSide = ['next_shot', 'next_corner', 'next_goal', 'next_card'];
     const spuriousVoids = report.voids.filter(
       (v) => !whichSide.includes(v.kind) && v.cause !== 'match_switch',
     );

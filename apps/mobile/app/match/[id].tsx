@@ -8,7 +8,7 @@
 // src/features/match/useGameFeed.ts; visuals are composed from '@/ui' + the
 // match components.
 import React, { useEffect, useMemo, useState } from "react";
-import { StyleSheet, View } from "react-native";
+import { BackHandler, StyleSheet, View } from "react-native";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { colors, spacing, type } from "@/theme";
 import { AnimatedNumber, Banner, Chip, Confetti, Screen, Text, Toast } from "@/ui";
@@ -27,6 +27,7 @@ import {
   SOL_PER_UNIT,
 } from "@/features/chain/useDisplayBalance";
 import { resolveTeams } from "@/features/match/teams";
+import { sideDisplayLabel } from "@/features/match/marketMeta";
 import {
   ClosedMarketsList,
   CommentaryTicker,
@@ -43,6 +44,9 @@ import { LockedStrip } from "@/features/match/components/LockedStrip";
 export default function MatchScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const leaveMatch = React.useCallback(() => {
+    router.replace("/(tabs)");
+  }, [router]);
   const store = useStore();
   const hapticsOn = store.session.hapticsOn;
 
@@ -74,6 +78,15 @@ export default function MatchScreen() {
       setFocused(true);
       return () => setFocused(false);
     }, []),
+  );
+  useFocusEffect(
+    React.useCallback(() => {
+      const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+        leaveMatch();
+        return true;
+      });
+      return () => sub.remove();
+    }, [leaveMatch]),
   );
   // Tick through BOTH open and locked: the locked card shows the resolve-window
   // countdown, so the clock must keep running after lock or it freezes on a
@@ -177,7 +190,7 @@ export default function MatchScreen() {
       <UnifiedHeader
         variant="slim"
         title="GOLAZO"
-        onBack={() => router.back()}
+        onBack={leaveMatch}
         right={
           <View style={styles.headerRight}>
             <Chip
@@ -265,7 +278,7 @@ export default function MatchScreen() {
               away={teams.away}
               scoreHome={game?.scoreHome ?? 0}
               scoreAway={game?.scoreAway ?? 0}
-              onExit={() => router.back()}
+              onExit={leaveMatch}
             />
           </View>
         ) : halftime ? (
@@ -370,7 +383,8 @@ export default function MatchScreen() {
                 const yesPool = m.pool * (m.yesShare / 100);
                 const sidePool = betSide === "YES" ? yesPool : m.pool - yesPool;
                 const mult = sidePool > 0 ? (m.pool * (1 - RAKE)) / sidePool : 0;
-                betLabel = `You: ${betSide} · ${betStakeStr}${mult > 0 ? ` → ${multiple(mult)}` : ""}`;
+                const pick = sideDisplayLabel(betSide, m.kind, m.question);
+                betLabel = `You: ${pick} · ${betStakeStr}${mult > 0 ? ` → ${multiple(mult)}` : ""}`;
               }
               return (
                 <View key={m.id} style={styles.gutter}>

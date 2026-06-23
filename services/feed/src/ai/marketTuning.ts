@@ -159,6 +159,157 @@ export const MOMENTUM_OPEN_THRESHOLD = 0.15;
 export const COUNT_WINDOW_MS = 240_000; // 4-minute counting window
 export const COUNT_LAG_MS = 60_000; // + ~55–60s feed lag before NO
 
+/** Bet window for heartbeat-opened event/count/versus markets. */
+export const HEARTBEAT_BET_WINDOW_MS = 10_000;
+
+function pickRotated<T>(variants: readonly T[], seed: number): T {
+  return variants[Math.abs(seed) % variants.length]!;
+}
+
+const CARD_WINDOW_QUESTIONS = [
+  'A booking in the next few minutes?',
+  'A yellow card before this spell cools off?',
+  'Will anyone go in the book soon?',
+  'Tempers rising — card coming?',
+  "Ref reaching for his pocket soon?",
+  'A late challenge and a booking incoming?',
+  'Someone seeing yellow in the next few?',
+  'Will the ref have to step in soon?',
+  'A card in this passage of play?',
+  'Niggly out there — booking on the way?',
+] as const;
+
+const GOAL_WINDOW_QUESTIONS = [
+  'A goal in the next few minutes? (either team)',
+  'Either team to find the net soon?',
+  'A goal before this spell dies out?',
+  'Will we see one go in soon?',
+  'End to end — a goal coming?',
+  'Net to bulge in the next few minutes?',
+  'Someone about to break the deadlock here?',
+  'A goal in this passage of play?',
+  'Feels like a goal is coming — soon?',
+  'Will the keeper be picking it out soon?',
+] as const;
+
+/** Rotating event-slot heartbeat — card vs goal, varied copy each cycle. */
+export function buildEventSlotTrigger(gameId: string, counter: number): MarketTrigger {
+  const isCard = counter % 2 === 0;
+  if (isCard) {
+    return {
+      gameId,
+      question: pickRotated(CARD_WINDOW_QUESTIONS, counter),
+      kind: 'card_in_window',
+      slot: 'event',
+      windowMs: HEARTBEAT_BET_WINDOW_MS,
+      trueProb: 0.35,
+    };
+  }
+  return {
+    gameId,
+    question: pickRotated(GOAL_WINDOW_QUESTIONS, counter),
+    kind: 'goal_in_window',
+    slot: 'event',
+    windowMs: HEARTBEAT_BET_WINDOW_MS,
+    trueProb: 0.3,
+  };
+}
+
+const CORNER_COUNT_QUESTIONS = [
+  (line: number) => `More than ${line} corners in the next few minutes?`,
+  (line: number) => `${line + 1}+ corners in this spell?`,
+  (line: number) => `Corner count — over ${line} soon?`,
+  (line: number) => `Will we see ${line + 1} corners pile up?`,
+  (line: number) => `Pressure building — ${line + 1}+ corners coming?`,
+  (line: number) => `Over ${line} corners before the spell cools?`,
+  (line: number) => `Set-piece barrage — ${line + 1} corners soon?`,
+  (line: number) => `Camped in their half — ${line + 1}+ corners?`,
+] as const;
+
+const SHOT_COUNT_QUESTIONS = [
+  (line: number) => `More than ${line} shots in the next few minutes?`,
+  (line: number) => `${line + 1}+ shots in this spell?`,
+  (line: number) => `Shot count — over ${line} soon?`,
+  (line: number) => `Will they rack up ${line + 1} shots?`,
+  (line: number) => `Peppering the goal — ${line + 1}+ shots coming?`,
+  (line: number) => `Over ${line} shots before the spell cools?`,
+  (line: number) => `Keeper busy — ${line + 1} shots soon?`,
+  (line: number) => `Throwing everything at it — ${line + 1}+ shots?`,
+] as const;
+
+/** Rotating count-slot heartbeat — corners vs shots, varied copy. */
+export function buildCountSlotTrigger(gameId: string, counter: number): MarketTrigger {
+  const isCorners = counter % 2 === 0;
+  const kind = isCorners ? 'over_corners' : 'over_shots';
+  const line = countLine(kind);
+  const q = isCorners
+    ? pickRotated(CORNER_COUNT_QUESTIONS, counter)(line)
+    : pickRotated(SHOT_COUNT_QUESTIONS, counter)(line);
+  return {
+    gameId,
+    question: q,
+    kind,
+    slot: 'count',
+    windowMs: HEARTBEAT_BET_WINDOW_MS,
+    trueProb: 0.45,
+  };
+}
+
+type VersusPhrase = (a: string, b: string) => string;
+
+const NEXT_SHOT_PHRASES: readonly VersusPhrase[] = [
+  (a, b) => `Who threatens next — ${a} or ${b}?`,
+  (a, b) => `Next shot or corner — ${a} or ${b}?`,
+  (a, b) => `Who gets forward next — ${a} or ${b}?`,
+  (a, b) => `Next chance falls to — ${a} or ${b}?`,
+  (a, b) => `Who breaks next — ${a} or ${b}?`,
+];
+const NEXT_CORNER_PHRASES: readonly VersusPhrase[] = [
+  (a, b) => `Who wins the next corner — ${a} or ${b}?`,
+  (a, b) => `Next corner goes to — ${a} or ${b}?`,
+  (a, b) => `Who forces the next corner — ${a} or ${b}?`,
+];
+const NEXT_GOAL_PHRASES: readonly VersusPhrase[] = [
+  (a, b) => `Who scores next — ${a} or ${b}?`,
+  (a, b) => `Next goal belongs to — ${a} or ${b}?`,
+  (a, b) => `Who finds the net first — ${a} or ${b}?`,
+];
+const NEXT_CARD_PHRASES: readonly VersusPhrase[] = [
+  (a, b) => `Who gets the next booking — ${a} or ${b}?`,
+  (a, b) => `Next card shown to — ${a} or ${b}?`,
+  (a, b) => `Whose player sees yellow next — ${a} or ${b}?`,
+];
+
+/** The which-side-next CONTESTS the heartbeat rotates through — kind + phrasing bank. */
+const VERSUS_CONTESTS = [
+  { kind: 'next_shot', bank: NEXT_SHOT_PHRASES },
+  { kind: 'next_corner', bank: NEXT_CORNER_PHRASES },
+  { kind: 'next_goal', bank: NEXT_GOAL_PHRASES },
+  { kind: 'next_card', bank: NEXT_CARD_PHRASES },
+] as const;
+
+/** Rotating which-side-next contest — shot / corner / goal / card, varied phrasing each cycle. */
+export function buildVersusTrigger(
+  game: GameState,
+  team: Team,
+  variant: number,
+): MarketTrigger | null {
+  const teamName = team === 'home' ? game.home.name : game.away.name;
+  const otherName = team === 'home' ? game.away.name : game.home.name;
+  if (!teamName || !otherName) return null;
+  const contest = VERSUS_CONTESTS[Math.abs(variant) % VERSUS_CONTESTS.length]!;
+  const phrase = pickRotated(contest.bank, Math.floor(Math.abs(variant) / VERSUS_CONTESTS.length));
+  return {
+    gameId: game.gameId,
+    question: phrase(teamName, otherName),
+    kind: contest.kind,
+    slot: 'versus',
+    team,
+    windowMs: HEARTBEAT_BET_WINDOW_MS,
+    trueProb: 0.5,
+  };
+}
+
 /** The over/under line (count must EXCEED this) for each count kind. */
 export function countLine(kind: string): number {
   if (kind === 'over_corners') return 1; // "more than 1 corner" → 2+ corners
@@ -186,7 +337,12 @@ export function isCountKind(kind: string): boolean {
  * the ONLY family whose NO can come from an event rather than the deadline sweep.
  */
 export function isWhichSideNextKind(kind: string): boolean {
-  return kind === 'next_shot' || kind === 'next_corner' || kind === 'next_goal';
+  return (
+    kind === 'next_shot' ||
+    kind === 'next_corner' ||
+    kind === 'next_goal' ||
+    kind === 'next_card'
+  );
 }
 
 /** Feed event types that DECIDE a which-side-next market (whichever team does it first). */
@@ -200,6 +356,8 @@ export function decisiveEventTypes(kind: string): ReadonlySet<FeedEventType> {
     return new Set<FeedEventType>(['shot', 'miss', 'goal', 'corner', 'dangerous_attack']);
   if (kind === 'next_corner') return new Set<FeedEventType>(['corner']);
   if (kind === 'next_goal') return new Set<FeedEventType>(['goal']);
+  // next_card — whichever team's player is booked next (any card by either side decides it).
+  if (kind === 'next_card') return new Set<FeedEventType>(['yellow_card', 'red_card', 'card']);
   return new Set<FeedEventType>();
 }
 
@@ -276,6 +434,10 @@ export function resolveDeadlineMs(kind: string): number {
       // "Next goal — which team?" — a long contest; goals are rare so it often VOIDs,
       // which is why it's NOT auto-opened on the heartbeat (kept for the AI director).
       return 480_000;
+    case 'next_card':
+      // "Next booking — which team?" — cards land every few minutes somewhere; a generous
+      // window catches one and resolves YES/NO, else VOID/refund.
+      return 300_000;
     case 'goal_in_stoppage':
       return STOPPAGE_EXTEND_MS;
     case 'goal_in_extra_time':
@@ -294,15 +456,9 @@ export function resolveDeadlineMs(kind: string): number {
 export const KEY_EVENT_ONLY_OPENERS = new Set<FeedEvent['type']>(['penalty']);
 
 /**
- * Exactly ONE market is live at a time — you bet on the moment happening NOW.
- * The product goal isn't parallel markets, it's a FAST FLOW: each market resolves
- * quickly (on real evidence, else a short timeout) so the next can open right
- * behind it. A moment that occurs while a market is live is IGNORED — never
- * queued and replayed later (that path only breeds stale, wrong markets).
+ * Exactly one open market per slot lane (see `marketSlot`). Momentum allows two
+ * concurrent window lanes (one per team). Set-pieces use the `moment` slot.
  */
-/** @deprecated Kept for old tests/docs. Runtime concurrency is now one per slot. */
-export const MAX_CONCURRENT_MARKETS = 1;
-
 export function marketSlot(kind: string): MarketSlot {
   if (
     kind === 'shot_in_window' ||
@@ -318,7 +474,8 @@ export function marketSlot(kind: string): MarketSlot {
   if (kind === 'card_in_window' || kind === 'goal_in_window') return 'event';
   if (kind === 'over_corners' || kind === 'over_shots') return 'count';
   // WHICH-SIDE-NEXT contest lane (next shot/corner/goal — which team?).
-  if (kind === 'next_shot' || kind === 'next_corner' || kind === 'next_goal') return 'versus';
+  if (kind === 'next_shot' || kind === 'next_corner' || kind === 'next_goal' || kind === 'next_card')
+    return 'versus';
   return 'moment';
 }
 

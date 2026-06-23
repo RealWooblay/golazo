@@ -135,8 +135,18 @@ describe('PHASE 6 which-side-next palette', () => {
     expect(isWhichSideNextKind('next_shot')).toBe(true);
     expect(isWhichSideNextKind('next_corner')).toBe(true);
     expect(isWhichSideNextKind('next_goal')).toBe(true);
+    expect(isWhichSideNextKind('next_card')).toBe(true);
     expect(isWhichSideNextKind('shot_in_window')).toBe(false);
     expect(isWhichSideNextKind('over_corners')).toBe(false);
+  });
+
+  it('decides next_card on a booking by either team, and maps to the versus slot', () => {
+    const set = decisiveEventTypes('next_card');
+    expect(set.has('yellow_card')).toBe(true);
+    expect(set.has('red_card')).toBe(true);
+    expect(set.has('shot')).toBe(false);
+    expect(marketSlot('next_card')).toBe('versus');
+    expect(resolveDeadlineMs('next_card')).toBeGreaterThan(0);
   });
 
   it('decides next_shot on any real attacking threat, and maps to the versus slot', () => {

@@ -92,7 +92,7 @@ export function UnifiedHeader({
   if (variant === "slim") {
     return (
       <View style={[styles.slimBar, style]}>
-        <View style={styles.slimSide}>
+        <View style={styles.slimLeft}>
           {onClose ? (
             <IconButton accessibilityLabel="Close" onPress={onClose} haptic="tap">
               <IconClose size={20} color={colors.textPrimary} />
@@ -101,12 +101,20 @@ export function UnifiedHeader({
             <IconButton accessibilityLabel="Back" onPress={onBack} haptic="tap">
               <IconBack size={20} color={colors.textPrimary} />
             </IconButton>
-          ) : null}
+          ) : (
+            <View style={styles.slimSideSpacer} />
+          )}
         </View>
-        <Text style={styles.slimTitle} numberOfLines={1} accessibilityRole="header">
+        <Text
+          style={[styles.slimTitleOverlay, { pointerEvents: "none" }]}
+          numberOfLines={1}
+          accessibilityRole="header"
+        >
           {title}
         </Text>
-        <View style={[styles.slimSide, styles.slimSideRight]}>{right}</View>
+        <View style={styles.slimRight} pointerEvents="box-none">
+          {right}
+        </View>
       </View>
     );
   }
@@ -176,20 +184,36 @@ const styles = StyleSheet.create({
   slimBar: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
+    minHeight: 44,
     paddingHorizontal: spacing.lg,
     marginBottom: spacing.md,
+    position: "relative",
   },
-  // Fixed-min sides so the centre title stays optically centred regardless of
-  // whether a back/close/right glyph is present.
-  slimSide: { minWidth: 40, alignItems: "flex-start", justifyContent: "center" },
-  slimSideRight: { alignItems: "flex-end" },
-  slimTitle: {
+  // Pin the back/close control so wide right-slot content can't steal taps.
+  slimLeft: {
+    width: 44,
+    zIndex: 2,
+    alignItems: "flex-start",
+    justifyContent: "center",
+  },
+  slimSideSpacer: { width: 44, height: 44 },
+  slimTitleOverlay: {
     ...type.title,
     fontSize: 20,
     color: colors.textPrimary,
-    flex: 1,
+    position: "absolute",
+    left: 56,
+    right: 56,
     textAlign: "center",
+    zIndex: 0,
+  },
+  slimRight: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    zIndex: 1,
   },
 
   // shared -------------------------------------------------------------------

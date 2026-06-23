@@ -3,7 +3,7 @@ import { StyleSheet, View } from "react-native";
 import { colors, radius, spacing, type } from "@/theme";
 import { Text } from "@/ui";
 import type { MarketVM } from "@/state/types";
-import { isWhistleBound, laneOf, whistleLabel } from "../marketMeta";
+import { eventDecidedLabel, isEventDecided, isWhistleBound, laneOf, sideDisplayLabel, whistleLabel } from "../marketMeta";
 
 /**
  * LockedStrip — a market whose betting has closed. You can't bet it, so it collapses
@@ -22,14 +22,17 @@ export function LockedStrip({
 }) {
   const lane = laneOf(market.kind, market.slot);
   const whistle = isWhistleBound(market.kind);
+  const eventDecided = isEventDecided(market.kind, market.question);
   const left = Math.max(0, market.resolveAt - now);
   const mins = Math.floor(left / 60000);
   const secs = Math.floor((left % 60000) / 1000);
   const countdown = whistle
     ? whistleLabel(market.kind)
-    : mins > 0
-      ? `${mins}:${String(secs).padStart(2, "0")}`
-      : `${Math.ceil(left / 1000)}s`;
+    : eventDecided
+      ? eventDecidedLabel(market.kind)
+      : mins > 0
+        ? `${mins}:${String(secs).padStart(2, "0")}`
+        : `${Math.ceil(left / 1000)}s`;
 
   return (
     <View style={[styles.strip, { borderLeftColor: lane.color }]}>

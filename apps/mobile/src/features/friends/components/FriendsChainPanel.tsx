@@ -4,7 +4,7 @@ import { Banner, Button, Pressable, Surface, Text } from "@/ui";
 import { colors, radius, spacing, type } from "@/theme";
 import { money, multiple } from "@/lib/format";
 import { SOL_PER_UNIT } from "@/features/chain/useDisplayBalance";
-import type { ChainBetVM } from "@/features/match/useChainBet";
+import type { ChainBetVM } from "@/features/match/chainBetTypes";
 
 const openUrl = (url?: string) => {
   if (url) Linking.openURL(url).catch(() => {});

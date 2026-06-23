@@ -47,6 +47,9 @@ import { EspnFeed } from './feed/espn';
 import { aiTriggerFromEvents } from './ai/watcher';
 import {
   buildPeriodMarketTrigger,
+  buildCountSlotTrigger,
+  buildEventSlotTrigger,
+  buildVersusTrigger,
   clockMinutes,
   goalAlreadyHappenedForChance,
   isDefensiveSetPiece,
@@ -113,10 +116,16 @@ const MOMENTUM_OPEN_COOLDOWN_MS = 8_000;
  * late-goal rescue could even settle it YES off the goal that just happened).
  */
 const SCORE_COOLOFF_MS = 25_000;
+/**
+ * After a goal, a teamless "a goal in the next few minutes?" market reads as nonsense (the
+ * game just restarted from the centre circle). Suppress the event-slot goal-window market
+ * for this long after ANY goal — rotate to the booking market instead.
+ */
+const GOAL_WINDOW_COOLOFF_MS = 60_000;
 /** Per-player FORM tracking (mirrors team momentum, keyed by ESPN athlete id). */
 const PLAYER_DECAY = 0.85;
-const PLAYER_HOT_THRESHOLD = 4.25; // sustained threat, not one shot or one goal
-const PLAYER_OPEN_COOLDOWN_MS = 150_000; // per-player, so one player doesn't spam the slot
+const PLAYER_HOT_THRESHOLD = 3.0; // ~one tagged shot + follow-up threat (was 4.25)
+const PLAYER_OPEN_COOLDOWN_MS = 90_000; // per-player (was 150s)
 const PLAYER_BACK_TO_BACK_COOLDOWN_MS = 120_000;
 const SET_PIECE_UNTAKEN_GRACE_MS = 20_000;
 const SET_PIECE_AFTER_TAKEN_GRACE_MS = 25_000;
@@ -131,14 +140,27 @@ const SET_PIECE_MAX_UNCONFIRMED_MS = 180_000;
  * staggers WHEN opens surface, which is most of the "feels clean" perception win.
  */
 const MIN_OPEN_SPACING_MS = 8_000;
+/**
+ * Clock-skew tolerance for the anti-arb resolver-taint check. We only treat an event as
+ * "happened during betting" (tainted) when its wallclock is more than this before betting
+ * closed, so sub-second skew between our clock and ESPN's wallclock never wrongly drops a
+ * legitimate just-after-close event. Small vs the ~30-50s arb window the lag opens.
+ */
+const RESOLVER_SKEW_GRACE_MS = 1_500;
+/**
+ * The feed lag the resolve deadlines were tuned to absorb. When the MEASURED lag exceeds
+ * this, a legit in-window goal may still be in flight past a goal-market's deadline — so we
+ * hold the NO for the excess (capped) instead of settling NO on a goal that already happened.
+ * This is what stops "a goal occurred but the shot/goal market resolved NO" when lag spikes.
+ */
+const EXPECTED_FEED_LAG_MS = 55_000;
+const MAX_LATE_GOAL_GRACE_MS = 45_000;
 /** EVENT-slot heartbeat: open one teamless card/goal-window market roughly this often. */
 const EVENT_SLOT_INTERVAL_MS = 180_000; // ~3 min
 /** COUNT-slot heartbeat: open one over_corners/over_shots market roughly this often. */
 const COUNT_SLOT_INTERVAL_MS = 240_000; // ~4 min
 /** VERSUS-slot heartbeat: open one which-side-next contest roughly this often. */
 const VERSUS_SLOT_INTERVAL_MS = 150_000; // ~2.5 min
-/** Bet window for the heartbeat-opened event/count markets (snappy, like momentum). */
-const HEARTBEAT_BET_WINDOW_MS = 10_000;
 /** Hydration/cooling break can't run longer than this — auto-resume so a missed ESPN
  *  "end delay" marker never freezes the board for the rest of the match. */
 const MAX_BREAK_MS = 180_000;
@@ -269,6 +291,10 @@ export class Orchestrator {
   private readonly lastMomentumOpenAt = new Map<Team, number>();
   /** Wall-clock of each team's last goal — gates the post-goal score-market cool-off. */
   private readonly lastGoalAt = new Map<Team, number>();
+  /** The EXACT ESPN wallclock of each team's last goal (only set when the keyEvent carried
+   *  one) — so the late-goal rescue can prove a goal happened AFTER betting closed. When it's
+   *  absent the rescue falls back to the match clock (lastResolverByTeam vs openClockMin). */
+  private readonly lastGoalWallclockByTeam = new Map<Team, number>();
   /** Per-player decaying FORM (keyed by ESPN athlete id) — drives player markets. */
   private readonly playerForm = new Map<
     string,
@@ -382,7 +408,11 @@ export class Orchestrator {
       refreshMs: this.config.aiRefreshMs,
       matchTokenBudget: this.config.aiMatchTokenBudget,
       commentary: this.commentary,
-      getContext: () => ({ game: this.feed.state(), momentum: this.momentum.read() }),
+      getContext: () => ({
+        game: this.feed.state(),
+        momentum: this.momentum.read(),
+        secondsSinceGoal: this.secondsSinceLastGoal(),
+      }),
       onReject: (reason, raw) =>
         this.audit.record('director_reject', { reason, raw: JSON.stringify(raw).slice(0, 200) }),
     });
@@ -650,6 +680,15 @@ export class Orchestrator {
       return;
     }
 
+    // A CORNER both RESOLVES a window market ("a shot OR corner this spell?") and OPENS a
+    // set-piece market (goal_from_corner). The resolver gate above returns before the opener,
+    // so it can't do both — resolve window markets on the corner HERE, then fall through to
+    // the opener below. (Count + which-side markets already handle corners in their own
+    // per-event passes; recordResolverClock ignores corners, so no false goal-rescue.)
+    if (ev.type === 'corner') {
+      await this.resolveFromEvent(ev);
+    }
+
     // BUILD-UP path — only non-resolver events reach here (resolvers returned above).
     // Momentum (WINDOW) + a PLAYER market for the hottest in-form player open in
     // PARALLEL lanes, off flowing play — so they PAUSE during a hydration/cooling break.
@@ -907,7 +946,7 @@ export class Orchestrator {
     const openClockMin = oc.base + oc.stopp / 100;
     const trigger: MarketTrigger = {
       gameId: game.gameId,
-      question: `${best.name} — to SCORE in the next few minutes?`,
+      question: pickPlayerQuestion(best.name, this.momentumCounter++),
       kind: 'player_to_score',
       slot: 'player',
       team: best.team,
@@ -939,7 +978,19 @@ export class Orchestrator {
   private endBreak(): void {
     if (!this.breakPaused) return;
     this.breakPaused = false;
-    console.log('[golazo/feed] break_end — markets resumed');
+    const breakMs = Date.now() - this.breakStartedAt;
+    // The countdown shouldn't drain during a break — push every open/locked market's resolve
+    // deadline forward by however long the break lasted, so a market doesn't settle the instant
+    // play resumes (it gets back exactly the time the break ate). settleExpired was paused for
+    // the break, so nothing resolved meanwhile; this keeps the post-break timers honest.
+    if (breakMs > 0) {
+      for (const t of this.tracked.values()) {
+        const m = this.engine.get(t.marketId);
+        if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
+        this.extendMarketResolve(t, m.resolveAt + breakMs);
+      }
+    }
+    console.log(`[golazo/feed] break_end — markets resumed (+${Math.round(breakMs / 1000)}s deadlines)`);
   }
 
   /**
@@ -1029,6 +1080,8 @@ export class Orchestrator {
       if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
       // Open-boundary: the event that OPENED the market can't also count toward it.
       if (t.openSeq !== undefined && t.openSeq >= this.eventCounter) continue;
+      // Anti-arb: an event that happened during betting is tainted — don't count it.
+      if (this.resolverIsTainted(ev, m, t)) continue;
       t.counter.count += 1;
       if (t.counter.count <= t.counter.line) continue;
       // Crossed → YES. Held while OPEN (applied at lock, like every early outcome);
@@ -1064,6 +1117,8 @@ export class Orchestrator {
       if (!decisiveEventTypes(m.kind).has(ev.type)) continue;
       // Open-boundary: the event that OPENED the contest can't be its own decider.
       if (t.openSeq !== undefined && t.openSeq >= this.eventCounter) continue;
+      // Anti-arb: a decisive event that happened during betting is tainted — skip it.
+      if (this.resolverIsTainted(ev, m, t)) continue;
       const outcome: Outcome = ev.team === t.team ? 'YES' : 'NO';
       if (m.status === 'open') {
         if (!t.pendingOutcome) t.pendingOutcome = { outcome }; // first decisive event wins
@@ -1084,24 +1139,13 @@ export class Orchestrator {
     if (Date.now() - this.lastEventSlotOpenAt < EVENT_SLOT_INTERVAL_MS) return;
     if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
 
-    const isCard = this.eventSlotCounter % 2 === 0;
-    const trigger: MarketTrigger = isCard
-      ? {
-          gameId: game.gameId,
-          question: 'A booking in the next few minutes?',
-          kind: 'card_in_window',
-          slot: 'event',
-          windowMs: HEARTBEAT_BET_WINDOW_MS,
-          trueProb: 0.35,
-        }
-      : {
-          gameId: game.gameId,
-          question: 'A goal in the next few minutes? (either team)',
-          kind: 'goal_in_window',
-          slot: 'event',
-          windowMs: HEARTBEAT_BET_WINDOW_MS,
-          trueProb: 0.3,
-        };
+    let trigger = buildEventSlotTrigger(game.gameId, this.eventSlotCounter);
+    // POST-GOAL: don't open "a goal in the next few minutes?" right after a goal (the game
+    // just kicked off again) — rotate to the booking market instead.
+    if (trigger.kind === 'goal_in_window' && this.recentGoalCooloff(GOAL_WINDOW_COOLOFF_MS)) {
+      this.eventSlotCounter++;
+      trigger = buildEventSlotTrigger(game.gameId, this.eventSlotCounter);
+    }
 
     const beforeOpened = this.metrics.marketsOpened;
     await this.openTriggeredMarket(trigger, { slot: 'event', logLabel: `heartbeat kind=${trigger.kind}` });
@@ -1122,21 +1166,13 @@ export class Orchestrator {
     if (Date.now() - this.lastCountSlotOpenAt < COUNT_SLOT_INTERVAL_MS) return;
     if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
 
-    const isCorners = this.countSlotCounter % 2 === 0;
-    const kind = isCorners ? 'over_corners' : 'over_shots';
-    const line = countLine(kind);
-    const noun = isCorners ? 'corners' : 'shots';
-    const trigger: MarketTrigger = {
-      gameId: game.gameId,
-      question: `More than ${line} ${noun} in the next few minutes?`,
-      kind,
-      slot: 'count',
-      windowMs: HEARTBEAT_BET_WINDOW_MS,
-      trueProb: 0.45,
-    };
+    const trigger = buildCountSlotTrigger(game.gameId, this.countSlotCounter);
 
     const beforeOpened = this.metrics.marketsOpened;
-    await this.openTriggeredMarket(trigger, { slot: 'count', logLabel: `heartbeat kind=${kind} line=${line}` });
+    await this.openTriggeredMarket(trigger, {
+      slot: 'count',
+      logLabel: `heartbeat kind=${trigger.kind} line=${countLine(trigger.kind)}`,
+    });
     if (this.metrics.marketsOpened > beforeOpened) {
       this.lastCountSlotOpenAt = Date.now();
       this.countSlotCounter++;
@@ -1200,22 +1236,15 @@ export class Orchestrator {
     // left to the AI director to open with sharper timing. Alternate the YES side so both
     // teams take turns being the named team.
     const team: Team = this.versusCounter % 2 === 0 ? 'home' : 'away';
-    const teamName = team === 'home' ? game.home.name : game.away.name;
-    const otherName = team === 'home' ? game.away.name : game.home.name;
-    if (!teamName || !otherName) return;
-
-    const trigger: MarketTrigger = {
-      gameId: game.gameId,
-      question: `Who threatens next — ${teamName} or ${otherName}?`,
-      kind: 'next_shot',
-      slot: 'versus',
-      team,
-      windowMs: HEARTBEAT_BET_WINDOW_MS,
-      trueProb: 0.5, // a contest — roughly even at open
-    };
+    const trigger = buildVersusTrigger(game, team, Math.floor(this.versusCounter / 2));
+    if (!trigger) return;
 
     const beforeOpened = this.metrics.marketsOpened;
-    await this.openTriggeredMarket(trigger, { slot: 'versus', team, logLabel: `versus kind=next_shot team=${team}` });
+    await this.openTriggeredMarket(trigger, {
+      slot: 'versus',
+      team,
+      logLabel: `versus kind=${trigger.kind} team=${team}`,
+    });
     if (this.metrics.marketsOpened > beforeOpened) {
       this.lastVersusOpenAt = Date.now();
       this.versusCounter++;
@@ -1309,7 +1338,10 @@ export class Orchestrator {
       marketSeed,
       slot,
       openSeq: this.eventCounter,
-      ...(opts.openClockMin !== undefined ? { openClockMin: opts.openClockMin } : {}),
+      // Always stamp the match-clock minute at open — the anti-arb match-clock fallback (for a
+      // goal that arrives without an exact wallclock) needs it on EVERY market, not just the
+      // event-opened ones. Falls back to the live game clock when the opener didn't supply one.
+      openClockMin: opts.openClockMin ?? this.currentClockMin(),
       ...(opts.openerType ? { openerType: opts.openerType } : {}),
       ...(opts.playerId ? { playerId: opts.playerId } : {}),
       ...(opts.isPeriod ? { isPeriod: true } : {}),
@@ -1418,6 +1450,15 @@ export class Orchestrator {
       if (!m || m.status !== 'locked') continue;
       if (now < m.resolveAt) continue;
 
+      // LAG-AWARE NO HOLD: when the feed is lagging MORE than the deadlines assume, a real
+      // in-window goal can still be in flight — wait out the excess lag (capped) before
+      // settling a goal-question market NO, so we never NO a goal that already happened.
+      if (anyTeamGoalCountsYes(m.kind)) {
+        const lagMs = (this.lagMeter.wallclockLagSec() ?? 0) * 1000;
+        const extra = Math.min(Math.max(0, lagMs - EXPECTED_FEED_LAG_MS), MAX_LATE_GOAL_GRACE_MS);
+        if (extra > 0 && now < m.resolveAt + extra) continue;
+      }
+
       if (isSetPieceGoalKind(m.kind) && !t.setPieceTakenAt) {
         const maxUnconfirmedAt = m.lockAt + SET_PIECE_MAX_UNCONFIRMED_MS;
         if (now < maxUnconfirmedAt) {
@@ -1433,11 +1474,20 @@ export class Orchestrator {
       // attributed evidence (handled at the goal event), so they always NO here.
       if (
         anyTeamGoalCountsYes(m.kind) &&
-        goalAlreadyHappenedForChance(t.team, t.openClockMin, this.lastResolverByTeam)
+        goalAlreadyHappenedForChance(t.team, t.openClockMin, this.lastResolverByTeam) &&
+        this.rescueGoalIsClean(t, m)
       ) {
         console.log(
           `[golazo/feed] market_deadline_late_goal id=${m.id} kind=${m.kind} team=${t.team ?? 'n/a'}`,
         );
+        this.finalizeMarket(t, 'YES');
+        continue;
+      }
+
+      // Teamless "a goal in the next few minutes? (either team)" rescue: a goal by EITHER team
+      // recorded at/after open settles YES (the team-based rescue above can't fire for it).
+      if (m.kind === 'goal_in_window' && !t.team && this.anyTeamGoalAfterOpen(t)) {
+        console.log(`[golazo/feed] market_deadline_late_goal id=${m.id} kind=${m.kind} team=either`);
         this.finalizeMarket(t, 'YES');
         continue;
       }
@@ -1466,6 +1516,104 @@ export class Orchestrator {
     console.log(
       `[golazo/feed] market_deadline_extend id=${m.id} kind=${m.kind} to=${Math.round(resolveAt - Date.now())}ms`,
     );
+  }
+
+  /**
+   * The TRUE wall-clock time an event happened, in ms — ONLY when we know it exactly (the
+   * ESPN keyEvent wallclock, carried by goals/cards/penalties). We deliberately do NOT
+   * estimate a commentary event's time from the measured feed lag: that lag is a sparse,
+   * goal-derived snapshot, and a stale/inflated value would wrongly mark a legitimate
+   * just-after-close shot as "during betting" and settle a winning market NO — a far worse
+   * failure than the small arb edge on a fuzzy commentary event. No exact wallclock →
+   * undefined → the caller counts the event (resolverIsTainted returns false).
+   */
+  private eventWallclockMs(ev: FeedEvent): number | undefined {
+    const wc = ev.meta?.wallclock;
+    if (typeof wc === 'string') {
+      const t = Date.parse(wc);
+      if (Number.isFinite(t)) return t;
+    }
+    return undefined;
+  }
+
+  /**
+   * ANTI-ARB CORE. True when a resolver event must be IGNORED because it really happened
+   * at/before this market's betting closed — a viewer watching the real broadcast (ahead of
+   * our ~50s-lagged feed) could have bet on a known outcome. We do NOT void and do NOT touch
+   * any bet; the caller simply skips the event, and the market keeps waiting for a CLEAN
+   * later event (or times out). The same rule makes resolution consistent across markets:
+   * an event is judged by WHEN IT HAPPENED, not when it was reported.
+   */
+  private resolverIsTainted(ev: FeedEvent, m: Market, t: TrackedMarket): boolean {
+    const evWc = this.eventWallclockMs(ev);
+    if (evWc !== undefined) {
+      // Exact ESPN wallclock — precise taint.
+      return evWc < bettingClosesAt(m.lockAt, m.windowMs) - RESOLVER_SKEW_GRACE_MS;
+    }
+    // No exact wallclock. A GOAL is the high-value decisive resolver and must still be
+    // taint-checked — fall back to the MATCH CLOCK: a goal whose game-minute is at/before the
+    // minute the market opened could have been seen on TV during betting, so treat it as
+    // tainted (arb-safe). This only fires for the rare goal ESPN reports without a wallclock.
+    // Commentary (shots/corners/attacks) fails OPEN (counted) — the arb edge there is small and
+    // a coarse-clock taint would wrongly NO legit markets (the prior blocking over-taint bug).
+    // NO exact wallclock → we cannot PROVE the event happened during betting. The match clock
+    // is whole-minute granular while the betting window is ~10s, so any match-clock taint
+    // over-blocks legitimate in-window goals (a real goal one minute after open is clean but
+    // looks "same-ish minute") FAR more often than it catches the rare arb. So we FAIL OPEN:
+    // count the event. This leaves a small, irreducible residual — a commentary-first resolver
+    // (a goal/penalty ESPN reports without a wallclock) that truly happened during betting can
+    // still settle YES. It's bounded (most authoritative resolvers carry a wallclock and use the
+    // precise branch above) and only a faster feed can close it; a fuzzy taint here is worse.
+    return false;
+  }
+
+  /** The current match-clock minute (fractional, e.g. 45+2 → 45.02) from the live game state. */
+  private currentClockMin(): number {
+    const { base, stopp } = parseClockKey(this.feed.state().clock);
+    return base + stopp / 100;
+  }
+
+  /**
+   * Anti-arb gate for the late-goal RESCUE: only rescue a goal-question market to YES if the
+   * goal that triggers it really happened AFTER betting closed (else a TV viewer could have
+   * bet on a goal they'd already seen). Mirrors resolverIsTainted, but for the goal recorded
+   * earlier rather than the live event. A goal with no timing signal is treated as clean.
+   */
+  private rescueGoalIsClean(t: TrackedMarket, m: Market): boolean {
+    const cutoff = bettingClosesAt(m.lockAt, m.windowMs) - RESOLVER_SKEW_GRACE_MS;
+    if (t.team) {
+      const wc = this.lastGoalWallclockByTeam.get(t.team);
+      // Exact wallclock → precise. No wallclock → clean (fail open, consistent with the
+      // immediate path: we can't prove a wallclock-less goal happened during betting, so we
+      // don't block a legitimate late goal from rescuing the market to YES).
+      return wc === undefined || wc >= cutoff;
+    }
+    // Teamless rescue doesn't fire (goalAlreadyHappenedForChance requires a team) — be safe.
+    for (const wc of this.lastGoalWallclockByTeam.values()) if (wc >= cutoff) return true;
+    return false;
+  }
+
+  /** True if EITHER team has a recorded goal at/after this market's open clock (teamless rescue). */
+  private anyTeamGoalAfterOpen(t: TrackedMarket): boolean {
+    if (t.openClockMin === undefined) return false;
+    for (const goalMin of this.lastResolverByTeam.values()) {
+      if (goalMin >= t.openClockMin) return true;
+    }
+    return false;
+  }
+
+  /** True if ANY team scored within the given window — drives post-goal market suppression. */
+  private recentGoalCooloff(ms: number): boolean {
+    const now = Date.now();
+    for (const t of this.lastGoalAt.values()) if (now - t < ms) return true;
+    return false;
+  }
+
+  /** Seconds since the most recent goal (any team), or undefined if none yet this match. */
+  private secondsSinceLastGoal(): number | undefined {
+    let last = 0;
+    for (const t of this.lastGoalAt.values()) last = Math.max(last, t);
+    return last > 0 ? (Date.now() - last) / 1000 : undefined;
   }
 
   /**
@@ -1503,6 +1651,13 @@ export class Orchestrator {
       const decision = this.outcomeForTarget(ev, target, m);
       if (!decision) continue;
 
+      // ANTI-ARB: skip a resolver that really happened at/before betting closed (a TV viewer
+      // could have bet on it). No void, no bet touched — the market waits for a clean event.
+      if (this.resolverIsTainted(ev, m, target)) {
+        console.log(`[golazo/feed] resolver_tainted_skip id=${m.id} kind=${m.kind} type=${ev.type}`);
+        continue;
+      }
+
       // GUARANTEED BETTING WINDOW: an outcome that lands while betting is still OPEN
       // is HELD, not applied — it settles the moment the market locks (see lockMarket).
       // So a market can never open and resolve in the same breath; there is always a
@@ -1530,6 +1685,11 @@ export class Orchestrator {
 
     if (ev.type === 'goal' && ev.team) {
       this.lastGoalAt.set(ev.team, Date.now());
+      // Record the goal's EXACT wallclock only — never the arrival time (Date.now() on a
+      // lagged feed always looks "clean" and would let a during-betting wallclock-less goal
+      // pass the rescue). No wallclock → leave it unset; rescueGoalIsClean uses the match clock.
+      const gwc = this.eventWallclockMs(ev);
+      if (gwc !== undefined) this.lastGoalWallclockByTeam.set(ev.team, gwc);
       this.feed.applyGoal(ev.team);
       this.server.broadcast({ t: 'game', game: this.feed.state() });
     }
@@ -1786,6 +1946,8 @@ export class Orchestrator {
   private resetForNewMatch(): void {
     this.openedMoments.clear();
     this.lastResolverByTeam.clear();
+    this.lastGoalWallclockByTeam.clear();
+    this.lagMeter.reset(); // a prior fixture's feed lag must not carry into the new match
     this.lastMomentumOpenAt.clear();
     // CRITICAL: per-match state that MUST NOT carry into the next match — otherwise a
     // hot player (or momentum) from the previous game keeps opening markets for someone
@@ -2089,9 +2251,14 @@ export class Orchestrator {
     });
   }
 
-  /** Remember goal/miss clocks so a late corner/penalty dup doesn't open. */
+  /**
+   * Remember each team's last GOAL clock — the late-goal rescue (goalAlreadyHappenedForChance
+   * + rescueGoalIsClean) reads this to settle a goal-question market YES when a goal landed
+   * late. GOALS ONLY: a miss must NEVER be recorded here, or a team that only MISSED after a
+   * market opened would wrongly rescue a pure-goal market (score_in_window etc.) to YES.
+   */
   private recordResolverClock(ev: FeedEvent): void {
-    if ((ev.type !== 'goal' && ev.type !== 'miss') || !ev.team) return;
+    if (ev.type !== 'goal' || !ev.team) return;
     const min = clockMinutes(ev);
     if (min === undefined) return;
     const prev = this.lastResolverByTeam.get(ev.team);
@@ -2197,6 +2364,21 @@ function anyTeamGoalCountsYes(kind: string): boolean {
     kind === 'chance_from_play' ||
     kind === 'goal_from_open_play' ||
     kind === 'goal_in_stoppage' ||
-    kind === 'goal_in_extra_time'
+    kind === 'goal_in_extra_time' ||
+    // Teamless "a goal in the next few minutes? (either team)" — must get the LAG-AWARE NO HOLD
+    // too, else a real goal reported a poll or two past its deadline settles a permanent NO
+    // (the user's "a goal happened but it resolved NO" bug for the heartbeat goal market).
+    kind === 'goal_in_window'
   );
+}
+
+const PLAYER_QUESTIONS = [
+  (name: string) => `${name} — to SCORE in the next few minutes?`,
+  (name: string) => `Will ${name} score soon?`,
+  (name: string) => `${name} is hot — GOAL incoming?`,
+  (name: string) => `Can ${name} find the net?`,
+] as const;
+
+function pickPlayerQuestion(name: string, seed: number): string {
+  return PLAYER_QUESTIONS[Math.abs(seed) % PLAYER_QUESTIONS.length]!(name);
 }

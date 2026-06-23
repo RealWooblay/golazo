@@ -2,6 +2,7 @@ import React from "react";
 import { StyleSheet, View } from "react-native";
 import { colors, radius, spacing, type } from "@/theme";
 import { multiple, signedMoney } from "@/lib/format";
+import { sideDisplayLabel } from "@/features/match/marketMeta";
 import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
 import { Text } from "@/ui";
 import type { BetRow, HistoryItem, TransactionRow } from "@/state";
@@ -24,6 +25,7 @@ export function LedgerRow({ item }: { item: HistoryItem }) {
 function BetLedgerRow({ row }: { row: BetRow }) {
   const { signedFormat, zeroLabel } = useDisplayBalance();
   const isVoid = !row.won && row.delta === 0;
+  const pickLabel = sideDisplayLabel(row.side, undefined, row.question);
   const sideYes = row.side === "YES";
   const deltaColor = row.won
     ? colors.yes
@@ -52,7 +54,7 @@ function BetLedgerRow({ row }: { row: BetRow }) {
             { color: sideYes ? colors.yes : colors.no },
           ]}
         >
-          {row.side}
+          {pickLabel.length > 6 ? pickLabel.slice(0, 5) + "…" : pickLabel}
         </Text>
       </View>
 

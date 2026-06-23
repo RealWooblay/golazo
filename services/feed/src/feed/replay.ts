@@ -125,7 +125,15 @@ export class EspnReplayFeed implements FeedSource {
         else this.gameState.scoreAway++;
       }
       if (item.minute > 0) this.gameState.clock = `${item.minute}'`;
-      out.push(item.ev);
+      // FAITHFUL TO ESPN: real goal keyEvents carry a wallclock (the true event time). The
+      // fixtures omit it, which would force the anti-arb match-clock FALLBACK and wrongly taint
+      // set-piece goals that land seconds after their market opened. Stamp the goal's true
+      // timeline instant so the sim exercises the same PRECISE wallclock path production uses.
+      let ev = item.ev;
+      if (ev.type === 'goal' && !ev.meta?.wallclock) {
+        ev = { ...ev, meta: { ...ev.meta, wallclock: new Date(this.startedAt + item.atMs).toISOString() } };
+      }
+      out.push(ev);
     }
     if (this.cursor >= this.timeline.length && this.gameState.status === 'live') {
       this.gameState.status = 'final';
@@ -215,11 +223,19 @@ export class EspnReplayFeed implements FeedSource {
     // then source order — so an opportunity is never emitted after its outcome.
     raws.sort((a, b) => a.key - b.key || a.rank - b.rank || a.order - b.order);
 
-    this.timeline = raws.map((r) => ({
-      atMs: Math.max(0, r.key * this.msPerGameMin),
-      minute: r.minute,
-      ev: r.ev,
-    }));
+    // ESPN clocks are minute-granular (and "+1" stoppage maps to a tiny sub-second offset), so
+    // the raw timeline fires a set-piece and the goal it produces almost SIMULTANEOUSLY — which
+    // makes the goal look like it landed inside the market's betting window, and the anti-arb
+    // gate (correctly) taints it. Real play always spaces an opener and its resolver by tens of
+    // seconds. Enforce a minimum gap between CONSECUTIVE events (monotonic, order-preserving) so
+    // any resolver lands a clear betting-window past the opener before it — exactly as live.
+    const minGapMs = Math.min(15_000, Math.floor(this.msPerGameMin / 3));
+    let prevAtMs = -Infinity;
+    this.timeline = raws.map((r) => {
+      const atMs = Math.max(Math.max(0, r.key * this.msPerGameMin), prevAtMs + minGapMs);
+      prevAtMs = atMs;
+      return { atMs, minute: r.minute, ev: r.ev };
+    });
   }
 
   private feedEvent(

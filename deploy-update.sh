@@ -53,6 +53,8 @@ AI_RESOLVE_TIMEOUT_MS=6000
 MIN_CONFIDENCE=0.6
 BET_DELAY_MS=5000
 BET_SAFETY_BUFFER_MS=2000
+AI_ENHANCER=1
+AI_DIRECTOR=1
 ENV
 if [ -s "$SECRETS_TMP" ]; then cat "$SECRETS_TMP" >>/opt/golazo/services/feed/.env; fi
 rm -f "$SECRETS_TMP"
@@ -60,12 +62,12 @@ if [ -f /opt/golazo/services/feed/.env.deploy ]; then
   cat /opt/golazo/services/feed/.env.deploy >>/opt/golazo/services/feed/.env
 fi
 
-# Log whether AI is active (never print the key).
-if grep -q '^ANTHROPIC_API_KEY=.' /opt/golazo/services/feed/.env 2>/dev/null; then
-  echo "GOLAZO_ENV watcher=ai"
-else
-  echo "GOLAZO_ENV watcher=rules(no ANTHROPIC_API_KEY)"
-fi
+# Log AI layer state (never print the key).
+HAS_KEY=0
+grep -q '^ANTHROPIC_API_KEY=.' /opt/golazo/services/feed/.env 2>/dev/null && HAS_KEY=1
+ENH=$(grep -E '^AI_ENHANCER=' /opt/golazo/services/feed/.env 2>/dev/null | tail -1 | cut -d= -f2)
+DIR=$(grep -E '^AI_DIRECTOR=' /opt/golazo/services/feed/.env 2>/dev/null | tail -1 | cut -d= -f2)
+echo "GOLAZO_ENV enhancer=$([ "$ENH" = 1 ] && [ "$HAS_KEY" = 1 ] && echo on || echo off) director=$([ "$DIR" = 1 ] && [ "$HAS_KEY" = 1 ] && echo on || echo off) key=$([ "$HAS_KEY" = 1 ] && echo set || echo missing)"
 
 cd /opt/golazo/apps/mobile
 rm -rf dist

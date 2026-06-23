@@ -84,7 +84,9 @@ function dangerousAttack(team: Team): FeedEvent {
 }
 
 function goal(team: Team): FeedEvent {
-  return { gameId: 'g1', ts: 0, type: 'goal', team, text: 'GOAL!', meta: { clock: "30'" } };
+  // 32' — a couple of minutes after the market opens at 30' (realistic), so the anti-arb
+  // match-clock check sees it as a clean after-betting goal even without an exact wallclock.
+  return { gameId: 'g1', ts: 0, type: 'goal', team, text: 'GOAL!', meta: { clock: "32'" } };
 }
 
 describe('on-chain lock grace', () => {

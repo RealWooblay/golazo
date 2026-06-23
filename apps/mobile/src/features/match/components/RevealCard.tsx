@@ -18,6 +18,7 @@ import { haptics } from "@/ui/haptics";
 import { multiple } from "@/lib/format";
 import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
 import type { RevealVM } from "@/state/types";
+import { sideDisplayLabel } from "../marketMeta";
 import { GlowWash } from "./GlowWash";
 
 /**
@@ -46,6 +47,7 @@ export function RevealCard({
   const [opened, setOpened] = useState(false);
   const flip = useSharedValue(0); // 0 = cover up, 1 = flipped away
   const shake = useSharedValue(0);
+  const pickLabel = sideDisplayLabel(reveal.side, reveal.kind, reveal.question);
   const isWin = reveal.won;
   const isVoid = reveal.outcome === "VOID";
 
@@ -139,7 +141,7 @@ export function RevealCard({
           </Text>
         ) : (
           <Text style={styles.payMeta}>
-            {signedFormat(-reveal.stake)} · {reveal.side} didn't land
+            {signedFormat(-reveal.stake)} · {pickLabel} didn't land
           </Text>
         )}
       </Animated.View>

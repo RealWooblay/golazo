@@ -31,8 +31,8 @@ export function laneOf(kind?: string, slot?: MarketSlot): Lane {
   if (k === "goal_in_window") return { label: "Either team", color: colors.yes };
   // Over/under "count" lane (more than N corners / shots).
   if (k === "over_corners" || k === "over_shots") return { label: "Over/Under", color: colors.gold };
-  // Which-side-next CONTEST lane (next shot/corner/goal — which team?).
-  if (k === "next_shot" || k === "next_corner" || k === "next_goal")
+  // Which-side-next CONTEST lane (next shot/corner/goal/card — which team?).
+  if (k === "next_shot" || k === "next_corner" || k === "next_goal" || k === "next_card")
     return { label: "Next", color: colors.cyan };
   if (k === "goal_in_stoppage") return { label: "Before half", color: VIOLET };
   if (k === "goal_in_extra_time") return { label: "Extra time", color: VIOLET };
@@ -49,15 +49,43 @@ export function laneOf(kind?: string, slot?: MarketSlot): Lane {
   return { label: "Moment", color: colors.cyan };
 }
 
+/** Parse "Who threatens next — Jordan or Algeria?" into the YES/NO team names. */
+export function versusLabelsFromQuestion(
+  question?: string,
+): { yes: string; no: string } | null {
+  const m = (question ?? "").match(/—\s*(.+?)\s+or\s+(.+?)\?\s*$/i);
+  if (!m) return null;
+  return { yes: m[1]!.trim(), no: m[2]!.trim() };
+}
+
+/** Human label for the side you picked (team name on versus markets, not raw YES/NO). */
+export function sideDisplayLabel(
+  side: "YES" | "NO",
+  kind?: string,
+  question?: string,
+): string {
+  const labels = betLabels(kind, question);
+  return side === "YES" ? labels.yes : labels.no;
+}
+
+/** Outcome badge copy — winning team name on versus markets. */
+export function outcomeDisplayLabel(
+  outcome: "YES" | "NO" | "VOID",
+  kind?: string,
+  question?: string,
+): string {
+  if (outcome === "VOID") return "VOID";
+  return sideDisplayLabel(outcome, kind, question);
+}
+
 /** The honest YES / NO verdict words — what the bet is actually ON, per market. */
 export function betLabels(kind?: string, question?: string): { yes: string; no: string } {
   const k = kind ?? "";
   const q = (question ?? "").toLowerCase();
   // Which-side-next contest — "Next shot — A or B?": the two team names ARE the buttons.
-  if (k === "next_shot" || k === "next_corner" || k === "next_goal") {
-    const m = (question ?? "").match(/—\s*(.+?)\s+or\s+(.+?)\?\s*$/i);
-    if (m) return { yes: m[1]!.trim(), no: m[2]!.trim() };
-    return { yes: "Yes", no: "No" };
+  const versus = versusLabelsFromQuestion(question);
+  if (k === "next_shot" || k === "next_corner" || k === "next_goal" || k === "next_card" || versus) {
+    return versus ?? { yes: "Yes", no: "No" };
   }
   // Over/under count markets — the honest verdict is over/under the line.
   if (k === "over_corners" || k === "over_shots") return { yes: "Over", no: "Under" };
@@ -89,6 +117,25 @@ export function isWhistleBound(kind?: string): boolean {
   return kind === "goal_in_stoppage" || kind === "goal_in_extra_time";
 }
 
+/** Versus / next-side markets resolve on the first decisive event, not a deadline timer. */
+export function isEventDecided(kind?: string, question?: string): boolean {
+  const k = kind ?? "";
+  return (
+    k === "next_shot" ||
+    k === "next_corner" ||
+    k === "next_goal" ||
+    k === "next_card" ||
+    versusLabelsFromQuestion(question) != null
+  );
+}
+
 export function whistleLabel(kind?: string): string {
   return kind === "goal_in_extra_time" ? "until full-time" : "until half-time";
+}
+
+export function eventDecidedLabel(kind?: string): string {
+  if (kind === "next_corner") return "until next corner";
+  if (kind === "next_goal") return "until next goal";
+  if (kind === "next_card") return "until next booking";
+  return "until next threat";
 }

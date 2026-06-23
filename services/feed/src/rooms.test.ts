@@ -38,7 +38,6 @@ function makeManager(opts: { live?: boolean; chain?: boolean; global?: Market } 
     },
     chain: (opts.chain ?? true) ? mockChain() : null,
     getOpenGlobalMarkets: () => (opts.global ? [opts.global] : []),
-    getOpenGlobalMarket: () => opts.global,
   });
   return {
     mgr,

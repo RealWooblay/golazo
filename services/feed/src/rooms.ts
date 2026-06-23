@@ -87,8 +87,6 @@ export interface RoomManagerDeps {
   isLive: () => boolean;
   isFinal: () => boolean;
   getOpenGlobalMarkets?: () => Market[];
-  /** @deprecated use getOpenGlobalMarkets. */
-  getOpenGlobalMarket?: () => Market | undefined;
   now?: () => number;
   rand?: () => number;
   /** When set, room markets get on-chain twins and balances track session PnL. */
@@ -454,9 +452,7 @@ export class RoomManager {
 
   /** Late join / create: copy current global AI markets into any free room slots. */
   private backfillGlobalMarket(room: Room): void {
-    const globals =
-      this.deps.getOpenGlobalMarkets?.() ??
-      (this.deps.getOpenGlobalMarket ? [this.deps.getOpenGlobalMarket()].filter(Boolean) : []);
+    const globals = this.deps.getOpenGlobalMarkets?.() ?? [];
     for (const global of globals) {
       if (global) this.mirrorGlobalMarket(room, global);
     }

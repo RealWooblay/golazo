@@ -61,8 +61,6 @@ export interface ServerDeps {
   getOps?: () => OpsSnapshot;
   /** Open/locked global AI markets for late room join backfill. */
   getOpenGlobalMarkets?: () => Market[];
-  /** @deprecated use getOpenGlobalMarkets. */
-  getOpenGlobalMarket?: () => Market | undefined;
   /** Anti-latency hold before room pool bets land (mirrors orchestrator bet delay). */
   betDelayMs?: number;
 }
@@ -119,7 +117,6 @@ export class FeedServer {
       isLive: () => this.deps.getGame().status === 'live',
       isFinal: () => this.deps.getGame().status === 'final',
       getOpenGlobalMarkets: deps.getOpenGlobalMarkets,
-      getOpenGlobalMarket: deps.getOpenGlobalMarket,
     });
     this.wss.on('connection', (ws) => this.handleConnection(ws));
   }

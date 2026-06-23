@@ -73,7 +73,6 @@ export interface UseFriendsRoom {
   opponent?: RoomPlayer;
   /** Markets currently open or locked for betting (at most one). */
   activeMarkets: RoomMarket[];
-  /** @deprecated use activeMarkets — kept for callers that only need status open */
   openMarkets: RoomMarket[];
   /** My current bet on each market, keyed by marketId. */
   myBetByMarket: Record<string, RoomBet | undefined>;

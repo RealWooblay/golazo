@@ -39,6 +39,9 @@ export const DIRECTOR_PALETTE: ReadonlySet<string> = new Set([
   'over_corners',
   'over_shots',
   'next_shot',
+  'next_corner',
+  'next_goal',
+  'next_card',
 ]);
 
 /** Kinds that REQUIRE a team (a side the market is about). The rest are teamless either-team. */
@@ -47,6 +50,9 @@ const TEAM_BOUND: ReadonlySet<string> = new Set([
   'score_in_window',
   'shot_or_corner_in_window',
   'next_shot',
+  'next_corner',
+  'next_goal',
+  'next_card',
 ]);
 
 /** A validated, ready-to-open market proposal + when it was generated (for staleness). */
@@ -83,7 +89,13 @@ export interface DirectorOptions {
   /** Output-token ceiling per match — exhaustion fails open to the rule openers. */
   matchTokenBudget: number;
   commentary: CommentaryBuffer;
-  getContext: () => { game: GameState; momentum: MomentumRead };
+  getContext: () => {
+    game: GameState;
+    momentum: MomentumRead;
+    /** Seconds since the last goal (any team), or undefined if none yet — drives the
+     *  post-goal lull rule (don't propose a goal/score market right after a goal). */
+    secondsSinceGoal?: number;
+  };
   /** Audit sink for rejected proposals (the validation wall firing). */
   onReject?: (reason: string, raw: unknown) => void;
 }
@@ -148,7 +160,7 @@ export class MarketDirector {
     if (!this.client || this.inFlight) return;
     if (this.tokensUsed >= this.opts.matchTokenBudget) return;
 
-    const { game, momentum } = this.opts.getContext();
+    const { game, momentum, secondsSinceGoal } = this.opts.getContext();
     if (game.status !== 'live') return;
     // In stoppage the deterministic whistle guard suppresses these markets anyway — don't
     // spend tokens proposing what the orchestrator will refuse to open.
@@ -161,7 +173,7 @@ export class MarketDirector {
           model: this.opts.model,
           max_tokens: 500,
           system: DIRECTOR_SYSTEM,
-          messages: [{ role: 'user', content: this.situationPrompt(game, momentum) }],
+          messages: [{ role: 'user', content: this.situationPrompt(game, momentum, secondsSinceGoal) }],
         },
         { timeout: this.opts.timeoutMs },
       );
@@ -189,17 +201,21 @@ export class MarketDirector {
   }
 
   /** Compact situation brief for the model — phase, clock, score, momentum, recent play. */
-  private situationPrompt(game: GameState, momentum: MomentumRead): string {
+  private situationPrompt(game: GameState, momentum: MomentumRead, secondsSinceGoal?: number): string {
     const ctx = parseGameContext(game);
     const leadName =
       momentum.leader === 'home' ? game.home.name : momentum.leader === 'away' ? game.away.name : '(even)';
     const commentary = this.opts.commentary.formatForAi(8) || '(quiet)';
+    const justScored =
+      secondsSinceGoal !== undefined && secondsSinceGoal < 60
+        ? `\nA GOAL was just scored ~${Math.round(secondsSinceGoal)}s ago — the game has restarted from the centre. Do NOT propose a goal_in_window or score_in_window now; prefer a card, an over/under, or who-threatens-next.`
+        : '';
     return [
       `Home: ${game.home.name}  Away: ${game.away.name}`,
       `Score: ${game.scoreHome}-${game.scoreAway} (margin ${ctx.scoreMargin}, ${ctx.isClose ? 'close' : 'not close'})`,
       `Clock: ${game.clock}  Period: ${ctx.period}  ~${ctx.minutesLeft} min to the half-end${ctx.isStoppage ? ' (STOPPAGE)' : ''}`,
       `Momentum: ${leadName} pressing (intensity ${momentum.intensity.toFixed(1)})`,
-      `Recent commentary:\n${commentary}`,
+      `Recent commentary:\n${commentary}${justScored}`,
     ].join('\n');
   }
 }
@@ -213,7 +229,10 @@ const DIRECTOR_SYSTEM = [
   '- shot_in_window (team): will TEAM get a shot away this spell?',
   '- score_in_window (team): will TEAM SCORE in the next few minutes? (use for a real siege)',
   '- shot_or_corner_in_window (team): a shot OR corner from TEAM this spell? (broader, higher yes)',
-  '- next_shot (team): who threatens NEXT — does TEAM get the next shot/corner before the other side? (an end-to-end contest)',
+  '- next_shot (team): who threatens NEXT — shot/corner/danger before the other side?',
+  '- next_corner (team): who gets the NEXT corner before the other side?',
+  '- next_goal (team): who scores NEXT before the other side? (only when end-to-end and open)',
+  '- next_card (team): whose player is booked NEXT before the other side?',
   '- card_in_window (no team): a booking in the next few minutes?',
   '- goal_in_window (no team): a goal by EITHER team in the next few minutes?',
   '- over_corners / over_shots (no team): more than the line of corners/shots soon?',
@@ -222,8 +241,15 @@ const DIRECTOR_SYSTEM = [
   'The question must NAME the team for team kinds, end with "?", be under 90 chars, and contain',
   'NO score, scoreline, minute, or player name. trueProb in 0.05..0.95 (your honest YES chance);',
   'windowMs is the BET window in 6000..20000; relevance in 0..1 (how well it fits the moment).',
-  'Fit the moment: a siege → score_in_window for the pressing team; end-to-end → next_shot;',
-  'a quiet, even game → a broad card/over-under; vary the board, do not repeat one kind.',
+  '',
+  'VARIETY IS THE JOB. Across your 2-4 proposals use DIFFERENT kinds — never two of the same',
+  'kind, and avoid repeating a kind you would have just proposed. Fit the moment: a siege →',
+  'score_in_window for the pressing team; end-to-end → next_shot; a scrappy, niggly game →',
+  'next_card or card_in_window; a quiet, even game → a broad over-under or goal_in_window.',
+  '',
+  'WORDING: write each question like a mate watching live — punchy, specific to THIS moment,',
+  'never a generic template. Vary your phrasing every time so the board feels alive and real,',
+  'not looped. Pull a detail from the recent commentary when you can (without naming a player).',
 ].join('\n');
 
 /** Parse the model's JSON array defensively (it may wrap in prose/fences). */

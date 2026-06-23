@@ -176,6 +176,9 @@ export function momentumMarketSpec(
     `${teamName} keeping it alive — do they test the keeper?`,
     `${teamName} probing again — SHOT from this spell?`,
     `${teamName} carrying momentum — a SHOT soon?`,
+    `${teamName} in the box — do they get a chance?`,
+    `${teamName} hungry here — SHOT on the way?`,
+    `${teamName} sniffing blood — test the keeper?`,
   ];
   return {
     kind: 'shot_in_window',
