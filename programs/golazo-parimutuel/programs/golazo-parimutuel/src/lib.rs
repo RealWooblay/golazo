@@ -69,9 +69,13 @@ pub const USX_MINT: Pubkey = pubkey!("3kuxNXDwqUyyUeJVGxKa1judTjoe3u4Zu8Mgmbmi28
 /// sent to a USX account this key owns. Rotating it is a one-line change + a
 /// program redeploy (the program is upgradeable).
 ///
-/// NOTE: the value below is a dev keypair committed under tests/fixtures so the
-/// suite can sign sweeps. Before mainnet, replace it with your real treasury
-/// address (ideally a Squads multisig or Ledger) and never commit that secret.
+/// Production builds use the real treasury address. Integration tests build with
+/// `--features local-mint` and use a committed dev keypair (tests/fixtures) so
+/// the suite can sign sweeps. Rotating the production key is a one-line change
+/// here + a program upgrade.
+#[cfg(not(feature = "local-mint"))]
+pub const WITHDRAW_AUTHORITY: Pubkey = pubkey!("4AtHbn4LxGVEP4RmtEwx6cNq2peEZsgH7jUZFZMVddW9");
+#[cfg(feature = "local-mint")]
 pub const WITHDRAW_AUTHORITY: Pubkey = pubkey!("5K8KTZekMGpQ7dsjPQnMdNpjgUHzXcuPtYwJPXGw1aDs");
 
 #[program]
