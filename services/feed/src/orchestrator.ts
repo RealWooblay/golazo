@@ -81,7 +81,7 @@ import { AuditLog } from './observability/auditLog';
 import { FeedMetrics } from './observability/metrics';
 import { LagMeter } from './observability/lagMeter';
 import { ROOM_RAKE } from '@golazo/core';
-import { BotSwarm, resolveBotConfig } from './bots';
+import { BotSwarm, PointsBotSwarm, resolveBotConfig } from './bots';
 import { createChainOperator, type FeedChainOperator } from './chain';
 import { FeedServer } from './server';
 import { momentKey, parseClockKey } from './feed/espn';
@@ -134,6 +134,7 @@ interface TrackedMarket {
   /** team the attack belongs to, so we know whose score to bump on a goal. */
   team: Team | undefined;
   bots: BotSwarm;
+  pointsBots: PointsBotSwarm;
   lockTimer: ReturnType<typeof setTimeout>;
   /**
    * Deferred ON-CHAIN lock timer. The engine + UI lock at `windowMs` (via lockTimer),
@@ -412,6 +413,7 @@ export class Orchestrator {
     if (this.enhancerTimer) clearInterval(this.enhancerTimer);
     for (const t of this.tracked.values()) {
       t.bots.cancel();
+      t.pointsBots.cancel();
       clearTimeout(t.lockTimer);
       if (t.chainLockTimer) clearTimeout(t.chainLockTimer);
     }
@@ -972,6 +974,19 @@ export class Orchestrator {
     const bots = new BotSwarm(this.engine, resolveBotConfig({ count: this.config.botCount }));
     bots.start(market);
 
+    // House-liquidity bots for the POINTS pool — random two-sided money leaning to the
+    // undervalued side so the points multiple actually MOVES (not pinned near ~1.1x).
+    const pointsBots = new PointsBotSwarm(
+      this.server.pointsManager,
+      (fx) => this.server.emitPoints(fx),
+      resolveBotConfig({
+        count: this.config.pointsBotCount,
+        minStake: this.config.pointsBotMinStake,
+        maxStake: this.config.pointsBotMaxStake,
+      }),
+    );
+    pointsBots.start(market);
+
     const lockTimer = setTimeout(() => this.lockMarket(market.id), armed.windowMs);
 
     this.tracked.set(market.id, {
@@ -979,6 +994,7 @@ export class Orchestrator {
       sequenceId: opts.sequenceId,
       team: opts.team,
       bots,
+      pointsBots,
       lockTimer,
       resolveWindowMs: deadline,
       pending: new Map(),
@@ -1008,6 +1024,7 @@ export class Orchestrator {
     const t = this.tracked.get(marketId);
     if (!t) return;
     t.bots.cancel();
+    t.pointsBots.cancel();
     const m = this.engine.get(marketId);
     if (m && m.status === 'open') this.engine.lock(marketId);
 
@@ -1444,6 +1461,7 @@ export class Orchestrator {
     const t = this.tracked.get(marketId);
     if (!t) return;
     t.bots.cancel();
+    t.pointsBots.cancel();
     clearTimeout(t.lockTimer);
     // Cancel any still-pending deferred chain-lock. finalizeMarket already flushed it
     // (fired) before settling; on a VOID/match-switch we simply drop it (refund anyway).
