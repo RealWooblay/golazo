@@ -45,6 +45,15 @@ export interface Config {
   aiMatchTokenBudget: number;
 
   /**
+   * MARKET DIRECTOR (off-hot-path AI that proposes WHICH validated markets to open, based
+   * on game mood + clock). OFF by default — it can ONLY pick kinds/teams/windows/wording
+   * from a validated palette it can never break; off/slow/invalid → the rule openers run
+   * (fail-open). Like the enhancer it stays dark until the leaked key is rotated and
+   * AI_DIRECTOR=1 is set. It never touches resolution, the chain, or the hot path.
+   */
+  aiDirectorEnabled: boolean;
+
+  /**
    * Confidence gate (0..1): a judged (free-kick / open-play) market only opens when
    * the AI's confidence it's a REAL, dangerous, timely chance is at least this.
    * Higher = fewer but higher-quality markets. Default 0.6.
@@ -194,6 +203,7 @@ export const config: Config = {
   aiTimeoutMs: num('AI_TIMEOUT_MS', 4000),
   aiResolveTimeoutMs: num('AI_RESOLVE_TIMEOUT_MS', 6000),
   aiEnhancerEnabled: (process.env.AI_ENHANCER?.trim() || '') === '1',
+  aiDirectorEnabled: (process.env.AI_DIRECTOR?.trim() || '') === '1',
   aiRefreshMs: num('AI_REFRESH_MS', 15000),
   aiMatchTokenBudget: num('AI_MATCH_TOKEN_BUDGET', 120000),
   minConfidence: num('MIN_CONFIDENCE', 0.6),
