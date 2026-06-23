@@ -83,13 +83,16 @@ pub struct Market {
     pub vault_bump: u8,
     /// Bump for this market PDA.
     pub bump: u8,
+    /// True once the operator rake has been swept to the treasury. Guards against
+    /// a second sweep dipping into the net pool owed to winners (see `sweep_rake`).
+    pub rake_swept: bool,
 }
 
 impl Market {
     /// 8-byte Anchor discriminator + sum of field sizes.
     /// Pubkey(32) + u64(8) + [u8;32](32) + u16(2) + status enum(1) + outcome enum(1)
-    /// + 4*u64(32) + 2*u8(2).
-    pub const SIZE: usize = 8 + 32 + 8 + 32 + 2 + 1 + 1 + 32 + 2;
+    /// + 4*u64(32) + 2*u8(2) + rake_swept bool(1).
+    pub const SIZE: usize = 8 + 32 + 8 + 32 + 2 + 1 + 1 + 32 + 2 + 1;
 
     /// gross = pool_yes + pool_no.  Mirrors off-chain `grossPool`.
     pub fn gross(&self) -> Result<u128> {
@@ -121,6 +124,17 @@ impl Market {
             Outcome::No => Ok(self.pool_no as u128),
             Outcome::None => err!(GolazoError::MarketNotSettled),
         }
+    }
+
+    /// Operator rake = gross - net (rounding dust falls to the operator). Sweeping
+    /// exactly this leaves the vault holding `net`, which is precisely the sum of
+    /// all winner payouts — so sweeping is safe regardless of claim order.
+    pub fn rake_amount(&self) -> Result<u64> {
+        let rake = self
+            .gross()?
+            .checked_sub(self.net()?)
+            .ok_or_else(|| error!(GolazoError::MathOverflow))?;
+        u64::try_from(rake).map_err(|_| error!(GolazoError::MathOverflow))
     }
 }
 

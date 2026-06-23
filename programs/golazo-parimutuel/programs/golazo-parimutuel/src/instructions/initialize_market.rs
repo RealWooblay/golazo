@@ -129,6 +129,7 @@ pub fn handler(
     market.seed_no = seed_no;
     market.vault_bump = ctx.bumps.vault;
     market.bump = ctx.bumps.market;
+    market.rake_swept = false;
 
     emit!(MarketInitialized {
         market: market.key(),
