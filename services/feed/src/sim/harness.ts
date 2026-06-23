@@ -52,6 +52,7 @@ export function simConfig(overrides: Partial<Config> = {}): Config {
     espnLeague: 'fifa.world',
     espnCommentaryLang: 'dual',
     replayEventId: '760443',
+    forceEventId: undefined,
     espnPollMs: 2_500,
     rake: 0.06,
     feeRecipient: 'sim',

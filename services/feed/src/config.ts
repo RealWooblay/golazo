@@ -71,6 +71,10 @@ export interface Config {
   /** For FEED_MODE=replay: the ESPN event id of the real match to replay. */
   replayEventId: string;
 
+  /** Manual override: pin the live feed to this ESPN event id (ignore auto-pick + never
+   *  auto-rotate). Empty = normal auto-select of the first live match. */
+  forceEventId: string | undefined;
+
   /** How often to poll the ESPN summary endpoint while a game is live (ms). */
   espnPollMs: number;
 
@@ -194,6 +198,7 @@ export const config: Config = {
     process.env.ESPN_LEAGUE?.trim() || 'eng.1',
   ),
   replayEventId: process.env.REPLAY_EVENT_ID?.trim() || '760437', // Croatia at England (WC)
+  forceEventId: process.env.GOLAZO_EVENT_ID?.trim() || undefined,
   espnPollMs: num('ESPN_POLL_MS', 2500),
   rake: num('RAKE', 0.06),
   feeRecipient: process.env.FEE_RECIPIENT?.trim() || '5kBBKSV2EUyLsa2sXoK9E1VVzmDXCaHnQiMfz8B8yJtP',
