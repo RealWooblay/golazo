@@ -1659,9 +1659,20 @@ export class Orchestrator {
       const decision = this.outcomeForTarget(ev, target, m);
       if (!decision) continue;
 
-      // ANTI-ARB: skip a resolver that really happened at/before betting closed (a TV viewer
-      // could have bet on it). No void, no bet touched — the market waits for a clean event.
+      // ANTI-ARB: a resolver that really happened at/before betting closed (a TV viewer could
+      // have bet on it) is not allowed to settle. For a SINGLE-OUTCOME set-piece market ("will
+      // THIS corner/penalty be scored?"), a tainted scoring goal means the one event the market
+      // is about already happened during/before betting — the market opened too late on the
+      // lagged feed to bet fairly, so VOID/refund (no genuine opportunity) rather than skip-to-NO
+      // (which would wrongly settle a real goal NO). For multi-chance window/count/which-side
+      // kinds we just skip and wait for a clean later event.
       if (this.resolverIsTainted(ev, m, target)) {
+        if (isSetPieceGoalKind(m.kind) && decision.outcome === 'YES') {
+          console.log(`[golazo/feed] stale_set_piece_void id=${m.id} kind=${m.kind} type=${ev.type}`);
+          this.finalizeMarket(target, 'VOID', { voidCause: 'stale_set_piece' });
+          settled = true;
+          continue;
+        }
         console.log(`[golazo/feed] resolver_tainted_skip id=${m.id} kind=${m.kind} type=${ev.type}`);
         continue;
       }
