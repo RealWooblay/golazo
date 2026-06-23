@@ -31,6 +31,7 @@ import {
   requiresTeam,
   type ClientMessage,
   type FeedEvent,
+  type FeedEventType,
   type GameState,
   type MarketSlot,
   type Market,
@@ -62,6 +63,9 @@ import {
   PERIOD_MARKET,
   periodMarketKeyForGame,
   resolveDeadlineMs,
+  countEventTypes,
+  countLine,
+  isCountKind,
 } from './ai/marketTuning';
 import {
   isGoalQuestionKind,
@@ -123,6 +127,12 @@ const SET_PIECE_MAX_UNCONFIRMED_MS = 180_000;
  * staggers WHEN opens surface, which is most of the "feels clean" perception win.
  */
 const MIN_OPEN_SPACING_MS = 8_000;
+/** EVENT-slot heartbeat: open one teamless card/goal-window market roughly this often. */
+const EVENT_SLOT_INTERVAL_MS = 180_000; // ~3 min
+/** COUNT-slot heartbeat: open one over_corners/over_shots market roughly this often. */
+const COUNT_SLOT_INTERVAL_MS = 240_000; // ~4 min
+/** Bet window for the heartbeat-opened event/count markets (snappy, like momentum). */
+const HEARTBEAT_BET_WINDOW_MS = 10_000;
 /** Hydration/cooling break can't run longer than this — auto-resume so a missed ESPN
  *  "end delay" marker never freezes the board for the rest of the match. */
 const MAX_BREAK_MS = 180_000;
@@ -135,6 +145,8 @@ interface TrackedMarket {
   team: Team | undefined;
   bots: BotSwarm;
   pointsBots: PointsBotSwarm;
+  /** OVER/UNDER count markets: running count of qualifying events since open. */
+  counter?: { countTypes: ReadonlySet<FeedEventType>; line: number; count: number };
   lockTimer: ReturnType<typeof setTimeout>;
   /**
    * Deferred ON-CHAIN lock timer. The engine + UI lock at `windowMs` (via lockTimer),
@@ -257,6 +269,12 @@ export class Orchestrator {
   private lastPlayerMarketAt = 0;
   /** Wall-clock of the last market that surfaced — drives the FLOW PACING min-gap. */
   private lastOpenReleaseAt = 0;
+  /** Heartbeat (event/count) lane cadence — seeded one interval into the match. */
+  private lastEventSlotOpenAt = 0;
+  private lastCountSlotOpenAt = 0;
+  private eventSlotCounter = 0;
+  private countSlotCounter = 0;
+  private heartbeatSeeded = false;
   /** True during a hydration/cooling break — openers + the NO sweep pause. */
   private breakPaused = false;
   /** Wall-clock the current break started (for the MAX_BREAK_MS auto-resume). */
@@ -463,6 +481,22 @@ export class Orchestrator {
     // per-tick decay above keeps it honest — it only fires while pressure is still real.
     if (livePlay) await this.maybeOpenMomentumMarket(this.momentum.read());
 
+    // RULE-BASED HEARTBEAT OPENERS — the 'event' (booking / goal-window) and 'count'
+    // (over/under) lanes aren't tied to a single play, so they open on a clock (live,
+    // not on a break), respecting the flow pacer + single-occupancy per slot. This is
+    // what makes several varied markets show at once without one play having to fire them.
+    if (livePlay) {
+      // Seed the cadence at the first live tick so the first event/count market opens one
+      // interval into the match, never as a kickoff dump at t=0.
+      if (!this.heartbeatSeeded) {
+        this.heartbeatSeeded = true;
+        this.lastEventSlotOpenAt = Date.now();
+        this.lastCountSlotOpenAt = Date.now();
+      }
+      await this.maybeOpenEventSlotMarket(game);
+      await this.maybeOpenCountSlotMarket(game);
+    }
+
     const ordered = sortFeedEvents(events);
     this.samePollResolverSeqs = new Set(
       ordered
@@ -515,6 +549,7 @@ export class Orchestrator {
 
     this.recent.push(ev);
     this.commentary.push(ev); // feeds the off-path enhancer's narrative context
+    this.bumpCountMarkets(ev); // over/under count markets: YES the instant they cross the line
     if (this.recent.length > 30) this.recent.shift();
 
     // The agent reads momentum off every event, then pushes it to the bar. Markets
@@ -914,6 +949,105 @@ export class Orchestrator {
   }
 
   /** Open a market from a validated trigger — shared by moment + period paths. */
+  /**
+   * OVER/UNDER COUNT pass — runs for EVERY processed event (a counting event like a
+   * corner is an OPENER that never reaches the resolve path, so the count can't live
+   * there). Bumps each open/locked count market whose counted types include this event,
+   * and settles YES the instant its running count EXCEEDS the line. Below the line it
+   * waits; the one-NO-writer deadline sweep settles NO. NEVER writes NO, never touches a
+   * non-count market — purely the count-crossing → YES authority.
+   */
+  private bumpCountMarkets(ev: FeedEvent): void {
+    for (const t of [...this.tracked.values()]) {
+      if (!t.counter || !t.counter.countTypes.has(ev.type)) continue;
+      const m = this.engine.get(t.marketId);
+      if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
+      // Open-boundary: the event that OPENED the market can't also count toward it.
+      if (t.openSeq !== undefined && t.openSeq >= this.eventCounter) continue;
+      t.counter.count += 1;
+      if (t.counter.count <= t.counter.line) continue;
+      // Crossed → YES. Held while OPEN (applied at lock, like every early outcome);
+      // settled immediately once locked.
+      if (m.status === 'open') {
+        if (!t.pendingOutcome || t.pendingOutcome.outcome !== 'YES') {
+          t.pendingOutcome = { outcome: 'YES' };
+        }
+      } else {
+        this.finalizeMarket(t, 'YES');
+      }
+    }
+  }
+
+  /**
+   * EVENT-slot heartbeat — a teamless "a booking in the next few minutes?" /
+   * "a goal in the next few minutes? (either team)" market opened on a clock, alternating
+   * the two kinds. Single-occupancy ('event' slot), flow-paced; resolves cleanly (YES on
+   * the matching event, NO at deadline).
+   */
+  private async maybeOpenEventSlotMarket(game: GameState): Promise<void> {
+    if (this.hasBlockingMarket('event')) return;
+    if (Date.now() - this.lastEventSlotOpenAt < EVENT_SLOT_INTERVAL_MS) return;
+    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
+
+    const isCard = this.eventSlotCounter % 2 === 0;
+    const trigger: MarketTrigger = isCard
+      ? {
+          gameId: game.gameId,
+          question: 'A booking in the next few minutes?',
+          kind: 'card_in_window',
+          slot: 'event',
+          windowMs: HEARTBEAT_BET_WINDOW_MS,
+          trueProb: 0.35,
+        }
+      : {
+          gameId: game.gameId,
+          question: 'A goal in the next few minutes? (either team)',
+          kind: 'goal_in_window',
+          slot: 'event',
+          windowMs: HEARTBEAT_BET_WINDOW_MS,
+          trueProb: 0.3,
+        };
+
+    const beforeOpened = this.metrics.marketsOpened;
+    await this.openTriggeredMarket(trigger, { slot: 'event', logLabel: `heartbeat kind=${trigger.kind}` });
+    if (this.metrics.marketsOpened > beforeOpened) {
+      this.lastEventSlotOpenAt = Date.now();
+      this.eventSlotCounter++;
+    }
+  }
+
+  /**
+   * COUNT-slot heartbeat — an over/under "more than N corners / shots in the next few
+   * minutes?" market opened on a clock, alternating the two kinds. Single-occupancy
+   * ('count' slot), flow-paced. Settled by the running event counter (YES on crossing,
+   * NO at deadline) — never a single YES event.
+   */
+  private async maybeOpenCountSlotMarket(game: GameState): Promise<void> {
+    if (this.hasBlockingMarket('count')) return;
+    if (Date.now() - this.lastCountSlotOpenAt < COUNT_SLOT_INTERVAL_MS) return;
+    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
+
+    const isCorners = this.countSlotCounter % 2 === 0;
+    const kind = isCorners ? 'over_corners' : 'over_shots';
+    const line = countLine(kind);
+    const noun = isCorners ? 'corners' : 'shots';
+    const trigger: MarketTrigger = {
+      gameId: game.gameId,
+      question: `More than ${line} ${noun} in the next few minutes?`,
+      kind,
+      slot: 'count',
+      windowMs: HEARTBEAT_BET_WINDOW_MS,
+      trueProb: 0.45,
+    };
+
+    const beforeOpened = this.metrics.marketsOpened;
+    await this.openTriggeredMarket(trigger, { slot: 'count', logLabel: `heartbeat kind=${kind} line=${line}` });
+    if (this.metrics.marketsOpened > beforeOpened) {
+      this.lastCountSlotOpenAt = Date.now();
+      this.countSlotCounter++;
+    }
+  }
+
   private async openTriggeredMarket(
     trigger: MarketTrigger,
     opts: {
@@ -1005,6 +1139,16 @@ export class Orchestrator {
       ...(opts.openerType ? { openerType: opts.openerType } : {}),
       ...(opts.playerId ? { playerId: opts.playerId } : {}),
       ...(opts.isPeriod ? { isPeriod: true } : {}),
+      // OVER/UNDER count markets start a running counter at open (count = 0).
+      ...(isCountKind(trigger.kind)
+        ? {
+            counter: {
+              countTypes: countEventTypes(trigger.kind),
+              line: countLine(trigger.kind),
+              count: 0,
+            },
+          }
+        : {}),
     });
   }
 
@@ -1308,6 +1452,15 @@ export class Orchestrator {
     if (m.kind === 'penalty_awarded') return ev.type === 'penalty' || ev.type === 'var_penalty_denied';
     if (m.kind === 'red_card_given') return ev.type === 'red_card';
     if (isSetPieceInvalidation(ev, m.kind)) return true;
+
+    // TEAMLESS "event" lane — either-team questions, matched BEFORE the team guards.
+    if (m.kind === 'card_in_window') {
+      return ev.type === 'yellow_card' || ev.type === 'red_card' || ev.type === 'card';
+    }
+    if (m.kind === 'goal_in_window') return ev.type === 'goal';
+    // OVER/UNDER count markets are settled by the bumpCountMarkets pass, never here.
+    if (isCountKind(m.kind)) return false;
+
     if (t.team && ev.team && t.team !== ev.team) return false;
     if (ev.team && t.team !== ev.team) return false;
     if (m.kind === 'player_to_score') {
@@ -1315,6 +1468,9 @@ export class Orchestrator {
       return ev.type === 'goal' && playerIdOf(ev) === t.playerId;
     }
     if (m.kind === 'shot_in_window') return ev.type === 'goal' || ev.type === 'shot' || ev.type === 'miss';
+    if (m.kind === 'shot_or_corner_in_window') {
+      return ev.type === 'goal' || ev.type === 'shot' || ev.type === 'miss' || ev.type === 'corner';
+    }
     if (m.kind === 'score_in_window') return ev.type === 'goal';
     if (isSetPieceGoalKind(m.kind)) {
       return ev.type === 'goal' || ev.type === 'shot' || ev.type === 'miss' || ev.type === 'play_end';
@@ -1445,6 +1601,11 @@ export class Orchestrator {
     this.lastGoalAt.clear();
     this.momentum.reset();
     this.lastOpenReleaseAt = 0;
+    this.lastEventSlotOpenAt = 0;
+    this.lastCountSlotOpenAt = 0;
+    this.eventSlotCounter = 0;
+    this.countSlotCounter = 0;
+    this.heartbeatSeeded = false;
     this.commentary.clear();
     this.enhancer.resetForMatch(); // drop a prior fixture's pooled lines
     this.breakPaused = false;
@@ -1774,7 +1935,12 @@ function seqIdOf(ev: FeedEvent): string | undefined {
 
 /** Kinds that resolve on a team shot/goal in their wall-clock window or play phase. */
 function isWindowOrPlayKind(kind: string): boolean {
-  return isPlayMarketKind(kind) || kind === 'shot_in_window' || kind === 'score_in_window';
+  return (
+    isPlayMarketKind(kind) ||
+    kind === 'shot_in_window' ||
+    kind === 'shot_or_corner_in_window' ||
+    kind === 'score_in_window'
+  );
 }
 
 function isSetPieceGoalKind(kind: string | undefined): boolean {
@@ -1814,6 +1980,8 @@ function anyTeamGoalCountsYes(kind: string): boolean {
     // YES even if it landed in a later poll than the resolve window (lastResolverByTeam
     // records goal+miss, both of which qualify as a shot attempt).
     kind === 'shot_in_window' ||
+    // "a SHOT or CORNER this spell?" — same late-goal rescue (a goal is a shot attempt).
+    kind === 'shot_or_corner_in_window' ||
     kind === 'chance_from_play' ||
     kind === 'goal_from_open_play' ||
     kind === 'goal_in_stoppage' ||

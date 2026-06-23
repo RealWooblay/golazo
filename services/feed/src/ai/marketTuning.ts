@@ -150,6 +150,35 @@ export const STOPPAGE_EXTEND_MS = 90_000;
 export const MOMENTUM_OPEN_THRESHOLD = 0.15;
 
 /**
+ * OVER/UNDER COUNT markets ("more than N corners/shots in the next few minutes?").
+ * The market counts qualifying events since it opened and settles YES the moment the
+ * running count crosses the line; if the line is never crossed it settles NO at the
+ * deadline. The deadline = the counting WINDOW + feed lag, so a qualifying event that
+ * ESPN reports a poll late still lands inside the window.
+ */
+export const COUNT_WINDOW_MS = 240_000; // 4-minute counting window
+export const COUNT_LAG_MS = 60_000; // + ~55–60s feed lag before NO
+
+/** The over/under line (count must EXCEED this) for each count kind. */
+export function countLine(kind: string): number {
+  if (kind === 'over_corners') return 1; // "more than 1 corner" → 2+ corners
+  if (kind === 'over_shots') return 2; // "more than 2 shots" → 3+ shots
+  return 0;
+}
+
+/** Feed event types that increment a given count kind's running counter. */
+export function countEventTypes(kind: string): ReadonlySet<FeedEventType> {
+  if (kind === 'over_corners') return new Set<FeedEventType>(['corner']);
+  if (kind === 'over_shots') return new Set<FeedEventType>(['shot', 'miss', 'goal']);
+  return new Set<FeedEventType>();
+}
+
+/** True for the over/under COUNT kinds (settled by a running event counter, not a single YES). */
+export function isCountKind(kind: string): boolean {
+  return kind === 'over_corners' || kind === 'over_shots';
+}
+
+/**
  * Parallel momentum "window" lanes. The board is BETTABLE only during a market's short
  * window (then locked 90–120s while it resolves), so a single lane can't keep something
  * bettable — two lanes (one per team, naturally) roughly double bettable coverage and
@@ -199,6 +228,19 @@ export function resolveDeadlineMs(kind: string): number {
     case 'player_to_score':
       // "Will <player> score in the next ~2.5 min?" — a player-specific window.
       return 150_000;
+    case 'shot_or_corner_in_window':
+      // Broader momentum window — "a SHOT or CORNER this spell?" resolves YES often.
+      return 90_000;
+    case 'card_in_window':
+      // "A booking in the next few minutes?" — bookings are sporadic; ~3 min + lag.
+      return 180_000;
+    case 'goal_in_window':
+      // "A goal in the next few minutes? (either team)" — a longer, BALANCED window.
+      return 300_000;
+    case 'over_corners':
+    case 'over_shots':
+      // Over/under count — the counting window + feed lag (YES on crossing, else NO).
+      return COUNT_WINDOW_MS + COUNT_LAG_MS;
     case 'goal_in_stoppage':
       return STOPPAGE_EXTEND_MS;
     case 'goal_in_extra_time':
@@ -227,9 +269,19 @@ export const KEY_EVENT_ONLY_OPENERS = new Set<FeedEvent['type']>(['penalty']);
 export const MAX_CONCURRENT_MARKETS = 1;
 
 export function marketSlot(kind: string): MarketSlot {
-  if (kind === 'shot_in_window' || kind === 'score_in_window') return 'window';
+  if (
+    kind === 'shot_in_window' ||
+    kind === 'score_in_window' ||
+    kind === 'shot_or_corner_in_window'
+  ) {
+    return 'window';
+  }
   if (kind === 'goal_in_stoppage' || kind === 'goal_in_extra_time') return 'period';
   if (kind === 'player_to_score') return 'player';
+  // PHASE 2 — teamless "event" lane (a booking / a goal in the next few minutes) and
+  // the over/under "count" lane (more than N corners / shots). Each single-occupancy.
+  if (kind === 'card_in_window' || kind === 'goal_in_window') return 'event';
+  if (kind === 'over_corners' || kind === 'over_shots') return 'count';
   return 'moment';
 }
 
