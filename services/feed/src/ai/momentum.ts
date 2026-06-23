@@ -105,7 +105,7 @@ function round(n: number): number {
 }
 
 export interface MomentumMarketSpec {
-  kind: 'shot_in_window' | 'score_in_window';
+  kind: 'shot_in_window' | 'score_in_window' | 'shot_or_corner_in_window';
   question: string;
   trueProb: number;
 }
@@ -149,6 +149,20 @@ export function momentumMarketSpec(
       kind: 'score_in_window',
       question: scoreLines[counter % scoreLines.length]!,
       trueProb: 0.22,
+    };
+  }
+  // Alternate the lighter-pressure window between the narrow "a SHOT this spell?" and
+  // the BROADER "a SHOT or CORNER this spell?" (a wider, higher-YES question) so the
+  // momentum board varies and resolves YES more often. Even counter → shot-or-corner.
+  if (counter % 2 === 0) {
+    const broadLines = [
+      `${teamName} on top — a SHOT or CORNER this spell?`,
+      `${teamName} pushing forward — a SHOT or CORNER this spell?`,
+    ];
+    return {
+      kind: 'shot_or_corner_in_window',
+      question: broadLines[(counter >> 1) % broadLines.length]!,
+      trueProb: 0.5,
     };
   }
   const shotLines = [

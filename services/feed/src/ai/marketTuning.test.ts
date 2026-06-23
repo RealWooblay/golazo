@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { FeedEvent, GameState, Team } from '@golazo/core';
 import {
+  countEventTypes,
+  countLine,
   feedLagMinutes,
   goalAlreadyHappenedForChance,
   isAwardedFreeKick,
+  isCountKind,
   isDefensiveSetPiece,
   isStalePlay,
   marketSlot,
@@ -90,6 +93,37 @@ describe('marketSlot', () => {
     expect(marketSlot('shot_in_window')).toBe('window');
     expect(marketSlot('goal_in_stoppage')).toBe('period');
     expect(marketSlot('goal_in_extra_time')).toBe('period');
+  });
+
+  it('classifies the PHASE 2 window/event/count kinds', () => {
+    expect(marketSlot('shot_or_corner_in_window')).toBe('window');
+    expect(marketSlot('card_in_window')).toBe('event');
+    expect(marketSlot('goal_in_window')).toBe('event');
+    expect(marketSlot('over_corners')).toBe('count');
+    expect(marketSlot('over_shots')).toBe('count');
+  });
+});
+
+describe('PHASE 2 deadlines + count helpers', () => {
+  it('gives the new kinds soccer-realistic deadlines', () => {
+    expect(resolveDeadlineMs('shot_or_corner_in_window')).toBe(90_000);
+    expect(resolveDeadlineMs('card_in_window')).toBe(180_000);
+    expect(resolveDeadlineMs('goal_in_window')).toBe(300_000);
+    // count deadlines = counting window + feed lag (so a late event still counts)
+    expect(resolveDeadlineMs('over_corners')).toBeGreaterThan(240_000);
+    expect(resolveDeadlineMs('over_shots')).toBeGreaterThan(240_000);
+  });
+
+  it('exposes the over/under line + counting event types per count kind', () => {
+    expect(isCountKind('over_corners')).toBe(true);
+    expect(isCountKind('over_shots')).toBe(true);
+    expect(isCountKind('shot_in_window')).toBe(false);
+
+    expect(countLine('over_corners')).toBe(1);
+    expect(countLine('over_shots')).toBe(2);
+
+    expect([...countEventTypes('over_corners')]).toEqual(['corner']);
+    expect(new Set(countEventTypes('over_shots'))).toEqual(new Set(['shot', 'miss', 'goal']));
   });
 });
 

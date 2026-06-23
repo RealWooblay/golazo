@@ -50,9 +50,15 @@ describe('momentumMarketSpec', () => {
     expect(score.kind).toBe('score_in_window');
     expect(score.question).toMatch(/SCORE|GOAL/);
 
-    const shot = momentumMarketSpec('Türkiye', MOMENTUM_SHOT_THRESHOLD + 0.1, 0);
+    // Lighter pressure alternates by the counter: ODD → the narrow "a SHOT this spell?"
+    const shot = momentumMarketSpec('Türkiye', MOMENTUM_SHOT_THRESHOLD + 0.1, 1);
     expect(shot.kind).toBe('shot_in_window');
     expect(shot.question).toMatch(/SHOT/);
+
+    // …EVEN → the broader, higher-YES "a SHOT or CORNER this spell?" window.
+    const broad = momentumMarketSpec('Türkiye', MOMENTUM_SHOT_THRESHOLD + 0.1, 0);
+    expect(broad.kind).toBe('shot_or_corner_in_window');
+    expect(broad.question).toMatch(/SHOT or CORNER/);
   });
 
   it('rotates phrasing so a long spell never repeats the same line', () => {

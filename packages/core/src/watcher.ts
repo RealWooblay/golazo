@@ -176,6 +176,47 @@ export function outcomeFromEvent(ev: FeedEvent, marketKind?: string): 'YES' | nu
     return null;
   }
 
+  // PHASE 2 — broader/teamless wall-clock window kinds. All YES-on-event, NO via the
+  // deadline sweep. Team binding (where applicable) is enforced by the orchestrator's
+  // marketMatchesEvent; here we only describe which event TYPES count as YES.
+
+  // "<team> — a SHOT or CORNER this spell?" — a broader, higher-YES momentum window.
+  // YES on the team getting a goal/shot/miss (any shot attempt) OR a corner.
+  if (marketKind === 'shot_or_corner_in_window') {
+    if (ev.type === 'goal' || ev.type === 'shot' || ev.type === 'miss' || ev.type === 'corner') {
+      return 'YES';
+    }
+    return null;
+  }
+
+  // "A booking in the next few minutes?" (teamless) — YES on any card (either team).
+  // yellow_card | red_card | card all count; a clean spell settles NO via the sweep.
+  if (marketKind === 'card_in_window') {
+    if (ev.type === 'yellow_card' || ev.type === 'red_card' || ev.type === 'card') return 'YES';
+    return null;
+  }
+
+  // "A goal in the next few minutes? (either team)" (teamless) — YES on any goal.
+  if (marketKind === 'goal_in_window') {
+    if (ev.type === 'goal') return 'YES';
+    return null;
+  }
+
+  // OVER/UNDER COUNT kinds — "More than N corners/shots in the next few minutes?".
+  // The CROSSING of the line is decided by the orchestrator's running counter (it
+  // knows N and the count-so-far); a single qualifying event is what bumps that
+  // counter, so per-event these only report which TYPES count toward the total.
+  // outcomeFromEvent never settles a count market on its own (it can't see the line),
+  // so it returns null here — the orchestrator's counter is the sole YES authority.
+  if (marketKind === 'over_corners') {
+    // a corner is the only thing that moves the corners counter
+    return null;
+  }
+  if (marketKind === 'over_shots') {
+    // shot | miss | goal move the shots counter
+    return null;
+  }
+
   // VAR → penalty decision (award, not scored). YES on a real penalty; NO via sweep.
   if (marketKind === 'penalty_awarded') {
     if (ev.type === 'penalty') return 'YES';

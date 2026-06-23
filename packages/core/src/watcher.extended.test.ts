@@ -81,6 +81,77 @@ describe('extended market resolution', () => {
     });
   });
 
+  describe('PHASE 2 — new deterministic window kinds (YES-on-event, NO-on-deadline)', () => {
+    it('shot_or_corner_in_window resolves YES on a shot/miss/goal OR a corner, else null', () => {
+      expect(outcomeFromEvent(ev('goal', 'home'), 'shot_or_corner_in_window')).toBe('YES');
+      expect(outcomeFromEvent(ev('shot', 'home'), 'shot_or_corner_in_window')).toBe('YES');
+      expect(outcomeFromEvent(ev('miss', 'home'), 'shot_or_corner_in_window')).toBe('YES');
+      expect(outcomeFromEvent(ev('corner', 'home'), 'shot_or_corner_in_window')).toBe('YES');
+      // a non-qualifying event NEVER settles NO — the deadline sweep does
+      expect(outcomeFromEvent(ev('free_kick', 'home'), 'shot_or_corner_in_window')).toBe(null);
+      expect(outcomeFromEvent(ev('yellow_card', 'home'), 'shot_or_corner_in_window')).toBe(null);
+      expect(outcomeFromEvent(ev('play_end', 'home'), 'shot_or_corner_in_window')).toBe(null);
+    });
+
+    it('card_in_window resolves YES on any booking (yellow/red/card), else null', () => {
+      expect(outcomeFromEvent(ev('yellow_card', 'home'), 'card_in_window')).toBe('YES');
+      expect(outcomeFromEvent(ev('red_card', 'away'), 'card_in_window')).toBe('YES');
+      expect(outcomeFromEvent(ev('card', 'home'), 'card_in_window')).toBe('YES');
+      // not a booking → no opinion (NO comes only from the deadline sweep)
+      expect(outcomeFromEvent(ev('goal', 'home'), 'card_in_window')).toBe(null);
+      expect(outcomeFromEvent(ev('foul' as never, 'home'), 'card_in_window')).toBe(null);
+      expect(outcomeFromEvent(ev('corner', 'home'), 'card_in_window')).toBe(null);
+    });
+
+    it('goal_in_window resolves YES on a goal (either team), else null', () => {
+      expect(outcomeFromEvent(ev('goal', 'home'), 'goal_in_window')).toBe('YES');
+      expect(outcomeFromEvent(ev('goal', 'away'), 'goal_in_window')).toBe('YES');
+      expect(outcomeFromEvent(ev('shot', 'home'), 'goal_in_window')).toBe(null);
+      expect(outcomeFromEvent(ev('miss', 'home'), 'goal_in_window')).toBe(null);
+      expect(outcomeFromEvent(ev('corner', 'home'), 'goal_in_window')).toBe(null);
+    });
+
+    it('over_corners / over_shots never settle from a single event (the COUNTER decides)', () => {
+      // Count kinds are settled by the orchestrator's running counter crossing the line,
+      // NOT a lone event — outcomeFromEvent can't see N, so it always returns null here.
+      expect(outcomeFromEvent(ev('corner', 'home'), 'over_corners')).toBe(null);
+      expect(outcomeFromEvent(ev('goal', 'home'), 'over_corners')).toBe(null);
+      expect(outcomeFromEvent(ev('shot', 'home'), 'over_shots')).toBe(null);
+      expect(outcomeFromEvent(ev('miss', 'home'), 'over_shots')).toBe(null);
+      expect(outcomeFromEvent(ev('goal', 'home'), 'over_shots')).toBe(null);
+    });
+
+    it('no new kind EVER returns NO from an event (one-NO-writer invariant)', () => {
+      const kinds = [
+        'shot_or_corner_in_window',
+        'card_in_window',
+        'goal_in_window',
+        'over_corners',
+        'over_shots',
+      ];
+      const types = [
+        'goal',
+        'shot',
+        'miss',
+        'corner',
+        'free_kick',
+        'penalty',
+        'yellow_card',
+        'red_card',
+        'card',
+        'play_end',
+        'var_check',
+        'halftime',
+      ];
+      for (const k of kinds) {
+        for (const tp of types) {
+          const out = outcomeFromEvent(ev(tp, 'home'), k);
+          expect(out === 'YES' || out === null).toBe(true);
+        }
+      }
+    });
+  });
+
   describe('chance_from_play — "on this play" possession market', () => {
     it('resolves YES on any shot/goal during the move', () => {
       expect(outcomeFromEvent(ev('goal', 'home'), 'chance_from_play')).toBe('YES');

@@ -24,8 +24,13 @@ export function withAlpha(hex: string, a: number): string {
 export function laneOf(kind?: string, slot?: MarketSlot): Lane {
   const k = kind ?? "";
   if (k === "player_to_score") return { label: "Player", color: colors.gold };
-  if (k === "shot_in_window" || k === "score_in_window")
+  if (k === "shot_in_window" || k === "score_in_window" || k === "shot_or_corner_in_window")
     return { label: "Spell", color: colors.yes };
+  // Teamless either-team "event" lane (a booking / a goal in the next few minutes).
+  if (k === "card_in_window") return { label: "Booking", color: colors.cyan };
+  if (k === "goal_in_window") return { label: "Either team", color: colors.yes };
+  // Over/under "count" lane (more than N corners / shots).
+  if (k === "over_corners" || k === "over_shots") return { label: "Over/Under", color: colors.gold };
   if (k === "goal_in_stoppage") return { label: "Before half", color: VIOLET };
   if (k === "goal_in_extra_time") return { label: "Extra time", color: VIOLET };
   if (k === "penalty_scored") return { label: "Penalty", color: colors.cyan };
@@ -35,6 +40,8 @@ export function laneOf(kind?: string, slot?: MarketSlot): Lane {
   if (slot === "window") return { label: "Spell", color: colors.yes };
   if (slot === "player") return { label: "Player", color: colors.gold };
   if (slot === "period") return { label: "Before half", color: VIOLET };
+  if (slot === "event") return { label: "Either team", color: colors.yes };
+  if (slot === "count") return { label: "Over/Under", color: colors.gold };
   return { label: "Moment", color: colors.cyan };
 }
 
@@ -42,6 +49,14 @@ export function laneOf(kind?: string, slot?: MarketSlot): Lane {
 export function betLabels(kind?: string, question?: string): { yes: string; no: string } {
   const k = kind ?? "";
   const q = (question ?? "").toLowerCase();
+  // Over/under count markets — the honest verdict is over/under the line.
+  if (k === "over_corners" || k === "over_shots") return { yes: "Over", no: "Under" };
+  // "A shot or corner this spell?" — a broader window; the YES word covers both.
+  if (k === "shot_or_corner_in_window") return { yes: "Shot/corner", no: "Neither" };
+  // "A booking in the next few minutes?" — a card is the YES.
+  if (k === "card_in_window") return { yes: "Card", no: "No card" };
+  // "A goal in the next few minutes? (either team)" — a goal is the YES.
+  if (k === "goal_in_window") return { yes: "Goal", no: "No goal" };
   if (k === "shot_in_window" || (/\bshot\b/.test(q) && !/goal/.test(q)))
     return { yes: "Shot", no: "No shot" };
   if (k === "player_to_score") return { yes: "Scores", no: "Doesn't" };
