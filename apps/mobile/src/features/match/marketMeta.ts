@@ -31,6 +31,9 @@ export function laneOf(kind?: string, slot?: MarketSlot): Lane {
   if (k === "goal_in_window") return { label: "Either team", color: colors.yes };
   // Over/under "count" lane (more than N corners / shots).
   if (k === "over_corners" || k === "over_shots") return { label: "Over/Under", color: colors.gold };
+  // Which-side-next CONTEST lane (next shot/corner/goal — which team?).
+  if (k === "next_shot" || k === "next_corner" || k === "next_goal")
+    return { label: "Next", color: colors.cyan };
   if (k === "goal_in_stoppage") return { label: "Before half", color: VIOLET };
   if (k === "goal_in_extra_time") return { label: "Extra time", color: VIOLET };
   if (k === "penalty_scored") return { label: "Penalty", color: colors.cyan };
@@ -42,6 +45,7 @@ export function laneOf(kind?: string, slot?: MarketSlot): Lane {
   if (slot === "period") return { label: "Before half", color: VIOLET };
   if (slot === "event") return { label: "Either team", color: colors.yes };
   if (slot === "count") return { label: "Over/Under", color: colors.gold };
+  if (slot === "versus") return { label: "Next", color: colors.cyan };
   return { label: "Moment", color: colors.cyan };
 }
 
@@ -49,6 +53,12 @@ export function laneOf(kind?: string, slot?: MarketSlot): Lane {
 export function betLabels(kind?: string, question?: string): { yes: string; no: string } {
   const k = kind ?? "";
   const q = (question ?? "").toLowerCase();
+  // Which-side-next contest — "Next shot — A or B?": the two team names ARE the buttons.
+  if (k === "next_shot" || k === "next_corner" || k === "next_goal") {
+    const m = (question ?? "").match(/—\s*(.+?)\s+or\s+(.+?)\?\s*$/i);
+    if (m) return { yes: m[1]!.trim(), no: m[2]!.trim() };
+    return { yes: "Yes", no: "No" };
+  }
   // Over/under count markets — the honest verdict is over/under the line.
   if (k === "over_corners" || k === "over_shots") return { yes: "Over", no: "Under" };
   // "A shot or corner this spell?" — a broader window; the YES word covers both.

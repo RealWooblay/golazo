@@ -66,6 +66,8 @@ import {
   countEventTypes,
   countLine,
   isCountKind,
+  isWhichSideNextKind,
+  decisiveEventTypes,
 } from './ai/marketTuning';
 import {
   isGoalQuestionKind,
@@ -131,6 +133,8 @@ const MIN_OPEN_SPACING_MS = 8_000;
 const EVENT_SLOT_INTERVAL_MS = 180_000; // ~3 min
 /** COUNT-slot heartbeat: open one over_corners/over_shots market roughly this often. */
 const COUNT_SLOT_INTERVAL_MS = 240_000; // ~4 min
+/** VERSUS-slot heartbeat: open one which-side-next contest roughly this often. */
+const VERSUS_SLOT_INTERVAL_MS = 150_000; // ~2.5 min
 /** Bet window for the heartbeat-opened event/count markets (snappy, like momentum). */
 const HEARTBEAT_BET_WINDOW_MS = 10_000;
 /** Hydration/cooling break can't run longer than this — auto-resume so a missed ESPN
@@ -274,6 +278,8 @@ export class Orchestrator {
   private lastCountSlotOpenAt = 0;
   private eventSlotCounter = 0;
   private countSlotCounter = 0;
+  private lastVersusOpenAt = 0;
+  private versusCounter = 0;
   private heartbeatSeeded = false;
   /** True during a hydration/cooling break — openers + the NO sweep pause. */
   private breakPaused = false;
@@ -492,6 +498,7 @@ export class Orchestrator {
         this.heartbeatSeeded = true;
         this.lastEventSlotOpenAt = Date.now();
         this.lastCountSlotOpenAt = Date.now();
+        this.lastVersusOpenAt = Date.now();
       }
       await this.maybeOpenEventSlotMarket(game);
       await this.maybeOpenCountSlotMarket(game);
@@ -603,6 +610,11 @@ export class Orchestrator {
     if (!this.breakPaused) {
       await this.maybeOpenMomentumMarket(this.momentum.read());
       await this.maybeOpenPlayerMarket();
+      // WHICH-SIDE-NEXT contest — opened EVENT-DRIVEN off a build-up attacking move, so a
+      // decisive event (the next threat) is demonstrably imminent and the contest resolves
+      // YES/NO rather than voiding into a quiet spell. Its own slot/interval/pressure gates
+      // pace it; the opening event can't resolve it (open-boundary guard).
+      await this.maybeOpenVersusMarket(this.feed.state());
     }
     // Set-piece / VAR markets are event-driven (a free kick, a VAR review — which is
     // itself often the cause of a delay), so they open even during a break; the
@@ -1048,6 +1060,53 @@ export class Orchestrator {
     }
   }
 
+  /**
+   * VERSUS-slot heartbeat — a "which team does the next shot/corner/goal?" CONTEST,
+   * opened on a clock, alternating the kind and which team is the YES side. Single-
+   * occupancy ('versus'), flow-paced. The fun, balanced family: always a winner (YES the
+   * named team, NO the other), VOID only if neither team does it in the window. Resolved
+   * by the decisive-event path (outcomeForTarget), never the deadline NO.
+   */
+  private async maybeOpenVersusMarket(game: GameState): Promise<void> {
+    if (this.hasBlockingMarket('versus')) return;
+    if (Date.now() - this.lastVersusOpenAt < VERSUS_SLOT_INTERVAL_MS) return;
+    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
+
+    // Only open a "next shot/corner — which team?" CONTEST during genuine attacking play —
+    // when there's real pressure, the next shot/corner is imminent so the contest resolves
+    // YES/NO; in a quiet spell it would just VOID/refund (anticlimactic). Gating on live
+    // pressure both raises the resolve rate and stops the board filling with refunds. (The
+    // AI director opens these with even sharper timing later; this is the deterministic floor.)
+    const mood = this.momentum.read();
+    if (mood.home + mood.away < 2.5) return;
+
+    // Auto-open only the BROAD "who threatens next?" contest (next_shot resolves on any
+    // shot/corner → reliably YES/NO, rarely VOID). The narrow next_corner/next_goal are
+    // left to the AI director to open with sharper timing. Alternate the YES side so both
+    // teams take turns being the named team.
+    const team: Team = this.versusCounter % 2 === 0 ? 'home' : 'away';
+    const teamName = team === 'home' ? game.home.name : game.away.name;
+    const otherName = team === 'home' ? game.away.name : game.home.name;
+    if (!teamName || !otherName) return;
+
+    const trigger: MarketTrigger = {
+      gameId: game.gameId,
+      question: `Who threatens next — ${teamName} or ${otherName}?`,
+      kind: 'next_shot',
+      slot: 'versus',
+      team,
+      windowMs: HEARTBEAT_BET_WINDOW_MS,
+      trueProb: 0.5, // a contest — roughly even at open
+    };
+
+    const beforeOpened = this.metrics.marketsOpened;
+    await this.openTriggeredMarket(trigger, { slot: 'versus', team, logLabel: `versus kind=next_shot team=${team}` });
+    if (this.metrics.marketsOpened > beforeOpened) {
+      this.lastVersusOpenAt = Date.now();
+      this.versusCounter++;
+    }
+  }
+
   private async openTriggeredMarket(
     trigger: MarketTrigger,
     opts: {
@@ -1268,6 +1327,14 @@ export class Orchestrator {
         continue;
       }
 
+      // WHICH-SIDE-NEXT with no decisive event by the deadline → VOID/refund (the contest
+      // never happened), never NO — fair and arb-clean.
+      if (isWhichSideNextKind(m.kind)) {
+        console.log(`[golazo/feed] which_side_next_deadline void id=${m.id} kind=${m.kind}`);
+        this.finalizeMarket(t, 'VOID', { voidCause: 'which_side_next_deadline' });
+        continue;
+      }
+
       console.log(`[golazo/feed] market_deadline_no id=${m.id} kind=${m.kind}`);
       this.finalizeMarket(t, 'NO');
     }
@@ -1327,7 +1394,12 @@ export class Orchestrator {
       // real window to bet in. A later YES overrides a held miss/NO; first wins otherwise.
       if (m.status === 'open') {
         const prev = target.pendingOutcome;
-        if (!prev || (decision.outcome === 'YES' && prev.outcome !== 'YES')) {
+        // A later YES overrides a held miss/NO for "will X happen" kinds. But a
+        // which-side-next contest is decided by the FIRST decisive event (YES or NO) —
+        // a later same-team shot must NOT flip a held "the other team shot first" NO.
+        const yesOverrides =
+          decision.outcome === 'YES' && prev?.outcome !== 'YES' && !isWhichSideNextKind(m.kind);
+        if (!prev || yesOverrides) {
           target.pendingOutcome = decision;
         }
         settled = true;
@@ -1358,6 +1430,15 @@ export class Orchestrator {
     if (target.isPeriod && ev.type === 'goal') {
       if (target.team && ev.team !== target.team) return undefined;
       return { outcome: 'YES' };
+    }
+
+    // WHICH-SIDE-NEXT contest — the first DECISIVE event by EITHER team decides it:
+    // the market's team doing it first → YES, the other team first → NO (a scoped,
+    // audited event-NO, like var_penalty_denied below). Neither team by the deadline →
+    // VOID (settleExpired). A non-decisive event returns undefined (no opinion).
+    if (isWhichSideNextKind(m.kind)) {
+      if (!decisiveEventTypes(m.kind).has(ev.type) || !ev.team) return undefined;
+      return ev.team === target.team ? { outcome: 'YES' } : { outcome: 'NO' };
     }
 
     if (m.kind === 'penalty_awarded') {
@@ -1460,6 +1541,9 @@ export class Orchestrator {
     if (m.kind === 'goal_in_window') return ev.type === 'goal';
     // OVER/UNDER count markets are settled by the bumpCountMarkets pass, never here.
     if (isCountKind(m.kind)) return false;
+    // WHICH-SIDE-NEXT: a decisive event by EITHER team targets this market (the resolver
+    // decides YES/NO by team), so match BEFORE the team-mismatch guards below.
+    if (isWhichSideNextKind(m.kind)) return decisiveEventTypes(m.kind).has(ev.type);
 
     if (t.team && ev.team && t.team !== ev.team) return false;
     if (ev.team && t.team !== ev.team) return false;
@@ -1605,6 +1689,8 @@ export class Orchestrator {
     this.lastCountSlotOpenAt = 0;
     this.eventSlotCounter = 0;
     this.countSlotCounter = 0;
+    this.lastVersusOpenAt = 0;
+    this.versusCounter = 0;
     this.heartbeatSeeded = false;
     this.commentary.clear();
     this.enhancer.resetForMatch(); // drop a prior fixture's pooled lines

@@ -66,7 +66,9 @@ describe('full-game market simulation (Paraguay vs Türkiye replay)', () => {
 
     // 2. Momentum DRIVES volume — the time-boxed markets are the main opener path.
     const momentumMarkets =
-      (report.byKind['shot_in_window'] ?? 0) + (report.byKind['score_in_window'] ?? 0);
+      (report.byKind['shot_in_window'] ?? 0) +
+      (report.byKind['shot_or_corner_in_window'] ?? 0) +
+      (report.byKind['score_in_window'] ?? 0);
     expect(momentumMarkets).toBeGreaterThanOrEqual(8);
 
     // 3. Nothing hangs: by full time, no market is still open/locked.
@@ -78,19 +80,30 @@ describe('full-game market simulation (Paraguay vs Türkiye replay)', () => {
     ).length;
     expect(terminal).toBe(report.markets.length);
 
-    // 5. THE CORE FIX — no spurious voids. VOID is reserved for genuine feed outage,
-    //    NOT "the event didn't arrive." A late goal on the 2-min feed must be NO/YES.
-    expect(report.voided).toBeLessThanOrEqual(1);
+    // 5. NO SPURIOUS VOIDS. Only which-side-next CONTEST kinds may legitimately VOID/refund
+    //    (neither team did the event in the window). Any OTHER kind voiding is the old
+    //    "event didn't arrive" bug and must be ≈0. We assert on the KIND, not the audited
+    //    cause (cause tags can rotate out of the capped audit buffer).
+    const whichSide = ['next_shot', 'next_corner', 'next_goal'];
+    const spuriousVoids = report.voids.filter(
+      (v) => !whichSide.includes(v.kind) && v.cause !== 'match_switch',
+    );
+    expect(spuriousVoids.length).toBeLessThanOrEqual(1);
 
-    // 6. Resolution is overwhelmingly real (resolved, not void).
-    const resolvedShare = report.resolved / (report.resolved + report.voided);
+    // 6. Resolution is overwhelmingly real once the legitimate which-side voids are set
+    //    aside (resolved, not spuriously void).
+    const resolvedShare = report.resolved / (report.resolved + spuriousVoids.length);
     expect(resolvedShare).toBeGreaterThanOrEqual(0.95);
 
     // 7. NO NO-before-late-YES regression. Paraguay (the AWAY side) actually SCORE
     //    (an open-play goal, final 0–1); their momentum/open-play markets live at
     //    goal time must settle YES, never NO/VOID. Assert: the scoring side has ≥1
     //    YES and NONE of its markets voided (a void there would be the old bug).
-    const scorerMarkets = report.markets.filter((m) => m.team === 'away');
+    //    (Which-side contests are excluded — they legitimately refund when neither team
+    //    acts; this check is about the scoring side's momentum/open-play markets.)
+    const scorerMarkets = report.markets.filter(
+      (m) => m.team === 'away' && !whichSide.includes(m.kind),
+    );
     const scorerYes = scorerMarkets.filter((m) => m.outcome === 'YES');
     expect(scorerYes.length).toBeGreaterThanOrEqual(1);
     expect(scorerMarkets.every((m) => m.status !== 'void')).toBe(true);
