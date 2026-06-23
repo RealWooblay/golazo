@@ -41,6 +41,15 @@ pub struct MarketResolved {
 }
 
 #[event]
+pub struct RakeSwept {
+    pub market: Pubkey,
+    /// Destination USX token account (owned by WITHDRAW_AUTHORITY).
+    pub treasury: Pubkey,
+    /// USX base units swept (gross - net, incl. rounding dust).
+    pub amount: u64,
+}
+
+#[event]
 pub struct Claimed {
     pub market: Pubkey,
     pub bet: Pubkey,

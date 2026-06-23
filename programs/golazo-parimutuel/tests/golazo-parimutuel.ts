@@ -155,6 +155,19 @@ describe("golazo-parimutuel", () => {
 
   // Authority's own USX account — required by initialize_market (seed source).
   let authorityUsx: PublicKey;
+  // The hardcoded WITHDRAW_AUTHORITY (committed dev keypair; pubkey matches the
+  // const in lib.rs). It signs sweeps; rake lands in its own USX account.
+  const withdrawAuthority = Keypair.fromSecretKey(
+    Uint8Array.from(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(__dirname, "fixtures/withdraw-authority.json"),
+          "utf8"
+        )
+      )
+    )
+  );
+  let withdrawUsx: PublicKey;
 
   before(async () => {
     // Create the USX mint at the committed test-mint address; authority is the
@@ -168,6 +181,8 @@ describe("golazo-parimutuel", () => {
       usxMintKp
     );
     authorityUsx = await fundUsx(authority.publicKey, 0);
+    await airdrop(withdrawAuthority.publicKey, 2);
+    withdrawUsx = await fundUsx(withdrawAuthority.publicKey, 0);
   });
 
   // =========================================================================
@@ -553,6 +568,222 @@ describe("golazo-parimutuel", () => {
       } catch (e: any) {
         threw = true;
         assert.include(e.toString(), "AlreadyClaimed");
+      }
+      assert.isTrue(threw);
+    });
+  });
+
+  // =========================================================================
+  // RAKE SWEEP (hardcoded WITHDRAW_AUTHORITY)
+  //
+  // Market seed 3: rake 500 bps, dave 60_000 YES, erin 40_000 NO, resolve YES.
+  //   gross = 100_000, net = 95_000, rake = 5_000.
+  //   Sweep -> withdraw account +5_000, vault left = 95_000 (exactly the winner's
+  //   net), so dave still claims his full 95_000 afterwards.
+  // =========================================================================
+  describe("rake sweep", () => {
+    const marketSeed = new BN(3);
+    const RAKE = 500;
+    const dave = Keypair.generate();
+    const erin = Keypair.generate();
+    let market: PublicKey;
+    let vault: PublicKey;
+    let daveUsx: PublicKey;
+    let erinUsx: PublicKey;
+
+    before(async () => {
+      [market] = marketPda(authority.publicKey, marketSeed);
+      [vault] = vaultPda(market);
+      await airdrop(dave.publicKey, 2);
+      await airdrop(erin.publicKey, 2);
+      daveUsx = await fundUsx(dave.publicKey, 1_000_000);
+      erinUsx = await fundUsx(erin.publicKey, 1_000_000);
+
+      await program.methods
+        .initializeMarket(marketSeed, QUESTION_HASH, RAKE, new BN(0), new BN(0))
+        .accounts({
+          authority: authority.publicKey,
+          market,
+          usxMint: USX_MINT,
+          vault,
+          authorityToken: authorityUsx,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
+        .rpc();
+
+      for (const [bettor, token, side, stake] of [
+        [dave, daveUsx, SIDE_YES, new BN(60_000)],
+        [erin, erinUsx, SIDE_NO, new BN(40_000)],
+      ] as const) {
+        const [bet] = betPda(market, bettor.publicKey);
+        await program.methods
+          .placeBet(side, stake)
+          .accounts({
+            bettor: bettor.publicKey,
+            market,
+            vault,
+            bettorToken: token,
+            bet,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([bettor])
+          .rpc();
+      }
+
+      await program.methods
+        .resolveMarket(OUTCOME_YES)
+        .accounts({ authority: authority.publicKey, market })
+        .rpc();
+    });
+
+    it("rejects sweep from a signer other than WITHDRAW_AUTHORITY", async () => {
+      const stranger = Keypair.generate();
+      await airdrop(stranger.publicKey, 1);
+      const strangerUsx = await fundUsx(stranger.publicKey, 0);
+      let threw = false;
+      try {
+        await program.methods
+          .sweepRake()
+          .accounts({
+            withdrawAuthority: stranger.publicKey,
+            market,
+            vault,
+            treasuryToken: strangerUsx,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([stranger])
+          .rpc();
+      } catch (_e) {
+        threw = true;
+      }
+      assert.isTrue(threw, "non-withdraw-authority must not sweep");
+    });
+
+    it("withdraw authority sweeps rake (5_000) to its USX account", async () => {
+      assert.equal((await usxBalance(vault)).toString(), "100000");
+      const before = await usxBalance(withdrawUsx);
+
+      await program.methods
+        .sweepRake()
+        .accounts({
+          withdrawAuthority: withdrawAuthority.publicKey,
+          market,
+          vault,
+          treasuryToken: withdrawUsx,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([withdrawAuthority])
+        .rpc();
+
+      const after = await usxBalance(withdrawUsx);
+      assert.equal((after - before).toString(), "5000");
+      // Vault now holds exactly the net pool owed to the winner.
+      assert.equal((await usxBalance(vault)).toString(), "95000");
+
+      const m = await program.account.market.fetch(market);
+      assert.equal(m.rakeSwept, true);
+    });
+
+    it("rejects a second sweep (RakeAlreadySwept)", async () => {
+      let threw = false;
+      try {
+        await program.methods
+          .sweepRake()
+          .accounts({
+            withdrawAuthority: withdrawAuthority.publicKey,
+            market,
+            vault,
+            treasuryToken: withdrawUsx,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([withdrawAuthority])
+          .rpc();
+      } catch (e: any) {
+        threw = true;
+        assert.include(e.toString(), "RakeAlreadySwept");
+      }
+      assert.isTrue(threw);
+    });
+
+    it("winner still claims full net (95_000) after the sweep", async () => {
+      const [bet] = betPda(market, dave.publicKey);
+      const before = await usxBalance(daveUsx);
+      await program.methods
+        .claim()
+        .accounts({
+          bettor: dave.publicKey,
+          market,
+          vault,
+          bettorToken: daveUsx,
+          bet,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([dave])
+        .rpc();
+      const after = await usxBalance(daveUsx);
+      assert.equal((after - before).toString(), "95000");
+      assert.equal((await usxBalance(vault)).toString(), "0");
+    });
+
+    it("rejects sweep on a non-resolved (void) market", async () => {
+      const voidSeed = new BN(4);
+      const [vmarket] = marketPda(authority.publicKey, voidSeed);
+      const [vvault] = vaultPda(vmarket);
+      const frank = Keypair.generate();
+      await airdrop(frank.publicKey, 2);
+      const frankUsx = await fundUsx(frank.publicKey, 1_000_000);
+
+      await program.methods
+        .initializeMarket(voidSeed, QUESTION_HASH, RAKE, new BN(0), new BN(0))
+        .accounts({
+          authority: authority.publicKey,
+          market: vmarket,
+          usxMint: USX_MINT,
+          vault: vvault,
+          authorityToken: authorityUsx,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
+        .rpc();
+      const [bet] = betPda(vmarket, frank.publicKey);
+      await program.methods
+        .placeBet(SIDE_YES, new BN(10_000))
+        .accounts({
+          bettor: frank.publicKey,
+          market: vmarket,
+          vault: vvault,
+          bettorToken: frankUsx,
+          bet,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([frank])
+        .rpc();
+      await program.methods
+        .voidMarket()
+        .accounts({ authority: authority.publicKey, market: vmarket })
+        .rpc();
+
+      let threw = false;
+      try {
+        await program.methods
+          .sweepRake()
+          .accounts({
+            withdrawAuthority: withdrawAuthority.publicKey,
+            market: vmarket,
+            vault: vvault,
+            treasuryToken: withdrawUsx,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([withdrawAuthority])
+          .rpc();
+      } catch (e: any) {
+        threw = true;
+        assert.include(e.toString(), "MarketNotResolved");
       }
       assert.isTrue(threw);
     });

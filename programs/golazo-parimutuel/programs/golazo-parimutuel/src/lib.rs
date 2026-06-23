@@ -63,9 +63,27 @@ pub const USX_MINT: Pubkey = pubkey!("6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3t
 #[cfg(feature = "local-mint")]
 pub const USX_MINT: Pubkey = pubkey!("3kuxNXDwqUyyUeJVGxKa1judTjoe3u4Zu8Mgmbmi28S7");
 
+/// The single address allowed to sweep operator rake out of market vaults.
+///
+/// Hardcoded by design: `sweep_rake` requires this exact signer, and rake is
+/// sent to a USX account this key owns. Rotating it is a one-line change + a
+/// program redeploy (the program is upgradeable).
+///
+/// NOTE: the value below is a dev keypair committed under tests/fixtures so the
+/// suite can sign sweeps. Before mainnet, replace it with your real treasury
+/// address (ideally a Squads multisig or Ledger) and never commit that secret.
+pub const WITHDRAW_AUTHORITY: Pubkey = pubkey!("5K8KTZekMGpQ7dsjPQnMdNpjgUHzXcuPtYwJPXGw1aDs");
+
 #[program]
 pub mod golazo_parimutuel {
     use super::*;
+
+    /// `WITHDRAW_AUTHORITY`-only. Sweep a resolved market's operator rake
+    /// (gross - net) from the vault to a USX account that authority owns.
+    /// Single-shot per market.
+    pub fn sweep_rake(ctx: Context<SweepRake>) -> Result<()> {
+        instructions::sweep_rake::handler(ctx)
+    }
 
     /// Create a market + its USX token vault and open for betting.
     /// `rake_bps` must be < 10_000; seeds (USX base units) may be zero.

@@ -46,4 +46,10 @@ pub enum GolazoError {
 
     #[msg("Vault has insufficient lamports to cover this payout/refund.")]
     InsufficientVaultFunds,
+
+    #[msg("Rake can only be swept from a Resolved market.")]
+    MarketNotResolved,
+
+    #[msg("Rake has already been swept for this market.")]
+    RakeAlreadySwept,
 }
