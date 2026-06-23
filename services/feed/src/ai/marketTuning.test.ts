@@ -5,10 +5,13 @@ import {
   countLine,
   feedLagMinutes,
   goalAlreadyHappenedForChance,
+  inWhistleZone,
   isAwardedFreeKick,
   isCountKind,
   isDefensiveSetPiece,
   isStalePlay,
+  isWhichSideNextKind,
+  decisiveEventTypes,
   marketSlot,
   resolveDeadlineMs,
   scaledResolveWindowMs,
@@ -124,6 +127,38 @@ describe('PHASE 2 deadlines + count helpers', () => {
 
     expect([...countEventTypes('over_corners')]).toEqual(['corner']);
     expect(new Set(countEventTypes('over_shots'))).toEqual(new Set(['shot', 'miss', 'goal']));
+  });
+});
+
+describe('PHASE 6 which-side-next palette', () => {
+  it('classifies only the next_* contest kinds as which-side', () => {
+    expect(isWhichSideNextKind('next_shot')).toBe(true);
+    expect(isWhichSideNextKind('next_corner')).toBe(true);
+    expect(isWhichSideNextKind('next_goal')).toBe(true);
+    expect(isWhichSideNextKind('shot_in_window')).toBe(false);
+    expect(isWhichSideNextKind('over_corners')).toBe(false);
+  });
+
+  it('decides next_shot on any real attacking threat, and maps to the versus slot', () => {
+    const set = decisiveEventTypes('next_shot');
+    for (const t of ['shot', 'miss', 'goal', 'corner', 'dangerous_attack'] as const) {
+      expect(set.has(t)).toBe(true);
+    }
+    expect(set.has('free_kick')).toBe(false);
+    expect(marketSlot('next_shot')).toBe('versus');
+    expect(resolveDeadlineMs('next_shot')).toBeGreaterThan(0);
+  });
+});
+
+describe('PHASE 4a HT/FT boundary guard (inWhistleZone)', () => {
+  it('suppresses short play markets ONLY in stoppage of a half', () => {
+    // Regulation play of either half — fine, play continues (no guard).
+    expect(inWhistleZone(game("30'"))).toBe(false);
+    expect(inWhistleZone(game("44'"))).toBe(false);
+    expect(inWhistleZone(game("80'"))).toBe(false);
+    // Stoppage of the 1st/2nd half — the whistle is imminent → guard ON.
+    expect(inWhistleZone(game("45+2'"))).toBe(true);
+    expect(inWhistleZone(game("90+3'"))).toBe(true);
   });
 });
 
