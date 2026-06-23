@@ -157,6 +157,9 @@ export interface EspnFeedOptions {
   fetchImpl?: typeof fetch;
   /** Tests: emit first-poll backlog. Production: prime `seen` and skip history replay. */
   replayHistory?: boolean;
+  /** Manual override: pin the feed to this exact ESPN event id (ignore auto-pick + never
+   *  auto-rotate away). Used to force a specific match for testing / concurrent games. */
+  forceEventId?: string;
 }
 
 export class EspnFeed implements FeedSource {
@@ -176,12 +179,15 @@ export class EspnFeed implements FeedSource {
   /** First poll primes `seen` without replaying the full match history. */
   private primed = false;
   private readonly replayHistory: boolean;
+  /** When set, the feed is pinned to this event id (manual override). */
+  private readonly forceEventId: string | undefined;
 
   constructor(opts: EspnFeedOptions) {
     this.league = opts.league;
     this.commentaryLang = opts.commentaryLang ?? 'en';
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.replayHistory = opts.replayHistory ?? false;
+    this.forceEventId = opts.forceEventId;
   }
 
   /**
@@ -192,7 +198,11 @@ export class EspnFeed implements FeedSource {
     const board = await this.getJson<EspnScoreboard>(SCOREBOARD(this.league));
     if (!board?.events?.length) return false;
 
-    const live = board.events.find((e) => e.status?.type?.state === 'in');
+    // Pinned (manual override) → lock onto that exact event in any state; otherwise the
+    // first live ('in') game on the board.
+    const live = this.forceEventId
+      ? board.events.find((e) => e.id === this.forceEventId)
+      : board.events.find((e) => e.status?.type?.state === 'in');
     if (!live?.id) return false;
 
     const parsed = parseGameState(live);
@@ -305,6 +315,7 @@ export class EspnFeed implements FeedSource {
   private finalPolls = 0;
 
   shouldRotate(): boolean {
+    if (this.forceEventId) return false; // pinned to one match — never auto-rotate away
     return this.finalPolls >= 3;
   }
 

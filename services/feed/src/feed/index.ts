@@ -87,7 +87,11 @@ export async function createFeed(config: Config): Promise<CreatedFeed> {
       ? { feed: new EmptyFeed(), reason: `${why} — no live match (FEED_MODE=espn, no demo)` }
       : { feed: new SimFeed({ startAt: Date.now() }), reason: `${why} — using sim` };
 
-  const espn = new EspnFeed({ league: config.espnLeague, commentaryLang: config.espnCommentaryLang });
+  const espn = new EspnFeed({
+    league: config.espnLeague,
+    commentaryLang: config.espnCommentaryLang,
+    forceEventId: config.forceEventId,
+  });
   try {
     const live = await espn.start();
     if (live) {
