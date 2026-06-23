@@ -45,7 +45,7 @@ pub struct Claimed {
     pub market: Pubkey,
     pub bet: Pubkey,
     pub bettor: Pubkey,
-    /// Lamports paid out (winner payout, full refund on void, or 0 for a loser).
+    /// USX base units paid out (winner payout, full refund on void, or 0 for a loser).
     pub amount: u64,
     /// True when this was a void refund rather than a resolved-market payout.
     pub refunded: bool,

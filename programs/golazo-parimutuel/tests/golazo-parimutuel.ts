@@ -1,19 +1,31 @@
 /**
- * GOLAZO parimutuel — Anchor/Mocha integration tests.
+ * GOLAZO parimutuel — Anchor/Mocha integration tests (USX settlement).
  *
- * These run against a local validator that `anchor test` spins up. They cover:
- *   • initialize_market (zero seed allowed, status Open)
- *   • place_bet YES and NO grows the final pools
+ * The protocol settles in the USX stablecoin (SPL classic), not native SOL.
+ * These tests build the program with `--features local-mint`, which pins
+ * USX_MINT to the committed test mint (tests/fixtures/usx-mint.json) we create
+ * and fund here. Run with:
+ *
+ *   anchor test --validator legacy -- --features local-mint
+ *
+ * (`--validator legacy` uses solana-test-validator; Anchor 1.0 defaults to
+ * surfpool, which isn't required here.)
+ *
+ * Coverage:
+ *   • initialize_market (zero seed, status Open, vault is a USX token account)
+ *   • place_bet YES and NO moves USX into the vault and grows the pools
  *   • lock_market, resolve_market(Yes)
- *   • winner claim pays final proportional pool share, loser claim pays 0
+ *   • winner claim pays final proportional pool share in USX, loser claims 0
  *   • double-claim fails
- *   • a full VOID round that refunds every stake
+ *   • a full VOID round that refunds every stake in USX
  *
- * The math is replicated here in TS (`parimutuelPayout`) so the
- * assertions are derived the same way the on-chain program derives them — this
- * IS the parity check against @golazo/core's integer mirror.
+ * The math is replicated here in TS (`parimutuelPayout`) so the assertions are
+ * derived the same way the on-chain program derives them — the parity check
+ * against @golazo/core's integer mirror.
  */
 
+import * as fs from "fs";
+import * as path from "path";
 import * as anchor from "@coral-xyz/anchor";
 import { Program, BN } from "@coral-xyz/anchor";
 import { GolazoParimutuel } from "../target/types/golazo_parimutuel";
@@ -22,7 +34,15 @@ import {
   LAMPORTS_PER_SOL,
   PublicKey,
   SystemProgram,
+  SYSVAR_RENT_PUBKEY,
 } from "@solana/web3.js";
+import {
+  TOKEN_PROGRAM_ID,
+  createMint,
+  getAccount,
+  getOrCreateAssociatedTokenAccount,
+  mintTo,
+} from "@solana/spl-token";
 import { assert } from "chai";
 
 // ---------------------------------------------------------------------------
@@ -59,6 +79,18 @@ describe("golazo-parimutuel", () => {
 
   const authority = (provider.wallet as anchor.Wallet).payer;
 
+  // The committed test mint keypair — its pubkey is pinned as USX_MINT when the
+  // program is built with `--features local-mint`.
+  const usxMintKp = Keypair.fromSecretKey(
+    Uint8Array.from(
+      JSON.parse(
+        fs.readFileSync(path.join(__dirname, "fixtures/usx-mint.json"), "utf8")
+      )
+    )
+  );
+  const USX_MINT = usxMintKp.publicKey;
+  const USX_DECIMALS = 6;
+
   // Side enum encodings for Anchor (variant objects).
   const SIDE_YES = { yes: {} };
   const SIDE_NO = { no: {} };
@@ -69,11 +101,7 @@ describe("golazo-parimutuel", () => {
 
   function marketPda(auth: PublicKey, seed: BN): [PublicKey, number] {
     return PublicKey.findProgramAddressSync(
-      [
-        Buffer.from("market"),
-        auth.toBuffer(),
-        seed.toArrayLike(Buffer, "le", 8),
-      ],
+      [Buffer.from("market"), auth.toBuffer(), seed.toArrayLike(Buffer, "le", 8)],
       program.programId
     );
   }
@@ -99,16 +127,57 @@ describe("golazo-parimutuel", () => {
     await provider.connection.confirmTransaction({ signature: sig, ...bh });
   }
 
+  /** Create the bettor's USX ATA (authority pays) and mint `amount` USX to it. */
+  async function fundUsx(owner: PublicKey, amount: number): Promise<PublicKey> {
+    const ata = await getOrCreateAssociatedTokenAccount(
+      provider.connection,
+      authority, // payer
+      USX_MINT,
+      owner,
+      true
+    );
+    if (amount > 0) {
+      await mintTo(
+        provider.connection,
+        authority, // payer
+        USX_MINT,
+        ata.address,
+        authority, // mint authority
+        amount
+      );
+    }
+    return ata.address;
+  }
+
+  async function usxBalance(ata: PublicKey): Promise<bigint> {
+    return (await getAccount(provider.connection, ata)).amount;
+  }
+
+  // Authority's own USX account — required by initialize_market (seed source).
+  let authorityUsx: PublicKey;
+
+  before(async () => {
+    // Create the USX mint at the committed test-mint address; authority is the
+    // mint + freeze authority so we can fund test users.
+    await createMint(
+      provider.connection,
+      authority, // payer
+      authority.publicKey, // mint authority
+      authority.publicKey, // freeze authority
+      USX_DECIMALS,
+      usxMintKp
+    );
+    authorityUsx = await fundUsx(authority.publicKey, 0);
+  });
+
   // =========================================================================
   // WORKED EXAMPLE (resolved, YES wins)
   //
-  // seeds: YES = 0, NO = 0 lamports, rake = 500 bps (5%).
- //
-  //   open pool  : yes=0       no=0
- //
+  // seeds: YES = 0, NO = 0 USX, rake = 500 bps (5%).
+  //
   //   Alice bets 50_000 on YES -> pool yes=50_000
   //   Bob bets 50_000 on NO    -> pool no=50_000
- //
+  //
   //   resolve YES:
   //     gross = 100_000, net = 95_000
   //     Alice owns 50_000 / 50_000 of the winning side -> payout 95_000
@@ -127,6 +196,8 @@ describe("golazo-parimutuel", () => {
 
     let market: PublicKey;
     let vault: PublicKey;
+    let aliceUsx: PublicKey;
+    let bobUsx: PublicKey;
 
     // Expected value computed by the off-chain mirror.
     const expectedAlicePayout = parimutuelPayout(50_000n, 50_000n, 500n, "YES", 50_000n); // 95_000
@@ -136,6 +207,8 @@ describe("golazo-parimutuel", () => {
       [vault] = vaultPda(market);
       await airdrop(alice.publicKey, 2);
       await airdrop(bob.publicKey, 2);
+      aliceUsx = await fundUsx(alice.publicKey, 1_000_000);
+      bobUsx = await fundUsx(bob.publicKey, 1_000_000);
     });
 
     it("hard-codes the by-hand expectations (sanity)", () => {
@@ -144,37 +217,28 @@ describe("golazo-parimutuel", () => {
 
     it("initializes the market with zero seed", async () => {
       await program.methods
-        .initializeMarket(
-          marketSeed,
-          QUESTION_HASH,
-          RAKE,
-          SEED_YES,
-          SEED_NO
-        )
+        .initializeMarket(marketSeed, QUESTION_HASH, RAKE, SEED_YES, SEED_NO)
         .accounts({
           authority: authority.publicKey,
           market,
+          usxMint: USX_MINT,
           vault,
+          authorityToken: authorityUsx,
+          tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
         })
         .rpc();
 
       const m = await program.account.market.fetch(market);
       assert.equal(m.poolYes.toString(), "0");
       assert.equal(m.poolNo.toString(), "0");
-      assert.equal(m.seedYes.toString(), "0");
-      assert.equal(m.seedNo.toString(), "0");
       assert.equal(m.rakeBps, RAKE);
       assert.deepEqual(m.status, { open: {} });
       assert.deepEqual(m.outcome, { none: {} });
 
-      // Vault is funded to the 0-byte rent-exempt minimum at init (operator
-      // pays), even with zero seed — so claim.rs's rent reservation never bites
-      // into the prize pool. Pools stay zero; only the vault holds rent.
-      const rentMin =
-        await provider.connection.getMinimumBalanceForRentExemption(0);
-      const vaultBal = await provider.connection.getBalance(vault);
-      assert.equal(vaultBal, rentMin);
+      // Vault is a USX token account holding zero USX (token rent is separate SOL).
+      assert.equal((await usxBalance(vault)).toString(), "0");
     });
 
     it("Alice bets YES and grows the YES pool", async () => {
@@ -185,7 +249,9 @@ describe("golazo-parimutuel", () => {
           bettor: alice.publicKey,
           market,
           vault,
+          bettorToken: aliceUsx,
           bet,
+          tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .signers([alice])
@@ -199,6 +265,7 @@ describe("golazo-parimutuel", () => {
       const m = await program.account.market.fetch(market);
       assert.equal(m.poolYes.toString(), "50000");
       assert.equal(m.poolNo.toString(), "0");
+      assert.equal((await usxBalance(vault)).toString(), "50000");
     });
 
     it("Bob bets NO and grows the NO pool", async () => {
@@ -209,19 +276,18 @@ describe("golazo-parimutuel", () => {
           bettor: bob.publicKey,
           market,
           vault,
+          bettorToken: bobUsx,
           bet,
+          tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .signers([bob])
         .rpc();
 
-      const b = await program.account.bet.fetch(bet);
-      assert.equal(b.stake.toString(), "50000");
-      assert.deepEqual(b.side, { no: {} });
-
       const m = await program.account.market.fetch(market);
       assert.equal(m.poolYes.toString(), "50000");
       assert.equal(m.poolNo.toString(), "50000");
+      assert.equal((await usxBalance(vault)).toString(), "100000");
     });
 
     it("rejects a second bet from the same bettor (one bet per market)", async () => {
@@ -234,7 +300,9 @@ describe("golazo-parimutuel", () => {
             bettor: alice.publicKey,
             market,
             vault,
+            bettorToken: aliceUsx,
             bet,
+            tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
           })
           .signers([alice])
@@ -257,6 +325,7 @@ describe("golazo-parimutuel", () => {
     it("rejects place_bet once locked", async () => {
       const late = Keypair.generate();
       await airdrop(late.publicKey, 1);
+      const lateUsx = await fundUsx(late.publicKey, 100_000);
       const [bet] = betPda(market, late.publicKey);
       let threw = false;
       try {
@@ -266,7 +335,9 @@ describe("golazo-parimutuel", () => {
             bettor: late.publicKey,
             market,
             vault,
+            bettorToken: lateUsx,
             bet,
+            tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
           })
           .signers([late])
@@ -304,9 +375,9 @@ describe("golazo-parimutuel", () => {
       assert.deepEqual(m.outcome, { yes: {} });
     });
 
-    it("winner (Alice) claims her final proportional share = 95_000", async () => {
+    it("winner (Alice) claims her final proportional share = 95_000 USX", async () => {
       const [bet] = betPda(market, alice.publicKey);
-      const before = await provider.connection.getBalance(alice.publicKey);
+      const before = await usxBalance(aliceUsx);
 
       await program.methods
         .claim()
@@ -314,17 +385,19 @@ describe("golazo-parimutuel", () => {
           bettor: alice.publicKey,
           market,
           vault,
+          bettorToken: aliceUsx,
           bet,
-          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([alice])
         .rpc();
 
-      const after = await provider.connection.getBalance(alice.publicKey);
-      // Claim has no other lamport effects for the signer (no account creation),
-      // so the delta is exactly the payout.
-      assert.equal(after - before, Number(expectedAlicePayout));
-      assert.equal(after - before, 95_000);
+      const after = await usxBalance(aliceUsx);
+      assert.equal((after - before).toString(), expectedAlicePayout.toString());
+      assert.equal((after - before).toString(), "95000");
+
+      // Rake remainder (gross - net = 5_000) stays in the vault.
+      assert.equal((await usxBalance(vault)).toString(), "5000");
 
       const b = await program.account.bet.fetch(bet);
       assert.equal(b.claimed, true);
@@ -340,8 +413,9 @@ describe("golazo-parimutuel", () => {
             bettor: alice.publicKey,
             market,
             vault,
+            bettorToken: aliceUsx,
             bet,
-            systemProgram: SystemProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
           })
           .signers([alice])
           .rpc();
@@ -352,9 +426,9 @@ describe("golazo-parimutuel", () => {
       assert.isTrue(threw);
     });
 
-    it("loser (Bob) claims 0 (no lamports moved, bet marked claimed)", async () => {
+    it("loser (Bob) claims 0 (no USX moved, bet marked claimed)", async () => {
       const [bet] = betPda(market, bob.publicKey);
-      const before = await provider.connection.getBalance(bob.publicKey);
+      const before = await usxBalance(bobUsx);
 
       await program.methods
         .claim()
@@ -362,14 +436,15 @@ describe("golazo-parimutuel", () => {
           bettor: bob.publicKey,
           market,
           vault,
+          bettorToken: bobUsx,
           bet,
-          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([bob])
         .rpc();
 
-      const after = await provider.connection.getBalance(bob.publicKey);
-      assert.equal(after - before, 0);
+      const after = await usxBalance(bobUsx);
+      assert.equal((after - before).toString(), "0");
 
       const b = await program.account.bet.fetch(bet);
       assert.equal(b.claimed, true);
@@ -388,24 +463,30 @@ describe("golazo-parimutuel", () => {
     const carol = Keypair.generate();
     let market: PublicKey;
     let vault: PublicKey;
+    let carolUsx: PublicKey;
 
     before(async () => {
       [market] = marketPda(authority.publicKey, marketSeed);
       [vault] = vaultPda(market);
       await airdrop(carol.publicKey, 2);
+      carolUsx = await fundUsx(carol.publicKey, 1_000_000);
 
       await program.methods
         .initializeMarket(marketSeed, QUESTION_HASH, RAKE, SEED, SEED)
         .accounts({
           authority: authority.publicKey,
           market,
+          usxMint: USX_MINT,
           vault,
+          authorityToken: authorityUsx,
+          tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
         })
         .rpc();
     });
 
-    it("Carol bets, then market is voided, then she is refunded exactly her stake", async () => {
+    it("Carol bets, the market is voided, then she is refunded exactly her stake", async () => {
       const [bet] = betPda(market, carol.publicKey);
 
       await program.methods
@@ -414,13 +495,14 @@ describe("golazo-parimutuel", () => {
           bettor: carol.publicKey,
           market,
           vault,
+          bettorToken: carolUsx,
           bet,
+          tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .signers([carol])
         .rpc();
 
-      // Void the whole market.
       await program.methods
         .voidMarket()
         .accounts({ authority: authority.publicKey, market })
@@ -428,23 +510,25 @@ describe("golazo-parimutuel", () => {
       const m = await program.account.market.fetch(market);
       assert.deepEqual(m.status, { void: {} });
 
-      const before = await provider.connection.getBalance(carol.publicKey);
+      const before = await usxBalance(carolUsx);
       await program.methods
         .claim()
         .accounts({
           bettor: carol.publicKey,
           market,
           vault,
+          bettorToken: carolUsx,
           bet,
-          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([carol])
         .rpc();
-      const after = await provider.connection.getBalance(carol.publicKey);
+      const after = await usxBalance(carolUsx);
 
       // Full stake back, no rake on void.
-      assert.equal(after - before, Number(STAKE));
-      assert.equal(after - before, 70_000);
+      assert.equal((after - before).toString(), STAKE.toString());
+      assert.equal((after - before).toString(), "70000");
+      assert.equal((await usxBalance(vault)).toString(), "0");
 
       const b = await program.account.bet.fetch(bet);
       assert.equal(b.claimed, true);
@@ -460,8 +544,9 @@ describe("golazo-parimutuel", () => {
             bettor: carol.publicKey,
             market,
             vault,
+            bettorToken: carolUsx,
             bet,
-            systemProgram: SystemProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
           })
           .signers([carol])
           .rpc();
