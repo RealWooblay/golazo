@@ -422,6 +422,11 @@ export class Orchestrator {
     return this.engine.list();
   }
 
+  /** Sim/test hook: drive a real-money bet through the live handler (latency-arb guards et al). */
+  simBet(marketId: string, userId: string, side: 'YES' | 'NO', stake: number): void {
+    this.handleUserBet({ t: 'bet', marketId, userId, side, stake });
+  }
+
   /** Sim/test hook: every momentum bar value broadcast this run (proves the bar fires + moves). */
   simMomentum(): ReadonlyArray<{ bar: Team | null; home: number; away: number }> {
     return this.momentumLog;
@@ -563,6 +568,7 @@ export class Orchestrator {
     this.recent.push(ev);
     this.commentary.push(ev); // feeds the off-path enhancer's narrative context
     this.bumpCountMarkets(ev); // over/under count markets: YES the instant they cross the line
+    this.resolveWhichSideMarkets(ev); // which-side contests: decided by the next threat (any team)
     if (this.recent.length > 30) this.recent.shift();
 
     // The agent reads momentum off every event, then pushes it to the bar. Markets
@@ -996,6 +1002,36 @@ export class Orchestrator {
         }
       } else {
         this.finalizeMarket(t, 'YES');
+      }
+    }
+  }
+
+  /**
+   * WHICH-SIDE-NEXT resolution — runs for EVERY event (like bumpCountMarkets), NOT via the
+   * resolver-branch gate. This matters: a decisive event can be a `corner` or
+   * `dangerous_attack`, which that gate does NOT route into resolveFromEvent — so resolving
+   * which-side here is the ONLY way the opponent-first → NO path fires for those types.
+   * The first decisive event by EITHER team decides the contest: the market's team does it
+   * first → YES, the OTHER team first → NO. Held while OPEN (the guaranteed betting window),
+   * settled immediately once locked. FIRST decisive event wins — a later same-team threat
+   * must NOT flip a held "the other team went first" NO. Neither team by the deadline →
+   * VOID/refund (settleExpired), never NO. This is the SOLE resolver for which-side kinds
+   * (they're excluded from outcomeForTarget/marketMatchesEvent so nothing double-handles).
+   */
+  private resolveWhichSideMarkets(ev: FeedEvent): void {
+    if (!ev.team) return; // a decisive event must be attributable to a side
+    for (const t of [...this.tracked.values()]) {
+      const m = this.engine.get(t.marketId);
+      if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
+      if (!isWhichSideNextKind(m.kind)) continue;
+      if (!decisiveEventTypes(m.kind).has(ev.type)) continue;
+      // Open-boundary: the event that OPENED the contest can't be its own decider.
+      if (t.openSeq !== undefined && t.openSeq >= this.eventCounter) continue;
+      const outcome: Outcome = ev.team === t.team ? 'YES' : 'NO';
+      if (m.status === 'open') {
+        if (!t.pendingOutcome) t.pendingOutcome = { outcome }; // first decisive event wins
+      } else {
+        this.finalizeMarket(t, outcome);
       }
     }
   }
@@ -1442,14 +1478,10 @@ export class Orchestrator {
       return { outcome: 'YES' };
     }
 
-    // WHICH-SIDE-NEXT contest — the first DECISIVE event by EITHER team decides it:
-    // the market's team doing it first → YES, the other team first → NO (a scoped,
-    // audited event-NO, like var_penalty_denied below). Neither team by the deadline →
-    // VOID (settleExpired). A non-decisive event returns undefined (no opinion).
-    if (isWhichSideNextKind(m.kind)) {
-      if (!decisiveEventTypes(m.kind).has(ev.type) || !ev.team) return undefined;
-      return ev.team === target.team ? { outcome: 'YES' } : { outcome: 'NO' };
-    }
+    // WHICH-SIDE-NEXT contests are resolved by the dedicated resolveWhichSideMarkets pass
+    // (which runs for EVERY event, including corner/dangerous_attack that never reach here),
+    // never via this path — return no opinion so nothing double-handles them.
+    if (isWhichSideNextKind(m.kind)) return undefined;
 
     if (m.kind === 'penalty_awarded') {
       if (ev.type === 'penalty') return { outcome: 'YES' };
@@ -1551,9 +1583,9 @@ export class Orchestrator {
     if (m.kind === 'goal_in_window') return ev.type === 'goal';
     // OVER/UNDER count markets are settled by the bumpCountMarkets pass, never here.
     if (isCountKind(m.kind)) return false;
-    // WHICH-SIDE-NEXT: a decisive event by EITHER team targets this market (the resolver
-    // decides YES/NO by team), so match BEFORE the team-mismatch guards below.
-    if (isWhichSideNextKind(m.kind)) return decisiveEventTypes(m.kind).has(ev.type);
+    // WHICH-SIDE-NEXT contests are settled by the dedicated resolveWhichSideMarkets pass,
+    // never here — so they're never findMarketsFor targets (no double-handling).
+    if (isWhichSideNextKind(m.kind)) return false;
 
     if (t.team && ev.team && t.team !== ev.team) return false;
     if (ev.team && t.team !== ev.team) return false;
@@ -1816,6 +1848,14 @@ export class Orchestrator {
       this.rejectHeldBet(msg.marketId, { ...msg }, 'betting window closing');
       return;
     }
+    // LATENCY-ARB DEFENSE: a decisive outcome that landed during the open window is HELD
+    // (pendingOutcome) and applied at lock — but it is already PUBLIC. Reject any bet placed
+    // after it, so a user who saw the shot/threat/crossing can't bet the known winner. A bet
+    // placed BEFORE the decider was held normally and is still honored (it took the risk).
+    if (t.pendingOutcome) {
+      this.rejectHeldBet(msg.marketId, { ...msg }, 'result already decided');
+      return;
+    }
     if (t.pending.has(msg.userId)) return; // one held bet per user at a time
 
     if (this.config.betDelayMs <= 0) {
@@ -1884,6 +1924,12 @@ export class Orchestrator {
     const cutoff = bettingClosesAt(m.lockAt, m.windowMs);
     if (Date.now() >= cutoff) {
       this.rejectPointsHeldBet(msg.marketId, { ...msg }, 'betting window closing');
+      return;
+    }
+    // LATENCY-ARB DEFENSE (same as real money): reject a bet placed after a held decisive
+    // outcome — the result is already public, so it can't be bet on.
+    if (t.pendingOutcome) {
+      this.rejectPointsHeldBet(msg.marketId, { ...msg }, 'result already decided');
       return;
     }
     let pending = this.pointsHeld.get(msg.marketId);
