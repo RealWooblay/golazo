@@ -3,7 +3,6 @@ import { Linking, StyleSheet, View } from "react-native";
 import { Banner, Button, Pressable, Surface, Text } from "@/ui";
 import { colors, radius, spacing, type } from "@/theme";
 import { money, multiple } from "@/lib/format";
-import { SOL_PER_UNIT } from "@/features/chain/useDisplayBalance";
 import type { ChainBetVM } from "@/features/match/useChainBet";
 
 const openUrl = (url?: string) => {
@@ -50,7 +49,7 @@ function Receipt({
       <View style={styles.row}>
         <Text style={[styles.side, { color: tint }]}>{bet.side}</Text>
         <Text style={styles.stake}>
-          {money(bet.stakeSol / SOL_PER_UNIT)} @ est.{" "}
+          {money(bet.stakeUsd)} @ est.{" "}
           {multiple(bet.estimatedMultiple)}
         </Text>
       </View>

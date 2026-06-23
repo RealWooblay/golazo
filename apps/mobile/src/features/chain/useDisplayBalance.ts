@@ -45,10 +45,10 @@ export function useDisplayBalance(): DisplayBalance {
     };
   }
   // REAL balance only in live mode with a connected wallet. A DEMO game (offline
-  // mode, loaded from the Demo button) is always play money. Either way we render
-  // DOLLARS — the on-chain SOL balance is converted to $ via SOL_PER_UNIT.
+  // mode, loaded from the Demo button) is always play money. The on-chain balance
+  // is USX, shown directly as dollars (1 USX == $1).
   if (chain.ready && store.mode === "live") {
-    const dollars = chain.balanceSol / SOL_PER_UNIT;
+    const dollars = chain.balanceUsd;
     return {
       chain: true,
       points: false,

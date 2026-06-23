@@ -9,7 +9,6 @@ import { Linking, StyleSheet, View } from "react-native";
 import { Banner, Button, Pressable, Surface, Text } from "@/ui";
 import { colors, radius, spacing, type } from "@/theme";
 import { money, multiple } from "@/lib/format";
-import { SOL_PER_UNIT } from "@/features/chain/useDisplayBalance";
 import type { UseChain } from "@/features/chain/useChain";
 import type { UseChainBet } from "../useChainBet";
 
@@ -49,7 +48,7 @@ function Receipt({
       <View style={styles.row}>
         <Text style={[styles.side, { color: tint }]}>{b.side}</Text>
         <Text style={styles.stake}>
-          {money(b.stakeSol / SOL_PER_UNIT)} @ est. {multiple(b.estimatedMultiple)}
+          {money(b.stakeUsd)} @ est. {multiple(b.estimatedMultiple)}
         </Text>
       </View>
       <Text style={styles.q} numberOfLines={2}>

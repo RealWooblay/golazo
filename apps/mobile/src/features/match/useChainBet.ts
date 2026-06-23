@@ -12,15 +12,13 @@
 // on-chain pool, then the PROGRAM pays the final proportional pool share.
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MarketVM } from "@/state/types";
-import { LAMPORTS_PER_SOL } from "@/features/chain/config";
+import { baseUnitsFromUsd, usdFromBaseUnits } from "@/features/chain/config";
 import { holdBeforeChainBet } from "@/features/chain/betHold";
 import type { UseChain } from "@/features/chain/useChain";
 import type { OnChainSide } from "@/features/chain/types";
 import { useStore } from "@/state/store";
 
-/** Demo conversion: one stake "unit" (the $10/$25/… chips) → this much SOL. */
-const SOL_PER_UNIT = 0.01;
-/** Keep a little SOL back for tx fees when checking affordability. */
+/** Keep a little SOL back to pay tx fees (USX is the stake; SOL only pays fees). */
 const FEE_HEADROOM_SOL = 0.01;
 /** Poll until the operator's initialize_market tx lands on devnet. */
 const CHAIN_TWIN_POLL_MS = 1500;
@@ -42,7 +40,8 @@ export interface ChainBetVM {
   offChainMarketId: string;
   question: string;
   side: "YES" | "NO";
-  stakeSol: number;
+  /** Stake in display dollars (USX). */
+  stakeUsd: number;
   estimatedMultiple: number;
   betSignature: string;
   betUrl: string;
@@ -60,7 +59,8 @@ export interface ChainOdds {
   oddsYes: number;
   oddsNo: number;
   yesShare: number; // 0-100 for the split bar
-  poolSol: number;
+  /** Total pool in display dollars (USX). */
+  poolUsd: number;
 }
 
 export interface UseChainBet {
@@ -161,15 +161,13 @@ export function useChainBet(
         if (cancelled || !m) return;
         const py = Number(m.poolYesLamports);
         const pn = Number(m.poolNoLamports);
-        const grossLamports = py + pn;
-        const stakeLamports = Math.round(
-          stake * SOL_PER_UNIT * LAMPORTS_PER_SOL,
-        );
+        const gross = py + pn;
+        const stakeBaseUnits = baseUnitsFromUsd(stake);
         setLiveOdds({
-          oddsYes: chain.quoteBet(m, "Yes", stakeLamports).estimatedMultiple,
-          oddsNo: chain.quoteBet(m, "No", stakeLamports).estimatedMultiple,
-          yesShare: grossLamports > 0 ? (100 * py) / grossLamports : 50,
-          poolSol: grossLamports / LAMPORTS_PER_SOL,
+          oddsYes: chain.quoteBet(m, "Yes", stakeBaseUnits).estimatedMultiple,
+          oddsNo: chain.quoteBet(m, "No", stakeBaseUnits).estimatedMultiple,
+          yesShare: gross > 0 ? (100 * py) / gross : 50,
+          poolUsd: usdFromBaseUnits(gross),
         });
       } catch {
         /* transient RPC blip — keep last odds */
@@ -227,11 +225,14 @@ export function useChainBet(
       const onChain = market?.onChain;
       if (!onChain || !chain.ready || placing) return;
       const { authority, marketSeed } = onChain;
-      const stakeSol = stakeUnits * SOL_PER_UNIT;
-      const stakeLamports = Math.round(stakeSol * LAMPORTS_PER_SOL);
+      const stakeBaseUnits = baseUnitsFromUsd(stakeUnits);
 
-      if (chain.balanceSol < stakeSol + FEE_HEADROOM_SOL) {
-        setError(`Low balance — fund your wallet in the Wallet tab.`);
+      if (chain.balanceUsd < stakeUnits) {
+        setError(`Low USX balance — fund your wallet in the Wallet tab.`);
+        return;
+      }
+      if (chain.balanceSol < FEE_HEADROOM_SOL) {
+        setError(`Low SOL for fees — add a little SOL in the Wallet tab.`);
         return;
       }
 
@@ -268,12 +269,12 @@ export function useChainBet(
         }
 
         const onChainSide: OnChainSide = side === "YES" ? "Yes" : "No";
-        const quote = chain.quoteBet(m, onChainSide, stakeLamports);
+        const quote = chain.quoteBet(m, onChainSide, stakeBaseUnits);
         const res = await chain.placeBetOnChain({
           authority,
           marketSeed,
           side: onChainSide,
-          stakeLamports,
+          stakeLamports: stakeBaseUnits,
         });
         setError(null);
         setBet({
@@ -282,7 +283,7 @@ export function useChainBet(
           offChainMarketId: market.id,
           question: market.question,
           side,
-          stakeSol,
+          stakeUsd: stakeUnits,
           estimatedMultiple: quote.estimatedMultiple,
           betSignature: res.signature,
           betUrl: res.explorerUrl,

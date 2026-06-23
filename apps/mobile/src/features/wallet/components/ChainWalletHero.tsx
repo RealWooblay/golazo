@@ -10,11 +10,11 @@ import { StyleSheet, View } from "react-native";
 import { Button, Pressable, Surface, Text } from "@/ui";
 import { colors, radius, spacing, type } from "@/theme";
 import { money } from "@/lib/format";
-import { SOL_PER_UNIT } from "@/features/chain/useDisplayBalance";
 import { copyToClipboard } from "../platform";
 
 export function ChainWalletHero({
   address,
+  balanceUsd,
   balanceSol,
   airdropEnabled,
   onFund,
@@ -24,6 +24,9 @@ export function ChainWalletHero({
   fundWaitSec = 0,
 }: {
   address?: string;
+  /** USX balance (the bettable balance), shown as the headline dollars. */
+  balanceUsd: number;
+  /** Native SOL — only pays tx fees. */
   balanceSol: number;
   airdropEnabled: boolean;
   onFund: () => void;
@@ -45,7 +48,10 @@ export function ChainWalletHero({
   return (
     <Surface radius={radius.xl} style={styles.card}>
       <Text style={styles.balance} allowFontScaling={false}>
-        {money(balanceSol / SOL_PER_UNIT)}
+        {money(balanceUsd)}
+      </Text>
+      <Text style={styles.hint}>
+        {balanceSol.toFixed(3)} SOL for fees
       </Text>
 
       {/* Deposit address = the real on-ramp: send SOL here to fund. Shown IN
@@ -60,7 +66,9 @@ export function ChainWalletHero({
         </View>
         <Text style={styles.copy}>{copied ? "copied ✓" : "copy"}</Text>
       </Pressable>
-      <Text style={styles.hint}>Send SOL to this address to fund your wallet.</Text>
+      <Text style={styles.hint}>
+        Send USX here to bet; keep a little SOL for fees.
+      </Text>
 
       <View style={styles.actions}>
         {airdropEnabled ? (

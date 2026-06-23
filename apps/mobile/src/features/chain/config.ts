@@ -67,6 +67,31 @@ export const LAMPORTS_PER_SOL = 1_000_000_000;
 export const DEFAULT_FEE_RECIPIENT =
   "5kBBKSV2EUyLsa2sXoK9E1VVzmDXCaHnQiMfz8B8yJtP";
 
+// ── USX settlement asset ───────────────────────────────────────────────────────
+// The program settles in USX (SPL classic), NOT native SOL. Every on-chain amount
+// (stake / pool / payout / balance) is in USX *base units*. SOL is only used to
+// pay transaction fees from the embedded wallet.
+
+/** The USX mint (matches `USX_MINT` in the program). Override: EXPO_PUBLIC_USX_MINT. */
+export const DEFAULT_USX_MINT = "6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG";
+
+/** USX has 6 decimals, so $1 = 1 USX = 1e6 base units. */
+export const USX_DECIMALS = 6;
+export const USX_BASE_UNITS_PER_DOLLAR = 1_000_000;
+
+/** SPL Token + Associated Token program ids (constant across clusters). */
+export const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+export const ASSOCIATED_TOKEN_PROGRAM_ID =
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL";
+
+/** Stake-chip dollars → USX base units (the unit the program speaks). */
+export const baseUnitsFromUsd = (usd: number): number =>
+  Math.round(usd * USX_BASE_UNITS_PER_DOLLAR);
+
+/** USX base units → display dollars (1 USX == $1). */
+export const usdFromBaseUnits = (baseUnits: bigint | number): number =>
+  Number(baseUnits) / USX_BASE_UNITS_PER_DOLLAR;
+
 /** Canonical PDA seed prefixes — MUST match `instructions::seeds` in the program. */
 export const SEEDS = {
   MARKET: "market",
@@ -122,6 +147,8 @@ export interface ChainConfig {
   readonly cluster: Cluster;
   readonly rpcUrl: string;
   readonly programId: string;
+  /** USX mint the program settles in (base58). */
+  readonly usxMint: string;
   /** Treasury wallet the rake/fees are swept to. */
   readonly feeRecipient: string;
   /** Devnet airdrops are allowed; mainnet never. Used to gate the faucet button. */
@@ -137,6 +164,7 @@ export function resolveChainConfig(): ChainConfig {
   const rpcUrl = readEnv("SOLANA_RPC_URL") ?? CLUSTER_RPC[cluster];
   const enabled = readEnabled();
   const programId = readEnv("GOLAZO_PROGRAM_ID") ?? DEPLOYED_PROGRAM_ID;
+  const usxMint = readEnv("USX_MINT") ?? DEFAULT_USX_MINT;
   const feeRecipient = readEnv("FEE_RECIPIENT") ?? DEFAULT_FEE_RECIPIENT;
   const airdropEnabled =
     cluster === "devnet" || cluster === "testnet" || cluster === "localnet";
@@ -164,6 +192,7 @@ export function resolveChainConfig(): ChainConfig {
     cluster,
     rpcUrl,
     programId,
+    usxMint,
     feeRecipient,
     airdropEnabled,
   };

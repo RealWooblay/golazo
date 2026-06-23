@@ -75,8 +75,12 @@ export interface TxResult {
 /** Snapshot of the embedded wallet for UI. Never exposes the secret key. */
 export interface WalletInfo {
   address: string;
+  /** Native SOL — only for tx fees. */
   balanceSol: number;
   balanceLamports: bigint;
+  /** USX (the bettable/displayed balance): base units + display dollars. */
+  balanceUsxBaseUnits: bigint;
+  balanceUsd: number;
 }
 
 /** Indicative preview of a bet, computed via the bps mirror. */

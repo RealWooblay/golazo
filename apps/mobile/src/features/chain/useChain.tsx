@@ -85,8 +85,13 @@ export interface UseChain {
 
   /** Embedded wallet pubkey (base58) once connected — the deposit address. */
   address?: string;
+  /** Native SOL balance — only used to pay transaction fees. */
   balanceSol: number;
   balanceLamports: bigint;
+  /** USX balance (base units) — the bettable balance. */
+  balanceUsxBaseUnits: bigint;
+  /** USX balance as display dollars (1 USX == $1). */
+  balanceUsd: number;
   cluster: typeof chainConfig.cluster;
   /** Devnet faucet allowed? (gates the airdrop button.) */
   airdropEnabled: boolean;
@@ -196,6 +201,9 @@ export function ChainProvider({
   const [address, setAddress] = useState<string | undefined>(undefined);
   const [balanceLamports, setBalanceLamports] = useState<bigint>(0n);
   const [balanceSol, setBalanceSol] = useState<number>(0);
+  // USX is the bettable/displayed balance; SOL above is only for tx fees.
+  const [balanceUsxBaseUnits, setBalanceUsxBaseUnits] = useState<bigint>(0n);
+  const [balanceUsd, setBalanceUsd] = useState<number>(0);
 
   // Heavy modules + the live context live in refs (never re-render on identity).
   const ctxRef = useRef<ChainContext | null>(null);
@@ -213,14 +221,20 @@ export function ChainProvider({
   const refreshBalance = useCallback(async (): Promise<WalletInfo | null> => {
     if (!ctxRef.current || !clientRef.current) return null;
     try {
-      const { balanceLamports: lam, balanceSol: sol } =
-        await clientRef.current.fetchBalance(ctxRef.current);
-      setBalanceLamports(lam);
-      setBalanceSol(sol);
+      const [sol, usx] = await Promise.all([
+        clientRef.current.fetchBalance(ctxRef.current),
+        clientRef.current.fetchUsxBalance(ctxRef.current),
+      ]);
+      setBalanceLamports(sol.balanceLamports);
+      setBalanceSol(sol.balanceSol);
+      setBalanceUsxBaseUnits(usx.balanceBaseUnits);
+      setBalanceUsd(usx.balanceUsd);
       return {
         address: ctxRef.current.wallet.address,
-        balanceLamports: lam,
-        balanceSol: sol,
+        balanceLamports: sol.balanceLamports,
+        balanceSol: sol.balanceSol,
+        balanceUsxBaseUnits: usx.balanceBaseUnits,
+        balanceUsd: usx.balanceUsd,
       };
     } catch {
       return null; // best-effort; play money
@@ -414,6 +428,8 @@ export function ChainProvider({
       address,
       balanceSol,
       balanceLamports,
+      balanceUsxBaseUnits,
+      balanceUsd,
       cluster: chainConfig.cluster,
       airdropEnabled: chainConfig.airdropEnabled,
 
@@ -498,6 +514,8 @@ export function ChainProvider({
     address,
     balanceSol,
     balanceLamports,
+    balanceUsxBaseUnits,
+    balanceUsd,
     connect,
     disconnect,
     refreshBalance,
@@ -531,6 +549,8 @@ const INERT_CHAIN: UseChain = {
   address: undefined,
   balanceSol: 0,
   balanceLamports: 0n,
+  balanceUsxBaseUnits: 0n,
+  balanceUsd: 0,
   cluster: chainConfig.cluster,
   airdropEnabled: chainConfig.airdropEnabled,
   connect: async () => false,

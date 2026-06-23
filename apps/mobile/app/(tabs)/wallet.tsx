@@ -62,6 +62,7 @@ export default function WalletTab() {
       {realWallet ? (
         <ChainWalletHero
           address={chain.address}
+          balanceUsd={chain.balanceUsd}
           balanceSol={chain.balanceSol}
           airdropEnabled={faucetEnabled}
           onFund={fund}

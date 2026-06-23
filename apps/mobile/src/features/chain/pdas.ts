@@ -15,7 +15,10 @@
  */
 
 import { PublicKey } from "@solana/web3.js";
-import { SEEDS } from "./config";
+import { SEEDS, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "./config";
+
+const TOKEN_PROGRAM = new PublicKey(TOKEN_PROGRAM_ID);
+const ASSOCIATED_TOKEN_PROGRAM = new PublicKey(ASSOCIATED_TOKEN_PROGRAM_ID);
 
 /** market_seed (u64) → 8-byte little-endian buffer, matching `to_le_bytes()`. */
 function u64ToLeBytes(value: bigint | number): Uint8Array {
@@ -52,6 +55,18 @@ export function deriveVaultPda(
     [enc(SEEDS.VAULT), market.toBuffer()],
     programId,
   );
+}
+
+/**
+ * Derive the associated token account (ATA) address for (owner, mint).
+ * ATA = findPDA([owner, TOKEN_PROGRAM, mint], ASSOCIATED_TOKEN_PROGRAM). This is
+ * where a wallet holds its USX; the program reads/writes these on bet/claim.
+ */
+export function deriveAta(owner: PublicKey, mint: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [owner.toBuffer(), TOKEN_PROGRAM.toBuffer(), mint.toBuffer()],
+    ASSOCIATED_TOKEN_PROGRAM,
+  )[0];
 }
 
 /** Derive the per-(market, bettor) bet PDA. */
