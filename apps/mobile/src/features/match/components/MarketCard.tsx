@@ -75,6 +75,17 @@ export function MarketCard({
     return sidePool > 0 ? (nextGross * (1 - RAKE)) / sidePool : 1;
   };
 
+  // LIVE multiple for a placed bet — recomputed from the CURRENT pool every render, so
+  // the user WATCHES their payout settle as others pile in (parimutuel drifts), instead
+  // of being shown a frozen bet-time number that no longer matches what they'll receive.
+  const liveMult =
+    betPlaced && pending
+      ? (() => {
+          const sidePool = pending.side === "YES" ? yesPool : noPool;
+          return sidePool > 0 ? (market.pool * (1 - RAKE)) / sidePool : pending.estimatedMult;
+        })()
+      : 0;
+
   return (
     <Surface
       radius={radius.lg}
@@ -100,7 +111,7 @@ export function MarketCard({
         </Text>
 
         {betPlaced ? (
-          <BetConfirmation pending={pending!} format={formatStake} />
+          <BetConfirmation pending={pending!} mult={liveMult} format={formatStake} />
         ) : (
           <View style={styles.btns}>
             <BetButton
@@ -128,9 +139,12 @@ export function MarketCard({
 
 function BetConfirmation({
   pending,
+  mult,
   format = money,
 }: {
   pending: PendingBet;
+  /** LIVE multiple from the current pool (drifts until lock); falls back to bet-time est. */
+  mult: number;
   format?: (n: number) => string;
 }) {
   const isYes = pending.side === "YES";
@@ -149,7 +163,7 @@ function BetConfirmation({
     >
       <View style={[styles.lockedDot, { backgroundColor: tint }]} />
       <Text style={[styles.lockedText, { color: tint }]}>
-        Bet {pending.side} · est. {multiple(pending.estimatedMult)}
+        {pending.side} · {multiple(mult > 0 ? mult : pending.estimatedMult)}
       </Text>
       <Text style={styles.lockedStake}>{format(pending.stake)} in</Text>
     </Animated.View>

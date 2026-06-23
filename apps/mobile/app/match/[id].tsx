@@ -14,7 +14,8 @@ import { colors, spacing, type } from "@/theme";
 import { AnimatedNumber, Banner, Chip, Confetti, Screen, Text, Toast } from "@/ui";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useStore } from "@/state/store";
-import { bettingClosesAt, bettingSafetyBufferMs } from "@/lib/config";
+import { bettingClosesAt, bettingSafetyBufferMs, RAKE } from "@/lib/config";
+import { multiple } from "@/lib/format";
 import { useTick } from "@/hooks";
 import { useGameFeed } from "@/features/match/useGameFeed";
 import { useChain } from "@/features/chain/useChain";
@@ -356,11 +357,21 @@ export default function MatchScreen() {
             {lockedMarkets.map((m) => {
               const chainBet = chainBets.getBet(m.id);
               const pendingBet = pendingByMarket[m.id];
-              const betLabel = chainBet
-                ? `You: ${chainBet.side} · ${stakeFormat(chainBet.stakeSol / SOL_PER_UNIT)}`
+              const betSide = chainBet?.side ?? pendingBet?.side;
+              const betStakeStr = chainBet
+                ? stakeFormat(chainBet.stakeSol / SOL_PER_UNIT)
                 : pendingBet
-                  ? `You: ${pendingBet.side} · ${stakeFormat(pendingBet.stake)}`
+                  ? stakeFormat(pendingBet.stake)
                   : undefined;
+              // Final (locked) multiple from the settled pool — show what you'll actually
+              // receive if your side wins, so the locked card matches the payout.
+              let betLabel: string | undefined;
+              if (betSide && betStakeStr) {
+                const yesPool = m.pool * (m.yesShare / 100);
+                const sidePool = betSide === "YES" ? yesPool : m.pool - yesPool;
+                const mult = sidePool > 0 ? (m.pool * (1 - RAKE)) / sidePool : 0;
+                betLabel = `You: ${betSide} · ${betStakeStr}${mult > 0 ? ` → ${multiple(mult)}` : ""}`;
+              }
               return (
                 <View key={m.id} style={styles.gutter}>
                   <LockedStrip market={m} now={now} betLabel={betLabel} />
