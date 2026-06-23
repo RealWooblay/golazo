@@ -24,10 +24,7 @@ import {
 import type { FlowStatusKind } from "@/features/wallet";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useChain } from "@/features/chain";
-import {
-  useDisplayBalance,
-  SOL_PER_UNIT,
-} from "@/features/chain/useDisplayBalance";
+import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
 import { money } from "@/lib/format";
 
 /** A plausible base58 Solana address: 32–44 chars, no 0/O/I/l (base58 charset). */
@@ -37,11 +34,12 @@ function isPlausibleSolanaAddress(addr: string): boolean {
 }
 
 /**
- * Reserve a little SOL for the network fee so a "Max" cash-out can't request the user's
- * ENTIRE balance and revert (a System transfer pays the ~5000-lamport fee on TOP of the
- * sent amount, so draining to zero always fails). Intentionally generous vs the real fee.
+ * Cashing out sends USX; the network fee (and any one-time recipient-account
+ * rent) is paid in SOL from the embedded wallet, SEPARATELY from the USX amount.
+ * So the full USX balance is withdrawable — we just require a little SOL on hand
+ * to cover the fee + a possible ~0.002 SOL ATA-creation for a first-time recipient.
  */
-const WITHDRAW_FEE_HEADROOM_SOL = 0.002;
+const WITHDRAW_FEE_HEADROOM_SOL = 0.003;
 
 /** Local flow snapshot for the LIVE on-chain send (the sandbox path uses
  *  useWallet().flow; this drives the same <FlowStatus> for the real transfer). */
@@ -106,8 +104,9 @@ export default function WithdrawModal() {
     router.back();
   };
 
-  // REAL on-chain transfer: $ amount → SOL via SOL_PER_UNIT, send out of the
-  // embedded wallet, then drive pending → success/error and surface a tx link.
+  // REAL on-chain cash-out: send `numeric` dollars of USX out of the embedded
+  // wallet, then drive pending → success/error and surface a tx link. The SOL fee
+  // is paid separately from the USX, so the full USX balance is withdrawable.
   const submitLive = async () => {
     if (!isPlausibleSolanaAddress(cryptoAddr)) {
       // Belt-and-suspenders: the button is already gated, but never send to a
@@ -116,7 +115,7 @@ export default function WithdrawModal() {
       return;
     }
     // The wallet can race-disconnect between the button gate and the tap; surface a
-    // clean message rather than letting withdrawSol's requireCtx throw raw.
+    // clean message rather than letting withdrawUsx's requireCtx throw raw.
     if (!chain.ready) {
       setLiveFlow({
         status: "error",
@@ -126,25 +125,31 @@ export default function WithdrawModal() {
       hapticIf(hapticsOn, "error");
       return;
     }
-    // Cap the amount so the network fee is always covered. Cap in DISPLAY units first,
-    // then convert to SOL, and reflect the ACTUAL sent amount everywhere (pending +
-    // success) so a "Max" cash-out never silently sends less than the UI claims.
-    const headroomUnits = WITHDRAW_FEE_HEADROOM_SOL / SOL_PER_UNIT;
-    const sendUnits = Math.min(numeric, Math.max(0, balance - headroomUnits));
-    if (sendUnits <= 0) {
+    // The USX amount isn't reduced for fees — fees are SOL — but the wallet must
+    // hold a little SOL to pay the network fee (+ a first-time recipient ATA).
+    if (chain.balanceSol < WITHDRAW_FEE_HEADROOM_SOL) {
       setLiveFlow({
         status: "error",
         amount: numeric,
-        message: "Not enough to cover the network fee — leave a little for gas.",
+        message: "Add a little SOL to your wallet to cover the network fee.",
       });
       hapticIf(hapticsOn, "error");
       return;
     }
-    const sol = sendUnits * SOL_PER_UNIT;
+    const sendUnits = Math.min(numeric, balance);
+    if (sendUnits <= 0) {
+      setLiveFlow({
+        status: "error",
+        amount: numeric,
+        message: "Enter an amount up to your balance.",
+      });
+      hapticIf(hapticsOn, "error");
+      return;
+    }
     setLiveFlow({ status: "pending", amount: sendUnits });
     hapticIf(hapticsOn, "select");
     try {
-      const res = await chain.withdrawSol(cryptoAddr, sol);
+      const res = await chain.withdrawUsx(cryptoAddr, sendUnits);
       // Prefer the signature's explorer URL from the TxResult; fall back to the
       // destination address page on explorer.
       const txUrl = res?.explorerUrl || chain.explorerAddressUrl(cryptoAddr);

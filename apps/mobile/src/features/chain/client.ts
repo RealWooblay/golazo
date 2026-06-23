@@ -38,6 +38,7 @@ import {
 import {
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID,
+  baseUnitsFromUsd,
   usdFromBaseUnits,
 } from "./config";
 import { deriveAta, deriveBetPda, deriveMarketPda, deriveVaultPda } from "./pdas";
@@ -357,7 +358,44 @@ export async function requestAirdrop(
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Withdraw SOL from the embedded wallet to an external address (cash out). */
+/**
+ * Withdraw USX (cash out) from the embedded wallet to an external address. Sends
+ * `usd` dollars of USX to the destination's USX account, creating that account
+ * (CreateIdempotent, paid by us) if it doesn't exist yet. The SOL tx fee + any
+ * recipient-account rent come from the embedded wallet's SOL.
+ */
+export async function withdrawUsx(
+  ctx: ChainContext,
+  toAddress: string,
+  usd: number,
+): Promise<TxResult> {
+  let destination: PublicKey;
+  try {
+    destination = new PublicKey(toAddress);
+  } catch {
+    throw new Error("That doesn't look like a valid Solana address.");
+  }
+  const mint = usxMint(ctx);
+  const amount = baseUnitsFromUsd(usd);
+  const fromAta = deriveAta(ctx.wallet.publicKey, mint);
+  const toAta = deriveAta(destination, mint);
+  // SPL Token `Transfer` (instruction 3): [source(w), dest(w), authority(s)].
+  const transferIx = new TransactionInstruction({
+    programId: TOKEN_PROGRAM,
+    keys: [
+      meta(fromAta, false, true),
+      meta(toAta, false, true),
+      meta(ctx.wallet.publicKey, true, false),
+    ],
+    data: Buffer.concat([Buffer.from([3]), u64le(amount)]),
+  });
+  return sendIxs(ctx, [
+    createAtaIdempotentIx(ctx.wallet.publicKey, destination, mint),
+    transferIx,
+  ]);
+}
+
+/** Withdraw SOL from the embedded wallet to an external address (advanced). */
 export async function withdrawSol(
   ctx: ChainContext,
   toAddress: string,

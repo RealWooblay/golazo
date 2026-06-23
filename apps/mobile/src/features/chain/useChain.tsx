@@ -107,7 +107,9 @@ export interface UseChain {
   // money
   /** Devnet airdrop into the embedded wallet (the simplest deposit). */
   airdrop: (sol: number) => Promise<TxResult>;
-  /** Send SOL out of the embedded wallet to an external address (cash out). */
+  /** Cash out: send USX out of the embedded wallet to an external address. */
+  withdrawUsx: (toAddress: string, usd: number) => Promise<TxResult>;
+  /** Send SOL out of the embedded wallet to an external address (advanced). */
   withdrawSol: (toAddress: string, sol: number) => Promise<TxResult>;
 
   // betting
@@ -443,6 +445,12 @@ export function ChainProvider({
         await refreshBalance();
         return res;
       },
+      withdrawUsx: async (toAddress: string, usd: number) => {
+        const { ctx, client } = requireCtx();
+        const res = await client.withdrawUsx(ctx, toAddress, usd);
+        await refreshBalance();
+        return res;
+      },
       withdrawSol: async (toAddress: string, sol: number) => {
         const { ctx, client } = requireCtx();
         const res = await client.withdrawSol(ctx, toAddress, sol);
@@ -557,6 +565,7 @@ const INERT_CHAIN: UseChain = {
   disconnect: () => {},
   refreshBalance: async () => null,
   airdrop: NOT_READY,
+  withdrawUsx: NOT_READY,
   withdrawSol: NOT_READY,
   placeBetOnChain: NOT_READY,
   claim: NOT_READY,
