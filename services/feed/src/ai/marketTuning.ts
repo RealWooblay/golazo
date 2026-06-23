@@ -536,6 +536,25 @@ export function parseGameContext(game: GameState): GameContext {
 }
 
 /**
+ * THE HT/FT BOUNDARY GUARD (deterministic — works with or without the AI director).
+ * True when the half is in STOPPAGE time, where the whistle is imminent and
+ * unpredictable. A short play-dependent market opened now ("a shot this spell?", "who
+ * threatens next?", "2+ corners in the next 4 min?") would just be cut off by the whistle
+ * → an unfair VOID/NO. Near the whistle the market that makes sense is "a goal before the
+ * half?" (goal_in_stoppage), which the period logic opens — so we SUPPRESS new short
+ * play/window/count/versus opens here. This is exactly the user's example: don't open a
+ * "shot in 10s" market as the half dies, alongside the added-time goal market.
+ *
+ * Regulation play is NOT guarded — it continues into stoppage, so a 90s window opened at
+ * 44' is fine. Only the stoppage zone itself (where the whistle can land any moment) is
+ * guarded. Extra time is left to the ET period markets.
+ */
+export function inWhistleZone(game: GameState): boolean {
+  const ctx = parseGameContext(game);
+  return ctx.isStoppage && (ctx.period === '1H' || ctx.period === '2H');
+}
+
+/**
  * Stretch a betting window when the moment matters more — the dying minutes of a
  * tight game, stoppage time, extra time. Gives bettors a beat longer to get in
  * on the markets that count, exactly when the action spikes.

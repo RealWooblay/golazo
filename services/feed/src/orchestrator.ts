@@ -68,6 +68,7 @@ import {
   isCountKind,
   isWhichSideNextKind,
   decisiveEventTypes,
+  inWhistleZone,
 } from './ai/marketTuning';
 import {
   isGoalQuestionKind,
@@ -500,8 +501,13 @@ export class Orchestrator {
         this.lastCountSlotOpenAt = Date.now();
         this.lastVersusOpenAt = Date.now();
       }
-      await this.maybeOpenEventSlotMarket(game);
-      await this.maybeOpenCountSlotMarket(game);
+      // HT/FT BOUNDARY GUARD: don't open new booking/goal-window/over-under markets in
+      // stoppage — the whistle would cut their window short. The stoppage period market
+      // ("goal before the half?") is the right one for that moment.
+      if (!inWhistleZone(game)) {
+        await this.maybeOpenEventSlotMarket(game);
+        await this.maybeOpenCountSlotMarket(game);
+      }
     }
 
     const ordered = sortFeedEvents(events);
@@ -607,14 +613,18 @@ export class Orchestrator {
     // BUILD-UP path — only non-resolver events reach here (resolvers returned above).
     // Momentum (WINDOW) + a PLAYER market for the hottest in-form player open in
     // PARALLEL lanes, off flowing play — so they PAUSE during a hydration/cooling break.
-    if (!this.breakPaused) {
+    // HT/FT BOUNDARY GUARD: in stoppage time the whistle is imminent, so a short
+    // play-dependent market opened now would be cut off → suppress momentum/player/versus
+    // opens and let the "goal before the half?" period market carry that moment.
+    const liveGame = this.feed.state();
+    if (!this.breakPaused && !inWhistleZone(liveGame)) {
       await this.maybeOpenMomentumMarket(this.momentum.read());
       await this.maybeOpenPlayerMarket();
       // WHICH-SIDE-NEXT contest — opened EVENT-DRIVEN off a build-up attacking move, so a
       // decisive event (the next threat) is demonstrably imminent and the contest resolves
       // YES/NO rather than voiding into a quiet spell. Its own slot/interval/pressure gates
       // pace it; the opening event can't resolve it (open-boundary guard).
-      await this.maybeOpenVersusMarket(this.feed.state());
+      await this.maybeOpenVersusMarket(liveGame);
     }
     // Set-piece / VAR markets are event-driven (a free kick, a VAR review — which is
     // itself often the cause of a delay), so they open even during a break; the
