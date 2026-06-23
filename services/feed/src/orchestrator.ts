@@ -1485,8 +1485,16 @@ export class Orchestrator {
       }
 
       // Teamless "a goal in the next few minutes? (either team)" rescue: a goal by EITHER team
-      // recorded at/after open settles YES (the team-based rescue above can't fire for it).
-      if (m.kind === 'goal_in_window' && !t.team && this.anyTeamGoalAfterOpen(t)) {
+      // recorded at/after open settles YES (the team-based rescue above can't fire for it). MUST
+      // be taint-gated by rescueGoalIsClean exactly like the team-based rescue — else a goal that
+      // happened DURING betting (which the immediate path correctly skipped) would arb back in
+      // here at the deadline with no taint check.
+      if (
+        m.kind === 'goal_in_window' &&
+        !t.team &&
+        this.anyTeamGoalAfterOpen(t) &&
+        this.rescueGoalIsClean(t, m)
+      ) {
         console.log(`[golazo/feed] market_deadline_late_goal id=${m.id} kind=${m.kind} team=either`);
         this.finalizeMarket(t, 'YES');
         continue;

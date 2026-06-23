@@ -114,9 +114,13 @@ describe('anti-arb: a resolver that happened DURING betting is ignored', () => {
     const betClose = bettingClosesAt(m.lockAt, m.windowMs);
     feed.push([goalAt('home', betClose - 6_000)]);
     await orch.simTick();
+    // Run PAST the deadline too: the (teamless) late-goal rescue must ALSO refuse to settle YES
+    // on a during-betting goal — it's taint-gated just like the immediate path.
+    await vi.advanceTimersByTimeAsync(400_000);
+    await orch.simTick();
 
     const after = orch.simMarkets().find((x) => x.id === m.id)!;
-    // The tainted goal is ignored: the market is NOT settled YES (still open/locked, or later NO).
+    // The tainted goal is ignored on BOTH paths: the market settles NO, never YES.
     expect(after.settlement?.outcome).not.toBe('YES');
     await orch.stop();
   });
