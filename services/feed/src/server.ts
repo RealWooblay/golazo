@@ -41,6 +41,8 @@ import type { MetricsSnapshot } from './observability/metrics';
 export interface OpsSnapshot {
   feedKind: string;
   watcher: string;
+  /** AI market-director state: 'off' | 'ai-direct(idle)' | 'ai-direct(N queued)'. */
+  director?: string;
   metrics: MetricsSnapshot;
   audit: readonly AuditEntry[];
   playPhase: string;
@@ -521,6 +523,7 @@ export class FeedServer {
           clients: this.clients.size,
           feed: ops?.feedKind ?? 'unknown',
           watcher: ops?.watcher ?? 'unknown',
+          director: ops?.director ?? 'off',
           playPhase: ops?.playPhase ?? 'unknown',
           lastPollAgeMs: ops?.metrics.lastPollAgeMs ?? null,
           marketsOpen: this.deps.engine.list().filter((m) => m.status === 'open').length,
