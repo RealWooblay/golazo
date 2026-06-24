@@ -34,10 +34,11 @@ const TABS: Record<
   string,
   { label: string; Icon: React.ComponentType<IconProps>; tint: string }
 > = {
+  // Single accent across the bar — the active tab lights green; no per-tab colour circus.
   index: { label: "Play", Icon: IconPlay, tint: colors.yes },
-  rank: { label: "Rank", Icon: IconRank, tint: colors.gold },
-  wallet: { label: "Wallet", Icon: IconWallet, tint: colors.cyan },
-  profile: { label: "Profile", Icon: IconProfile, tint: colors.gold },
+  rank: { label: "Rank", Icon: IconRank, tint: colors.yes },
+  wallet: { label: "Wallet", Icon: IconWallet, tint: colors.yes },
+  profile: { label: "Profile", Icon: IconProfile, tint: colors.yes },
 };
 
 export function TabBar({ state, navigation }: BottomTabBarProps) {
@@ -115,11 +116,7 @@ function TabItem({
     <Pressable onPress={onPress} haptic="tap" scaleTo={0.9} style={styles.item}>
       <View style={styles.iconWrap}>
         <Animated.View
-          style={[
-            styles.glowPill,
-            { backgroundColor: tint, shadowColor: tint },
-            pillStyle,
-          ]}
+          style={[styles.selPill, { backgroundColor: colors.alpha.yes }, pillStyle]}
           pointerEvents="none"
         />
         <Icon
@@ -173,14 +170,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  glowPill: {
+  selPill: {
     position: "absolute",
-    width: 40,
-    height: 26,
-    borderRadius: 13,
-    opacity: 0.16,
-    shadowOpacity: 0.5,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 0 },
+    width: 44,
+    height: 28,
+    borderRadius: 10,
   },
 });

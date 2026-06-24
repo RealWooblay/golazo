@@ -7,7 +7,6 @@ import {
   type ViewStyle,
 } from "react-native";
 import { colors, fontFamily } from "@/theme";
-import { GradientFill } from "../_shared/primitives";
 import type { FixtureTeam } from "./fixtures";
 
 /**
@@ -53,8 +52,10 @@ export function Crest({
     );
   }
 
-  // Club / no flag → gradient tile with the abbreviation.
+  // Club / no flag → a FLAT tile with the abbreviation (no gradient, no gloss). A thin
+  // accent in the team's primary colour keeps a hint of identity without the silver sheen.
   const fontSize = size <= 32 ? 11 : size <= 44 ? 13 : 15;
+  const accent = team.colors?.[0] ?? colors.textSecondary;
   return (
     <View
       style={[
@@ -63,14 +64,8 @@ export function Crest({
         style,
       ]}
     >
-      <GradientFill
-        colors={team.colors}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-      />
-      <View style={styles.sheen} pointerEvents="none" />
       <Text
-        style={[styles.abbr, { fontSize }]}
+        style={[styles.abbr, { fontSize, color: accent }]}
         numberOfLines={1}
         allowFontScaling={false}
       >
@@ -94,24 +89,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
+    backgroundColor: colors.surface2,
     borderWidth: 1,
-    borderColor: colors.alpha.white10,
-  },
-  sheen: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    height: "45%",
-    backgroundColor: "rgba(255,255,255,0.14)",
+    borderColor: colors.hairline,
   },
   abbr: {
     fontFamily: fontFamily.display,
-    fontWeight: "900",
-    color: "#0a0b0f",
+    fontWeight: "800",
     letterSpacing: 0.4,
-    textShadowColor: "rgba(255,255,255,0.35)",
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 1,
   },
 });

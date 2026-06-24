@@ -1,19 +1,16 @@
 import React from "react";
 import { StyleSheet, View } from "react-native";
-import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 import { colors, radius, shadows, type } from "@/theme";
 import { Pressable, AnimatedNumber, Text } from "@/ui";
 import { multiple } from "@/lib/format";
 
 /**
- * BetButton — the big, juicy YES / NO action. Two-line: the verdict word on top,
- * the live (animated) indicative multiple below it. Full SVG gradient fill (matches
- * the Button primitive), spring press-depth + a weighty haptic from @/ui Pressable,
- * a colored glow when active, and a clean disabled state once a bet is in or the
- * window closes.
+ * BetButton — the big, clear YES / NO action. Two-line: the verdict word on top,
+ * the live (animated) indicative multiple below. A FLAT solid fill (no gloss/gradient),
+ * spring press-depth + a weighty haptic, a whisper of colored edge when active, and a
+ * clean disabled state once a bet is in or the window closes.
  *
- * The odds ticker uses AnimatedNumber so the estimate visibly drifts as the pool
- * moves.
+ * The odds ticker uses AnimatedNumber so the estimate visibly drifts as the pool moves.
  */
 export function BetButton({
   side,
@@ -34,16 +31,9 @@ export function BetButton({
   picked?: "YES" | "NO" | null;
 }) {
   const isYes = side === "YES";
-  const grad = isYes
-    ? [colors.raw.limeBright, colors.raw.limeDeep]
-    : [colors.raw.redBright, colors.raw.redDeep];
-  // Solid fill so the button is never invisible if the SVG gradient fails to
-  // paint on web (YES uses near-black text — on a transparent button it vanishes).
+  // Flat solid fill — no gradient gloss.
   const solid = isYes ? colors.raw.lime : colors.raw.red;
   const fg = isYes ? colors.onYes : "#ffffff";
-  // Unique per-instance id — multiple cards (e.g. friends room) would otherwise
-  // collide on a shared `betbtn-YES`/`betbtn-NO`, breaking the fill on web.
-  const id = `betbtn-${side}-${React.useId().replace(/[^a-zA-Z0-9]/g, "")}`;
 
   // When a pick is in, the chosen side stays lit, the other goes flat.
   const dimmed = picked != null && picked !== side;
@@ -65,23 +55,6 @@ export function BetButton({
         dimmed && styles.dimmed,
       ]}
     >
-      <View style={[StyleSheet.absoluteFill, styles.clip]} pointerEvents="none">
-        <Svg
-          width="100%"
-          height="100%"
-          viewBox="0 0 1 1"
-          preserveAspectRatio="none"
-        >
-          <Defs>
-            <LinearGradient id={id} x1="0" y1="0" x2="0" y2="1">
-              <Stop offset="0" stopColor={grad[0]} />
-              <Stop offset="1" stopColor={grad[1]} />
-            </LinearGradient>
-          </Defs>
-          <Rect x="0" y="0" width="1" height="1" fill={`url(#${id})`} />
-        </Svg>
-      </View>
-
       <Text
         style={[styles.word, styles.content, { color: fg }]}
         allowFontScaling={false}

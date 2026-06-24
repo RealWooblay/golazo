@@ -12,7 +12,7 @@ import type { MoneyMode } from "@/state/types";
 
 const SEGMENTS: { key: MoneyMode; label: string; sub: string; tint: string }[] = [
   { key: "real", label: "Real", sub: "Devnet SOL", tint: colors.cyan },
-  { key: "points", label: "Paper", sub: "Fake points", tint: colors.gold },
+  { key: "points", label: "Paper", sub: "Fake points", tint: colors.yes },
 ];
 
 const TRACK_PAD = 4;
@@ -42,7 +42,7 @@ export function MoneyModePicker({
 
   const thumbStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: TRACK_PAD + pos.value * segW }],
-    borderColor: interpolateColor(pos.value, [0, 1], [colors.cyan, colors.gold]),
+    borderColor: interpolateColor(pos.value, [0, 1], [colors.cyan, colors.yes]),
   }));
 
   const onLayout = (e: LayoutChangeEvent) => setTrackW(e.nativeEvent.layout.width);

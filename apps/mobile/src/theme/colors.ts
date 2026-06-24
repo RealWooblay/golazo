@@ -17,39 +17,43 @@
 
 // ── 1. Raw brand palette ────────────────────────────────────────────────────
 const raw = {
-  // base / canvas
-  black: "#0a0b0f",
-  ink: "#06070a", // deepest — behind everything
-  // layered surfaces, low → high elevation
-  surface0: "#0e1016",
-  surface1: "#13151d",
-  surface2: "#1b1e29",
-  surface3: "#232634",
-  hairline: "#262a38",
-  hairlineSoft: "#1d2130",
+  // base / canvas — flat, near-black (no full-screen wash)
+  black: "#0B0C0F",
+  ink: "#050608", // deepest — behind everything
+  // layered surfaces, low → high elevation (solid fills, never gradients)
+  surface0: "#121419", // faint
+  surface1: "#15171C", // the standard card surface
+  surface2: "#1E2128", // raised
+  surface3: "#2D313A", // highest / strong divider
+  hairline: "#23262D",
+  hairlineSoft: "#1B1E24",
 
   // text
-  white: "#f4f6fb",
-  text: "#eef1f7",
-  muted: "#8b93a7",
-  faint: "#5a6276",
-  ghost: "#3a4154",
+  white: "#FFFFFF",
+  text: "#F5F7FA",
+  muted: "#98A0AC",
+  faint: "#565E6B",
+  ghost: "#3A4150",
 
-  // accents
-  lime: "#00e58a", // primary / YES / live
-  limeBright: "#1fff9f", // gradient top / hover
-  limeDeep: "#00d27e", // gradient bottom
-  cyan: "#16c6ff", // secondary / info / selection
-  cyanDeep: "#0a93d4",
-  red: "#ff4d6d", // NO / danger
-  redBright: "#ff6f88",
-  redDeep: "#ff3358",
-  gold: "#ffc73a", // wins / celebration / locked
-  goldDeep: "#ffae00",
+  // accents — ONE green accent, used surgically (live / primary / win)
+  lime: "#27E08A", // primary / YES / live
+  limeBright: "#3DEE9B", // gradient/hover top
+  limeDeep: "#1FCB7B", // gradient bottom
+  cyan: "#5B8DEF", // secondary / info / HOME team (calm blue, not neon)
+  cyanDeep: "#3B6FD6",
+  red: "#FF5267", // NO / danger
+  redBright: "#FF6F82",
+  redDeep: "#FF3D55",
+  gold: "#FFB347", // wins / warning / locked
+  goldDeep: "#F59E2E",
+  // neutral team tints — contests read as A-vs-B, never right/wrong
+  home: "#5B8DEF",
+  away: "#F5A524",
+  purple: "#C77DFF",
 
   // text-on-bright
-  onLime: "#04110b",
-  onGold: "#1a1300",
+  onLime: "#06231A",
+  onGold: "#231300",
   onRed: "#2a0008",
 } as const;
 
@@ -90,6 +94,10 @@ export const colors = {
   success: raw.lime,
   info: raw.cyan,
   warning: raw.gold,
+  /** Neutral team tints for contests (which-side markets) — A vs B, not right/wrong. */
+  home: raw.home,
+  away: raw.away,
+  purple: raw.purple,
 
   // text-on-accent
   onYes: raw.onLime,
@@ -97,26 +105,30 @@ export const colors = {
   onGold: raw.onGold,
   onNo: "#ffffff",
 
-  // glow colors (use as shadowColor / for rgba halos)
+  // glow colors (use as shadowColor / for rgba halos) — kept subtle; halos read as a
+  // faint edge, never a full bloom. Accent + glow live on LIVE/active state only.
   glow: {
-    yes: "rgba(0,229,138,0.55)",
-    yesSoft: "rgba(0,229,138,0.22)",
-    no: "rgba(255,77,109,0.55)",
-    noSoft: "rgba(255,77,109,0.22)",
-    cyan: "rgba(22,198,255,0.5)",
-    cyanSoft: "rgba(22,198,255,0.18)",
-    gold: "rgba(255,199,58,0.6)",
-    goldSoft: "rgba(255,199,58,0.22)",
-    success: "rgba(0,229,138,0.5)",
-    danger: "rgba(255,77,109,0.5)",
+    yes: "rgba(39,224,138,0.30)",
+    yesSoft: "rgba(39,224,138,0.12)",
+    no: "rgba(255,82,103,0.28)",
+    noSoft: "rgba(255,82,103,0.10)",
+    cyan: "rgba(91,141,239,0.26)",
+    cyanSoft: "rgba(91,141,239,0.10)",
+    gold: "rgba(255,179,71,0.28)",
+    goldSoft: "rgba(255,179,71,0.10)",
+    success: "rgba(39,224,138,0.28)",
+    danger: "rgba(255,82,103,0.26)",
   },
 
   // translucent fills for chips / selected states
   alpha: {
-    yes: "rgba(0,229,138,0.12)",
-    no: "rgba(255,77,109,0.12)",
-    cyan: "rgba(22,198,255,0.12)",
-    gold: "rgba(255,199,58,0.12)",
+    yes: "rgba(39,224,138,0.12)",
+    no: "rgba(255,82,103,0.12)",
+    cyan: "rgba(91,141,239,0.13)",
+    gold: "rgba(255,179,71,0.12)",
+    home: "rgba(91,141,239,0.13)",
+    away: "rgba(245,165,36,0.13)",
+    purple: "rgba(199,125,255,0.13)",
     white06: "rgba(255,255,255,0.06)",
     white10: "rgba(255,255,255,0.10)",
     black40: "rgba(0,0,0,0.4)",
@@ -145,8 +157,8 @@ export const colors = {
 // ── 3. Gradient stop sets ───────────────────────────────────────────────────
 /** Each entry is an array of color stops for expo-linear-gradient `colors`. */
 export const gradients = {
-  /** App canvas: deep vertical wash, top slightly lifted. */
-  canvas: [raw.surface0, raw.black, raw.ink] as const,
+  /** App canvas: flat near-black (no vertical wash — keep the canvas calm). */
+  canvas: [raw.black, raw.black, raw.black] as const,
   /** Card body: top surface lifts to a darker base for depth. */
   card: [raw.surface2, raw.surface1] as const,
   cardElevated: [raw.surface3, raw.surface2] as const,
@@ -164,8 +176,9 @@ export const gradients = {
   ringCalm: [raw.lime, raw.cyan] as const,
   /** Countdown ring sweep — urgent (gold → red), last few seconds. */
   ringUrgent: [raw.gold, raw.redDeep] as const,
-  /** Soft radial vignette stops (center → edge), used behind hero moments. */
-  vignette: ["rgba(21,33,43,0.55)", "rgba(10,11,15,0)"] as const,
+  /** Soft radial vignette stops (center → edge). Near-invisible — the canvas stays flat;
+   *  any hero tint is applied surgically per-component, not as a full-screen wash. */
+  vignette: ["rgba(255,255,255,0.015)", "rgba(10,11,15,0)"] as const,
   /** Shimmer highlight for progress bars / skeletons. */
   shimmer: [
     "rgba(255,255,255,0)",

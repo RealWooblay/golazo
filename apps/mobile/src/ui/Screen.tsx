@@ -2,22 +2,18 @@ import React from "react";
 import { ScrollView, StyleSheet, View, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, MAX_WIDTH, spacing } from "@/theme";
-import { GrainOverlay } from "./GrainOverlay";
-import { Vignette } from "./Vignette";
 
 /**
- * Screen — the standard page frame: near-black canvas, a faint top vignette + a
- * whisper of grain for depth, safe-area padding, and the content capped to the
- * iPhone-width "app column" so it stays tight on web/tablet.
+ * Screen — the standard page frame: a FLAT near-black canvas (no full-screen wash and
+ * no grain), safe-area padding, and content capped to the iPhone-width "app column" so
+ * it stays tight on web/tablet.
  *
- * Use it as the root of every screen so the canvas reads identically everywhere:
- *   <Screen>           // scrolls by default
- *     ...content
- *   </Screen>
+ * The accent lives SURGICALLY on live/active elements — never as a background bloom.
+ * (The old tinted vignette + grain are gone; the `vignette` prop is accepted but ignored
+ * so existing call sites keep compiling.)
  *
  * @param scroll   wrap children in a ScrollView (default true).
  * @param padded   apply horizontal gutter (spacing.lg) to the column (default true).
- * @param vignette tint of the top wash ('neutral' default; 'yes' for live hero).
  * @param topInset add top safe-area padding (default true).
  * @param footerSpace extra bottom padding so the floating tab bar never overlaps.
  */
@@ -25,7 +21,6 @@ export function Screen({
   children,
   scroll = true,
   padded = true,
-  vignette = "neutral",
   topInset = true,
   footerSpace = 96,
   contentStyle,
@@ -33,6 +28,7 @@ export function Screen({
   children?: React.ReactNode;
   scroll?: boolean;
   padded?: boolean;
+  /** @deprecated kept for call-site compatibility; the canvas is now flat. */
   vignette?: "neutral" | "yes" | "no" | "gold" | "cyan";
   topInset?: boolean;
   footerSpace?: number;
@@ -52,16 +48,9 @@ export function Screen({
 
   return (
     <View style={styles.root}>
-      <Vignette
-        tint={vignette}
-        intensity={vignette === "neutral" ? 0.4 : 0.5}
-      />
       {scroll ? (
         <ScrollView
-          contentContainerStyle={[
-            styles.scroll,
-            { paddingBottom: footerSpace },
-          ]}
+          contentContainerStyle={[styles.scroll, { paddingBottom: footerSpace }]}
           showsVerticalScrollIndicator={false}
         >
           {inner}
@@ -69,7 +58,6 @@ export function Screen({
       ) : (
         <View style={styles.flex}>{inner}</View>
       )}
-      <GrainOverlay opacity={0.035} />
     </View>
   );
 }
