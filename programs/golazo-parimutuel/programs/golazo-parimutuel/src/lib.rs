@@ -132,8 +132,9 @@ pub mod golazo_parimutuel {
     }
 
     /// Claim a single bet against a Resolved or Void market. Winner gets their
-    /// proportional net-pool share; void refunds `stake`; loser gets 0.
-    /// Idempotent-safe via the `claimed` flag.
+    /// proportional net-pool share; void refunds `stake`; loser gets 0. In all
+    /// cases the Bet account is closed and its rent refunded to the bettor, so no
+    /// SOL stays locked per bet.
     pub fn claim(ctx: Context<Claim>) -> Result<()> {
         instructions::claim::handler(ctx)
     }
