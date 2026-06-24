@@ -390,9 +390,11 @@ describe("golazo-parimutuel", () => {
       assert.deepEqual(m.outcome, { yes: {} });
     });
 
-    it("winner (Alice) claims her final proportional share = 95_000 USX", async () => {
+    it("winner (Alice) claims 95_000 USX + her Bet rent (SOL) is refunded", async () => {
       const [bet] = betPda(market, alice.publicKey);
       const before = await usxBalance(aliceUsx);
+      const solBefore = await provider.connection.getBalance(alice.publicKey);
+      const betRent = (await provider.connection.getAccountInfo(bet))!.lamports;
 
       await program.methods
         .claim()
@@ -414,11 +416,13 @@ describe("golazo-parimutuel", () => {
       // Rake remainder (gross - net = 5_000) stays in the vault.
       assert.equal((await usxBalance(vault)).toString(), "5000");
 
-      const b = await program.account.bet.fetch(bet);
-      assert.equal(b.claimed, true);
+      // Bet account is CLOSED and its rent refunded to Alice (net of the tx fee).
+      assert.isNull(await provider.connection.getAccountInfo(bet));
+      const solAfter = await provider.connection.getBalance(alice.publicKey);
+      assert.isAbove(solAfter - solBefore, betRent - 10_000); // ~rent back, minus fee
     });
 
-    it("double-claim fails (AlreadyClaimed)", async () => {
+    it("double-claim fails (Bet account is gone)", async () => {
       const [bet] = betPda(market, alice.publicKey);
       let threw = false;
       try {
@@ -434,16 +438,17 @@ describe("golazo-parimutuel", () => {
           })
           .signers([alice])
           .rpc();
-      } catch (e: any) {
-        threw = true;
-        assert.include(e.toString(), "AlreadyClaimed");
+      } catch (_e) {
+        threw = true; // Bet PDA no longer exists → claim can't reload it
       }
       assert.isTrue(threw);
     });
 
-    it("loser (Bob) claims 0 (no USX moved, bet marked claimed)", async () => {
+    it("loser (Bob) claims 0 USX but still recovers his Bet rent", async () => {
       const [bet] = betPda(market, bob.publicKey);
       const before = await usxBalance(bobUsx);
+      const solBefore = await provider.connection.getBalance(bob.publicKey);
+      const betRent = (await provider.connection.getAccountInfo(bet))!.lamports;
 
       await program.methods
         .claim()
@@ -461,8 +466,10 @@ describe("golazo-parimutuel", () => {
       const after = await usxBalance(bobUsx);
       assert.equal((after - before).toString(), "0");
 
-      const b = await program.account.bet.fetch(bet);
-      assert.equal(b.claimed, true);
+      // Even as a loser, the Bet is closed and rent comes back (the incentive to claim).
+      assert.isNull(await provider.connection.getAccountInfo(bet));
+      const solAfter = await provider.connection.getBalance(bob.publicKey);
+      assert.isAbove(solAfter - solBefore, betRent - 10_000);
     });
   });
 
@@ -545,11 +552,11 @@ describe("golazo-parimutuel", () => {
       assert.equal((after - before).toString(), "70000");
       assert.equal((await usxBalance(vault)).toString(), "0");
 
-      const b = await program.account.bet.fetch(bet);
-      assert.equal(b.claimed, true);
+      // Bet closed on the void refund too — no SOL left locked.
+      assert.isNull(await provider.connection.getAccountInfo(bet));
     });
 
-    it("double-claim on void fails too", async () => {
+    it("double-claim on void fails too (Bet account is gone)", async () => {
       const [bet] = betPda(market, carol.publicKey);
       let threw = false;
       try {
@@ -565,9 +572,8 @@ describe("golazo-parimutuel", () => {
           })
           .signers([carol])
           .rpc();
-      } catch (e: any) {
+      } catch (_e) {
         threw = true;
-        assert.include(e.toString(), "AlreadyClaimed");
       }
       assert.isTrue(threw);
     });

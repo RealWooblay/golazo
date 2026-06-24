@@ -1,8 +1,14 @@
-//! `claim` — settle a single bet against the resolved/void market, in USX.
+//! `claim` — settle a single bet against the resolved/void market, in USX, and
+//! close the Bet account (refunding its rent to the bettor).
 //!
 //!   * VOID      -> refund exactly `stake`.
 //!   * Resolved, bettor won  -> pay `stake / final_winning_pool * net_pool`.
-//!   * Resolved, bettor lost -> pay 0 (still mark claimed so the Bet is closed).
+//!   * Resolved, bettor lost -> pay 0.
+//!
+//! In every case the Bet PDA is CLOSED and its ~rent returned to the bettor, so a
+//! settled bet leaves no SOL locked on-chain. For a loser this is the incentive to
+//! claim at all (0 payout, but rent back), which is also what lets the operator
+//! later close the market and reclaim its own rent.
 //!
 //! VAULT SIGNER SEEDS:
 //! The vault is a PDA-owned USX token account whose token authority is the
@@ -59,13 +65,18 @@ pub struct Claim<'info> {
 
     /// The bet being claimed. Bound to (market, bettor) via seeds AND `has_one`,
     /// so a caller can neither claim someone else's bet nor a bet from a
-    /// different market.
+    /// different market. `close = bettor` returns this account's rent to the
+    /// bettor's wallet once the bet is settled — so no SOL is permanently locked
+    /// per bet, and (for sponsored Privy wallets) that SOL recycles for the next
+    /// bet instead of needing a re-top-up. Closing also makes a second claim
+    /// impossible (the account no longer exists), independent of the `claimed` flag.
     #[account(
         mut,
         seeds = [seeds::BET, market.key().as_ref(), bettor.key().as_ref()],
         bump = bet.bump,
         has_one = bettor @ GolazoError::Unauthorized,
         has_one = market @ GolazoError::BetMarketMismatch,
+        close = bettor,
     )]
     pub bet: Account<'info, Bet>,
 
