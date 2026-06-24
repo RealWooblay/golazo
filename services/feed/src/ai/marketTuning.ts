@@ -169,48 +169,38 @@ function pickRotated<T>(variants: readonly T[], seed: number): T {
   return variants[Math.abs(seed) % variants.length]!;
 }
 
-const CARD_WINDOW_QUESTIONS = [
-  'A booking in the next few minutes?',
-  'A yellow card before this spell cools off?',
-  'Will anyone go in the book soon?',
-  'Tempers rising — card coming?',
-  "Ref reaching for his pocket soon?",
-  'A late challenge and a booking incoming?',
-  'Someone seeing yellow in the next few?',
-  'Will the ref have to step in soon?',
-  'A card in this passage of play?',
-  'Niggly out there — booking on the way?',
-] as const;
+const CARD_WINDOW_QUESTIONS: ((mins: number) => string)[] = [
+  (mins) => `A booking in ${mins} min?`,
+  (mins) => `Any card in ${mins} min?`,
+  (mins) => `A yellow in the next ${mins} min?`,
+  (mins) => `Card shown in ${mins} min?`,
+];
 
-const GOAL_WINDOW_QUESTIONS = [
-  'A goal in the next few minutes? (either team)',
-  'Either team to find the net soon?',
-  'A goal before this spell dies out?',
-  'Will we see one go in soon?',
-  'End to end — a goal coming?',
-  'Net to bulge in the next few minutes?',
-  'Someone about to break the deadlock here?',
-  'A goal in this passage of play?',
-  'Feels like a goal is coming — soon?',
-  'Will the keeper be picking it out soon?',
-] as const;
+const GOAL_WINDOW_QUESTIONS: ((mins: number) => string)[] = [
+  (mins) => `Any goal in ${mins} min?`,
+  (mins) => `Either team to score in ${mins} min?`,
+  (mins) => `A goal in the next ${mins} min?`,
+  (mins) => `Goal for either team in ${mins} min?`,
+];
 
 /** Rotating event-slot heartbeat — card vs goal, varied copy each cycle. */
 export function buildEventSlotTrigger(gameId: string, counter: number): MarketTrigger {
   const isCard = counter % 2 === 0;
   if (isCard) {
+    const mins = Math.max(1, Math.round(resolveDeadlineMs('card_in_window') / 60_000));
     return {
       gameId,
-      question: pickRotated(CARD_WINDOW_QUESTIONS, counter),
+      question: pickRotated(CARD_WINDOW_QUESTIONS, counter)(mins),
       kind: 'card_in_window',
       slot: 'event',
       windowMs: HEARTBEAT_BET_WINDOW_MS,
       trueProb: 0.35,
     };
   }
+  const mins = Math.max(1, Math.round(resolveDeadlineMs('goal_in_window') / 60_000));
   return {
     gameId,
-    question: pickRotated(GOAL_WINDOW_QUESTIONS, counter),
+    question: pickRotated(GOAL_WINDOW_QUESTIONS, counter)(mins),
     kind: 'goal_in_window',
     slot: 'event',
     windowMs: HEARTBEAT_BET_WINDOW_MS,
@@ -218,29 +208,20 @@ export function buildEventSlotTrigger(gameId: string, counter: number): MarketTr
   };
 }
 
-// `mins` = the real counting window (COUNT_WINDOW_MS), so "the next N minutes" matches when
-// the market actually settles instead of the vague "few minutes" (which read shorter than the
-// real ~4-min window). Spell-relative variants ignore mins.
+// `mins` = the real counting window (COUNT_WINDOW_MS) so the title states the exact window
+// it settles on. Count markets are TEAM-AGNOSTIC (either team's corners/shots count).
 const CORNER_COUNT_QUESTIONS: ((line: number, mins: number) => string)[] = [
-  (line, mins) => `More than ${line} corners in the next ${mins} minutes?`,
-  (line) => `${line + 1}+ corners in this spell?`,
-  (line, mins) => `Corner count — over ${line} in ${mins} min?`,
-  (line) => `Will we see ${line + 1} corners pile up?`,
-  (line, mins) => `Pressure building — ${line + 1}+ corners in ${mins} min?`,
-  (line) => `Over ${line} corners before the spell cools?`,
-  (line) => `Set-piece barrage — ${line + 1} corners this spell?`,
-  (line) => `Camped in their half — ${line + 1}+ corners?`,
+  (line, mins) => `Over ${line} corners in ${mins} min?`,
+  (line, mins) => `${line + 1}+ corners in ${mins} min?`,
+  (line, mins) => `More than ${line} corners in ${mins} min?`,
+  (line, mins) => `${line + 1} corners in ${mins} min?`,
 ];
 
 const SHOT_COUNT_QUESTIONS: ((line: number, mins: number) => string)[] = [
-  (line, mins) => `More than ${line} shots in the next ${mins} minutes?`,
-  (line) => `${line + 1}+ shots in this spell?`,
-  (line, mins) => `Shot count — over ${line} in ${mins} min?`,
-  (line) => `Will they rack up ${line + 1} shots?`,
-  (line, mins) => `Peppering the goal — ${line + 1}+ shots in ${mins} min?`,
-  (line) => `Over ${line} shots before the spell cools?`,
-  (line) => `Keeper busy — ${line + 1} shots this spell?`,
-  (line) => `Throwing everything at it — ${line + 1}+ shots?`,
+  (line, mins) => `Over ${line} shots in ${mins} min?`,
+  (line, mins) => `${line + 1}+ shots in ${mins} min?`,
+  (line, mins) => `More than ${line} shots in ${mins} min?`,
+  (line, mins) => `${line + 1} shots in ${mins} min?`,
 ];
 
 /** Rotating count-slot heartbeat — corners vs shots, varied copy. */
@@ -265,26 +246,21 @@ export function buildCountSlotTrigger(gameId: string, counter: number): MarketTr
 type VersusPhrase = (a: string, b: string) => string;
 
 const NEXT_SHOT_PHRASES: readonly VersusPhrase[] = [
-  (a, b) => `Who threatens next — ${a} or ${b}?`,
-  (a, b) => `Next shot or corner — ${a} or ${b}?`,
-  (a, b) => `Who gets forward next — ${a} or ${b}?`,
-  (a, b) => `Next chance falls to — ${a} or ${b}?`,
-  (a, b) => `Who breaks next — ${a} or ${b}?`,
+  (a, b) => `Next shot: ${a} or ${b}?`,
+  (a, b) => `Next attack: ${a} or ${b}?`,
+  (a, b) => `Next chance: ${a} or ${b}?`,
 ];
 const NEXT_CORNER_PHRASES: readonly VersusPhrase[] = [
-  (a, b) => `Who wins the next corner — ${a} or ${b}?`,
-  (a, b) => `Next corner goes to — ${a} or ${b}?`,
-  (a, b) => `Who forces the next corner — ${a} or ${b}?`,
+  (a, b) => `Next corner: ${a} or ${b}?`,
+  (a, b) => `Next corner won by: ${a} or ${b}?`,
 ];
 const NEXT_GOAL_PHRASES: readonly VersusPhrase[] = [
-  (a, b) => `Who scores next — ${a} or ${b}?`,
-  (a, b) => `Next goal belongs to — ${a} or ${b}?`,
-  (a, b) => `Who finds the net first — ${a} or ${b}?`,
+  (a, b) => `Next goal: ${a} or ${b}?`,
+  (a, b) => `Next scorer: ${a} or ${b}?`,
 ];
 const NEXT_CARD_PHRASES: readonly VersusPhrase[] = [
-  (a, b) => `Who gets the next booking — ${a} or ${b}?`,
-  (a, b) => `Next card shown to — ${a} or ${b}?`,
-  (a, b) => `Whose player sees yellow next — ${a} or ${b}?`,
+  (a, b) => `Next booking: ${a} or ${b}?`,
+  (a, b) => `Next card: ${a} or ${b}?`,
 ];
 
 /** The which-side-next CONTESTS the heartbeat rotates through — kind + phrasing bank. */
@@ -372,6 +348,23 @@ export function triggerWordingProblem(kind: string, question: string, isPeriod =
   if (periodWorded && !isPeriodKind) {
     return `period/whistle wording on non-period kind '${kind}': "${question}"`;
   }
+  // SET-PIECE framing ("before/while/during the free kick / corner / penalty") promises a
+  // resolution tied to a set piece — but a timer-settled kind has no such event, so it's a lie
+  // (fixes "Will X get a shot away before the free kick ends?" on a shot_in_window market, and
+  // a free-kick market opening with no actual free kick). Only the dedicated set-piece kinds
+  // may use it.
+  const setPieceWorded =
+    /(?:before|while|during) (?:the |a |this )?(?:free[- ]?kick|corner|penalty|spot[- ]?kick|set[- ]?piece)\b/.test(
+      q,
+    );
+  const isSetPieceKind =
+    kind === 'goal_from_corner' ||
+    kind === 'goal_from_free_kick' ||
+    kind === 'penalty_scored' ||
+    kind === 'penalty_awarded';
+  if (setPieceWorded && !isSetPieceKind) {
+    return `set-piece wording on non-set-piece kind '${kind}': "${question}"`;
+  }
   return null;
 }
 
@@ -439,8 +432,9 @@ export function resolveDeadlineMs(kind: string): number {
       // 3 minutes (more momentum-market throughput).
       return 120_000;
     case 'player_to_score':
-      // "Will <player> score in the next ~2.5 min?" — a player-specific window.
-      return 150_000;
+      // "Will <player> score in the next few minutes?" — a player goal is rare, so give it a
+      // long, forgiving window (5 min) rather than expecting it in the next ~2.5.
+      return 300_000;
     case 'shot_or_corner_in_window':
       // Broader momentum window — "a SHOT or CORNER this spell?" resolves YES often.
       return 90_000;
@@ -806,25 +800,25 @@ function pickPeriodQuestion(variants: string[], seed: string): string {
 
 const HT_STOPPAGE_QUESTIONS = [
   'Goal before half-time?',
-  'Added time — goal before the whistle?',
-  'Late drama — another goal before HT?',
-  'Stoppage time — will it go in before half-time?',
+  'Another goal before half-time?',
+  'A goal in first-half stoppage?',
+  'One more before half-time?',
 ];
 
 // Every FT variant must NAME full-time/FT so the client labels it "Before FT" (not "Before
 // half") — a bare "before the whistle" is ambiguous between the two stoppage periods.
 const FT_STOPPAGE_QUESTIONS = [
   'Goal before full-time?',
-  'Added time — goal before full-time?',
-  'Late twist — goal before FT?',
-  'Stoppage time — one more before full-time?',
+  'Another goal before full-time?',
+  'A goal in stoppage before full-time?',
+  'One more before full-time?',
 ];
 
 const ET_LEVEL_QUESTIONS = [
-  'Will there be a goal in extra time?',
-  'Extra time — a goal on the way?',
-  'ET — will someone break the deadlock?',
-  'Added periods — goal incoming?',
+  'A goal in extra time?',
+  'Either team to score in extra time?',
+  'A goal coming in extra time?',
+  'Goal in ET?',
 ];
 
 /**
@@ -868,10 +862,10 @@ export function buildPeriodMarketTrigger(game: GameState): MarketTrigger | null 
   if (margin < 0) {
     const name = game.home.name;
     const qs = [
-      `Will ${name} score in extra time?`,
-      `Can ${name} find an equaliser in ET?`,
       `${name} to score in extra time?`,
-      `ET comeback — will ${name} score?`,
+      `Can ${name} score in extra time?`,
+      `${name} to find a goal in ET?`,
+      `Goal for ${name} in extra time?`,
     ];
     return {
       gameId: game.gameId,
@@ -886,10 +880,10 @@ export function buildPeriodMarketTrigger(game: GameState): MarketTrigger | null 
   if (margin > 0) {
     const name = game.away.name;
     const qs = [
-      `Will ${name} score in extra time?`,
-      `Can ${name} find an equaliser in ET?`,
       `${name} to score in extra time?`,
-      `ET comeback — will ${name} score?`,
+      `Can ${name} score in extra time?`,
+      `${name} to find a goal in ET?`,
+      `Goal for ${name} in extra time?`,
     ];
     return {
       gameId: game.gameId,

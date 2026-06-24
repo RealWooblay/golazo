@@ -94,7 +94,7 @@ export function ClosedMarketsList({
                 : result === "void"
                   ? colors.cyan
                   : colors.textFaint;
-          const label = resultBadgeLabel(m.outcome, m.question);
+          const label = resultBadgeLabel(m.outcome, m.kind, m.question);
           const side = m.userSide ?? bet?.side;
           const sideLabel = side
             ? sideDisplayLabel(side, m.kind, m.question)

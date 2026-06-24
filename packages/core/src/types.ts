@@ -39,6 +39,9 @@ export interface GameState {
   clock: string; // display clock, e.g. "28'"
   /** 'halftime' is a brief mid-match pause (betting closed) between the halves. */
   status: 'pre' | 'live' | 'halftime' | 'final';
+  /** True during a hydration/cooling break — play is paused; the client shows a break
+   *  indicator and FREEZES market countdowns (set by the orchestrator, not the feed). */
+  breakPaused?: boolean;
 }
 
 /**

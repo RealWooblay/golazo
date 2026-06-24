@@ -22,6 +22,18 @@ describe('triggerWordingProblem', () => {
     expect(triggerWordingProblem('goal_in_window', 'Stoppage — one more before full-time?', true)).toBeNull();
   });
 
+  it('flags SET-PIECE framing on a non-set-piece (timer) kind', () => {
+    // The real bug: a shot_in_window market settles on a timer, so "before the free kick ends"
+    // is a lie (there's no free kick it waits on).
+    expect(triggerWordingProblem('shot_in_window', 'Will Congo DR get a shot away before the free kick ends?')).toBeTruthy();
+    expect(triggerWordingProblem('score_in_window', 'Score during the corner?')).toBeTruthy();
+    // The dedicated set-piece kinds may use it.
+    expect(triggerWordingProblem('goal_from_free_kick', 'Türkiye free kick — GOAL?')).toBeNull();
+    expect(triggerWordingProblem('goal_from_corner', 'Türkiye corner — GOAL from it?')).toBeNull();
+    // "a SHOT or CORNER …?" is NOT set-piece framing (no before/while/during the corner).
+    expect(triggerWordingProblem('shot_or_corner_in_window', 'a SHOT or CORNER next spell?')).toBeNull();
+  });
+
   it('does not flag normal window / versus / count wording', () => {
     expect(triggerWordingProblem('score_in_window', 'Panama laying siege — do they SCORE in the next 2 minutes?')).toBeNull();
     expect(triggerWordingProblem('shot_or_corner_in_window', 'Panama pushing forward — a SHOT or CORNER this spell?')).toBeNull();

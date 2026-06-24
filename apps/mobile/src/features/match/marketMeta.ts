@@ -50,11 +50,11 @@ export function laneOf(kind?: string, slot?: MarketSlot, question?: string): Lan
   return { label: "Moment", color: colors.cyan };
 }
 
-/** Parse "Who threatens next — Jordan or Algeria?" into the YES/NO team names. */
+/** Parse "Next shot: Jordan or Algeria?" (or the old "— Jordan or Algeria?") into team names. */
 export function versusLabelsFromQuestion(
   question?: string,
 ): { yes: string; no: string } | null {
-  const m = (question ?? "").match(/—\s*(.+?)\s+or\s+(.+?)\?\s*$/i);
+  const m = (question ?? "").match(/[—:]\s*(.+?)\s+or\s+(.+?)\?\s*$/i);
   if (!m) return null;
   return { yes: m[1]!.trim(), no: m[2]!.trim() };
 }
@@ -80,19 +80,34 @@ export function outcomeDisplayLabel(
 }
 
 /**
- * Clean SETTLED verdict for the result badge. The badge is the market's answer, not a
- * description of the event: versus/"who next" markets show the winning TEAM (the real
- * answer), and everything else collapses to a plain YES / NO / VOID — never the
- * event-verb labels like "No goal" / "Shot/corner" (those belong on the live bet
- * buttons via betLabels, where they read as choices, not as a result).
+ * True for the "who's next — A or B?" contest markets (the only family whose answer is a
+ * TEAM). Gated on KIND, never on parsing "or" out of the question — otherwise a window market
+ * worded "a SHOT or CORNER …?" gets mis-read as a team-vs-team contest (wrong labels + a
+ * bogus "until next threat" on a timer market).
+ */
+export function isVersusKind(kind?: string): boolean {
+  return (
+    kind === "next_shot" ||
+    kind === "next_corner" ||
+    kind === "next_goal" ||
+    kind === "next_card"
+  );
+}
+
+/**
+ * Clean SETTLED verdict for the result badge. Versus/"who next" markets show the winning
+ * TEAM; everything else collapses to a plain YES / NO / VOID — never the event-verb labels.
  */
 export function resultBadgeLabel(
   outcome: "YES" | "NO" | "VOID",
+  kind?: string,
   question?: string,
 ): string {
   if (outcome === "VOID") return "VOID";
-  const versus = versusLabelsFromQuestion(question);
-  if (versus) return outcome === "YES" ? versus.yes : versus.no; // the winning team
+  if (isVersusKind(kind)) {
+    const versus = versusLabelsFromQuestion(question);
+    if (versus) return outcome === "YES" ? versus.yes : versus.no; // the winning team
+  }
   return outcome; // "YES" / "NO"
 }
 
@@ -101,14 +116,15 @@ export function betLabels(kind?: string, question?: string): { yes: string; no: 
   const k = kind ?? "";
   const q = (question ?? "").toLowerCase();
   // Which-side-next contest — "Next shot — A or B?": the two team names ARE the buttons.
-  const versus = versusLabelsFromQuestion(question);
-  if (k === "next_shot" || k === "next_corner" || k === "next_goal" || k === "next_card" || versus) {
-    return versus ?? { yes: "Yes", no: "No" };
+  // Gated on KIND so a window market worded "a SHOT or CORNER …?" isn't parsed as versus.
+  if (isVersusKind(k)) {
+    return versusLabelsFromQuestion(question) ?? { yes: "Yes", no: "No" };
   }
   // Over/under count markets — the honest verdict is over/under the line.
   if (k === "over_corners" || k === "over_shots") return { yes: "Over", no: "Under" };
-  // "A shot or corner this spell?" — a broader window; the YES word covers both.
-  if (k === "shot_or_corner_in_window") return { yes: "Shot/corner", no: "Neither" };
+  // "A shot OR corner …?" is a plain yes/no question (what if BOTH happen?) — not a choice
+  // between the two — so the buttons are YES / NO, not "Shot/corner".
+  if (k === "shot_or_corner_in_window") return { yes: "Yes", no: "No" };
   // "A booking in the next few minutes?" — a card is the YES.
   if (k === "card_in_window") return { yes: "Card", no: "No card" };
   // "A goal in the next few minutes? (either team)" — a goal is the YES.
@@ -135,16 +151,13 @@ export function isWhistleBound(kind?: string): boolean {
   return kind === "goal_in_stoppage" || kind === "goal_in_extra_time";
 }
 
-/** Versus / next-side markets resolve on the first decisive event, not a deadline timer. */
-export function isEventDecided(kind?: string, question?: string): boolean {
-  const k = kind ?? "";
-  return (
-    k === "next_shot" ||
-    k === "next_corner" ||
-    k === "next_goal" ||
-    k === "next_card" ||
-    versusLabelsFromQuestion(question) != null
-  );
+/**
+ * Versus / next-side markets resolve on the first decisive event, not a deadline timer.
+ * Gated on KIND only — a window market ("a SHOT or CORNER …?") is timer-settled and must
+ * NOT show "until next threat" (the bug where a timer + "until next threat" appeared together).
+ */
+export function isEventDecided(kind?: string): boolean {
+  return isVersusKind(kind);
 }
 
 /** A 2nd-half stoppage market reads "…before full-time?"; a 1st-half one "…before half-time?". */

@@ -22,13 +22,13 @@ describe('extended market resolution', () => {
   it('VAR penalty review opens a penalty market', () => {
     const t = triggerFromEvent(varEvent('VAR check for a possible penalty, handball in the box.'));
     expect(t?.kind).toBe('penalty_awarded');
-    expect(t?.question).toMatch(/VAR review.*penalty be awarded/i);
+    expect(t?.question).toMatch(/VAR check.*penalty/i);
   });
 
   it('VAR red-card review opens a RED card market (cards ARE bettable under VAR)', () => {
     const t = triggerFromEvent(varEvent('VAR review for a possible red card — violent conduct.'));
     expect(t?.kind).toBe('red_card_given');
-    expect(t?.question).toMatch(/VAR review.*RED card/i);
+    expect(t?.question).toMatch(/VAR check.*red card/i);
     expect(t?.team).toBeUndefined(); // teamless: "will THIS review produce a red?"
   });
 

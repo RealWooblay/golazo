@@ -152,13 +152,13 @@ describe('comprehensive full-game market simulation (rich-match)', () => {
     expect(report.byOutcome['NO'] ?? 0).toBeGreaterThan(0);
 
     // ── THE "in N minutes" TITLE IS CONCRETE ───────────────────────────────────
-    // 14. Every score_in_window question names the actual window ("in the next 3
-    //     minutes?"), never the vague "few minutes".
+    // 14. Every score_in_window question names the actual window ("in 3 minutes?" /
+    //     "in the next 3 minutes?"), never the vague "few minutes".
     const scoreQs = report.markets
       .filter((m) => m.kind === 'score_in_window')
       .map((m) => m.question);
     expect(scoreQs.length).toBeGreaterThan(0);
-    expect(scoreQs.every((q) => /in the next \d+ minutes?\?/.test(q))).toBe(true);
+    expect(scoreQs.every((q) => /in (?:the next )?\d+ minutes?\?/.test(q))).toBe(true);
     expect(scoreQs.some((q) => /few minutes/.test(q))).toBe(false);
 
     // ── MOMENTUM BAR: fires every event, flips sides, RISES + DECAYS ────────────

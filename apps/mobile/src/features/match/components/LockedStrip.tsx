@@ -15,19 +15,25 @@ export function LockedStrip({
   market,
   now,
   betLabel,
+  breakActive = false,
 }: {
   market: MarketVM;
   now: number;
   betLabel?: string;
+  breakActive?: boolean;
 }) {
   const lane = laneOf(market.kind, market.slot, market.question);
   const whistle = isWhistleBound(market.kind);
-  const eventDecided = isEventDecided(market.kind, market.question);
+  const eventDecided = isEventDecided(market.kind);
   const left = Math.max(0, market.resolveAt - now);
   const mins = Math.floor(left / 60000);
   const secs = Math.floor((left % 60000) / 1000);
   const timeLeft = mins > 0 ? `${mins}m` : `${Math.ceil(left / 1000)}s`;
-  const countdown = whistle
+  // Hydration/cooling break: the server freezes the deadline; show a paused indicator instead
+  // of a draining/hanging countdown so it's clear the market is held, not stuck.
+  const countdown = breakActive
+    ? "⏸ Hydration break"
+    : whistle
     ? whistleLabel(market.kind, market.question)
     : eventDecided
       ? // versus/next markets resolve on the next event — but they VOID/refund at the deadline,

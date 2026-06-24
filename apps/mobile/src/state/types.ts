@@ -79,6 +79,9 @@ export interface RevealVM {
   outcome: Outcome;
   won: boolean;
   payout: number; // 0 on a loss; stake on a VOID refund; capped win otherwise
+  /** POINTS mode only: the new balance to apply WHEN this reveal is tapped (reveal = claim,
+   *  matching real money). Undefined for real-money reveals (those credit via `payout`). */
+  claimBalance?: number;
 }
 
 /** A settled market in this session — final pool + odds, whether or not you bet. */

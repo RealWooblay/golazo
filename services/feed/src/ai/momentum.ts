@@ -136,14 +136,12 @@ export function momentumMarketSpec(
     const mins = scoreWindowMinutes();
     const unit = mins === 1 ? 'minute' : 'minutes';
     const scoreLines = [
-      `${teamName} all over them — to SCORE in the next ${mins} ${unit}?`,
-      `${teamName} laying siege — do they SCORE in the next ${mins} ${unit}?`,
-      `${teamName} piling it on — GOAL in the next ${mins} ${unit}?`,
-      `${teamName} relentless — to SCORE in the next ${mins} ${unit}?`,
-      `${teamName} have the pressure — GOAL in the next ${mins} ${unit}?`,
-      `${teamName} are camped high — SCORE in the next ${mins} ${unit}?`,
-      `${teamName} turning the screw — SCORE in the next ${mins} ${unit}?`,
-      `${teamName} with wave after wave — SCORE in the next ${mins} ${unit}?`,
+      `${teamName} to score in ${mins} ${unit}?`,
+      `Can ${teamName} score in ${mins} ${unit}?`,
+      `Goal for ${teamName} in ${mins} ${unit}?`,
+      `${teamName} to break through in ${mins} ${unit}?`,
+      `${teamName} to find a goal in ${mins} ${unit}?`,
+      `${teamName} to score in the next ${mins} ${unit}?`,
     ];
     return {
       kind: 'score_in_window',
@@ -156,8 +154,9 @@ export function momentumMarketSpec(
   // momentum board varies and resolves YES more often. Even counter → shot-or-corner.
   if (counter % 2 === 0) {
     const broadLines = [
-      `${teamName} on top — a SHOT or CORNER next spell?`,
-      `${teamName} pushing forward — a SHOT or CORNER next spell?`,
+      `${teamName} shot or corner next?`,
+      `Shot or corner for ${teamName} next?`,
+      `${teamName} to win a shot or corner?`,
     ];
     return {
       kind: 'shot_or_corner_in_window',
@@ -166,19 +165,12 @@ export function momentumMarketSpec(
     };
   }
   const shotLines = [
-    `${teamName} on top — a SHOT next spell?`,
-    `${teamName} building — get a SHOT away soon?`,
-    `${teamName} pushing forward — a SHOT next spell?`,
-    `${teamName} pressing — another SHOT incoming?`,
-    `${teamName} finding rhythm — do they create a SHOT?`,
-    `${teamName} pinning them back — SHOT before it clears?`,
-    `${teamName} on the front foot — a SHOT coming?`,
-    `${teamName} keeping it alive — do they test the keeper?`,
-    `${teamName} probing again — SHOT from next spell?`,
-    `${teamName} carrying momentum — a SHOT soon?`,
-    `${teamName} in the box — do they get a chance?`,
-    `${teamName} hungry here — SHOT on the way?`,
-    `${teamName} sniffing blood — test the keeper?`,
+    `${teamName} to get a shot next?`,
+    `Shot for ${teamName} next?`,
+    `${teamName} shot incoming?`,
+    `${teamName} to test the keeper?`,
+    `${teamName} to create a chance?`,
+    `Next shot from ${teamName}?`,
   ];
   return {
     kind: 'shot_in_window',

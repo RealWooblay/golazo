@@ -163,6 +163,52 @@ describe('EspnFeed.poll — dedupes commentary/keyEvent twins', () => {
   });
 });
 
+describe('EspnFeed.poll — hydration/cooling break detection', () => {
+  const scoreboard = {
+    events: [
+      {
+        id: 'e1',
+        status: { type: { state: 'in' }, displayClock: "62'" },
+        competitions: [
+          {
+            competitors: [
+              { homeAway: 'home', score: '0', team: { id: 'sco', displayName: 'Scotland', abbreviation: 'SCO' } },
+              { homeAway: 'away', score: '0', team: { id: 'mar', displayName: 'Morocco', abbreviation: 'MAR' } },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+  const feedFor = (summary: unknown) => {
+    const fetchImpl = (async (url: string) =>
+      ({ ok: true, status: 200, json: async () => (String(url).includes('/summary') ? summary : scoreboard) }) as Response) as unknown as typeof fetch;
+    return new EspnFeed({ league: 'fifa.world', fetchImpl, replayHistory: true, commentaryLang: 'en' });
+  };
+
+  it('detects the descriptive "Hydration break" label (not just "Start Delay") as delay:start', async () => {
+    const summary = {
+      keyEvents: [{ sequence: 20, clock: { displayValue: "62'" }, type: { text: 'Hydration break' }, text: 'Hydration break' }],
+      commentary: [],
+    };
+    const feed = feedFor(summary);
+    expect(await feed.start()).toBe(true);
+    const events = await feed.poll(Date.now());
+    expect(events.find((e) => e.meta?.delay === 'start'), 'a hydration break must emit delay:start').toBeTruthy();
+  });
+
+  it('detects play resuming as delay:end (end checked before start so "break over" wins)', async () => {
+    const summary = {
+      keyEvents: [{ sequence: 21, clock: { displayValue: "64'" }, type: { text: 'Delay' }, text: 'Play resumes after the cooling break.' }],
+      commentary: [],
+    };
+    const feed = feedFor(summary);
+    expect(await feed.start()).toBe(true);
+    const events = await feed.poll(Date.now());
+    expect(events.find((e) => e.meta?.delay === 'end'), 'play resuming must emit delay:end').toBeTruthy();
+  });
+});
+
 describe('EspnFeed.rotateToNextLive — game-to-game handoff', () => {
   it('rotates from a final match to the next live fixture', async () => {
     const liveOld = {

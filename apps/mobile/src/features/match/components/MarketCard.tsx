@@ -13,7 +13,7 @@ import { money, multiple } from "@/lib/format";
 import { RAKE, bettingClosesAt, bettingSafetyBufferMs } from "@/lib/config";
 import type { MarketVM, PendingBet } from "@/state/types";
 import { BetButton } from "./BetButton";
-import { betLabels, isEventDecided, laneOf, sideDisplayLabel, withAlpha } from "../marketMeta";
+import { betLabels, isEventDecided, isWhistleBound, laneOf, sideDisplayLabel, withAlpha } from "../marketMeta";
 
 /**
  * MarketCard — the compact, one-tap betting card. A short window made catchable:
@@ -35,6 +35,7 @@ export function MarketCard({
   formatStake = money,
   fixedOdds = false,
   betDisabled = false,
+  breakActive = false,
 }: {
   market: MarketVM;
   now: number;
@@ -45,10 +46,11 @@ export function MarketCard({
   formatStake?: (n: number) => string;
   fixedOdds?: boolean;
   betDisabled?: boolean;
+  breakActive?: boolean;
 }) {
   const lane = laneOf(market.kind, market.slot, market.question);
   const labels = betLabels(market.kind, market.question);
-  const eventDecided = isEventDecided(market.kind, market.question);
+  const eventDecided = isEventDecided(market.kind);
 
   const locked = market.phase !== "open";
   const betCutoff = bettingClosesAt(market.lockAt, market.windowMs);
@@ -57,13 +59,24 @@ export function MarketCard({
   const left = Math.max(0, betCutoff - now);
   const seconds = Math.ceil(left / 1000);
   const betWindow = Math.max(1, market.windowMs - bettingSafetyBufferMs(market.windowMs));
-  const barFrac = locked || closing ? 0 : Math.max(0, Math.min(1, left / betWindow));
-  const urgent = !locked && (closing || seconds <= 3);
+  const barFrac = breakActive ? 1 : locked || closing ? 0 : Math.max(0, Math.min(1, left / betWindow));
+  const urgent = !breakActive && !locked && (closing || seconds <= 3);
   const barColor = urgent ? colors.no : lane.color;
 
   const betPlaced = pending != null && pending.marketId === market.id;
   const canBet = bettingOpen && !betPlaced;
   const overBalance = stake > balance;
+
+  // "how long is 'soon'?" — a small hint of the RESOLUTION window (the bar/count above is just
+  // the few seconds left to BET). Only on timer-settled window markets; versus/whistle markets
+  // say their own timeframe in the wording.
+  const resolveSec = Math.round((market.resolveAt - market.lockAt) / 1000);
+  const windowHint =
+    eventDecided || isWhistleBound(market.kind)
+      ? null
+      : resolveSec >= 100
+        ? `resolves over ~${Math.round(resolveSec / 60)} min`
+        : `resolves over ~${resolveSec}s`;
 
   const yesPool = market.pool * (market.yesShare / 100);
   const noPool = market.pool - yesPool;
@@ -103,13 +116,14 @@ export function MarketCard({
           <Text style={[styles.tag, { color: lane.color }]}>{lane.label}</Text>
           <View style={{ flex: 1 }} />
           <Text style={[styles.count, urgent && { color: colors.no }]}>
-            {closing ? "closing" : eventDecided ? `${seconds}s to bet` : `${seconds}s`}
+            {breakActive ? "⏸ break" : closing ? "closing" : eventDecided ? `${seconds}s to bet` : `${seconds}s`}
           </Text>
         </View>
 
         <Text style={styles.question} numberOfLines={2}>
           {market.question}
         </Text>
+        {windowHint ? <Text style={styles.window}>{windowHint}</Text> : null}
 
         {betPlaced ? (
           <BetConfirmation
@@ -194,6 +208,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
   },
   count: { ...type.mono, fontSize: 13, color: colors.textMuted },
+  window: { ...type.mono, fontSize: 11, color: colors.textFaint, marginTop: -2 },
   question: {
     ...type.title,
     fontSize: 18,

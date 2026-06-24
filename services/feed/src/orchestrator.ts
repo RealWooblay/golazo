@@ -122,8 +122,8 @@ const SCORE_COOLOFF_MS = 25_000;
  */
 const GOAL_WINDOW_COOLOFF_MS = 60_000;
 /** Per-player FORM tracking (mirrors team momentum, keyed by ESPN athlete id). */
-const PLAYER_DECAY = 0.85;
-const PLAYER_HOT_THRESHOLD = 3.0; // ~one tagged shot + follow-up threat (was 4.25)
+const PLAYER_DECAY = 0.9; // gentler decay so a player's form survives intervening neutral events
+const PLAYER_HOT_THRESHOLD = 2.5; // a single tagged shot (weight 2.8) now makes a player "hot"
 const PLAYER_OPEN_COOLDOWN_MS = 90_000; // per-player (was 150s)
 const PLAYER_BACK_TO_BACK_COOLDOWN_MS = 120_000;
 const SET_PIECE_UNTAKEN_GRACE_MS = 20_000;
@@ -163,6 +163,9 @@ const VERSUS_SLOT_INTERVAL_MS = 150_000; // ~2.5 min
 /** Hydration/cooling break can't run longer than this — auto-resume so a missed ESPN
  *  "end delay" marker never freezes the board for the rest of the match. */
 const MAX_BREAK_MS = 180_000;
+/** After a break ends, hold the NO sweep this long so a bet still in its anti-snipe delay
+ *  clears into the pool (and settles) instead of being rejected — the "bet vanishes" bug. */
+const BREAK_GRACE_MS = 6_000;
 /** Per-market bookkeeping the orchestrator keeps alongside the engine's Market. */
 interface TrackedMarket {
   marketId: string;
@@ -206,6 +209,9 @@ interface TrackedMarket {
   playerId?: string;
   /** Set-piece goal markets do not time out NO until the kick/corner is actually taken. */
   setPieceTakenAt?: number;
+  /** During a hydration break: ms of resolve time remaining when the break started, held
+   *  steady each tick so the client countdown freezes instead of draining to 0. */
+  breakFreezeMs?: number;
   /**
    * Monotonic event index at open. A market may ONLY be resolved by events strictly
    * after this — the event that opens "a shot this spell?" can never be its own YES.
@@ -318,6 +324,8 @@ export class Orchestrator {
   private breakPaused = false;
   /** Wall-clock the current break started (for the MAX_BREAK_MS auto-resume). */
   private breakStartedAt = 0;
+  /** Wall-clock the last break ended — settleExpired grace so held bets clear, not reject. */
+  private breakEndedAt = 0;
   /** Rotates momentum-market phrasing so a long spell doesn't repeat one line. */
   private momentumCounter = 0;
   /**
@@ -537,10 +545,15 @@ export class Orchestrator {
     }
 
     const game = this.feed.state();
-    // Auto-resume a hydration break if ESPN's "end delay" was missed — the board must
-    // never freeze for the rest of the match on a dropped marker.
-    if (this.breakPaused && Date.now() - this.breakStartedAt > MAX_BREAK_MS) this.endBreak();
-    this.server.broadcast({ t: 'game', game });
+    // During a hydration break, hold each market's countdown steady so it doesn't drain to 0
+    // and look hung. Auto-resume if ESPN's "end delay" was missed — the board must never
+    // freeze for the rest of the match on a dropped marker.
+    if (this.breakPaused) {
+      this.holdBreakDeadlines();
+      if (Date.now() - this.breakStartedAt > MAX_BREAK_MS) this.endBreak();
+    }
+    // Carry the break flag every tick so a (re)joining client always knows the current state.
+    this.server.broadcast({ t: 'game', game: { ...game, breakPaused: this.breakPaused } });
     this.server.roomManager.lockExpiredMarkets();
     await this.checkPeriodMarkets(game);
 
@@ -665,6 +678,15 @@ export class Orchestrator {
     // meta.delay. Pause openers + the NO sweep for the break (auto-resumes in tick()).
     if (ev.meta?.delay === 'start') this.beginBreak();
     else if (ev.meta?.delay === 'end') this.endBreak();
+    // Robust break-END: if play is clearly back (a real on-pitch event arrives) while we're
+    // still paused, ESPN's "end delay" marker was missed — resume now rather than waiting out
+    // MAX_BREAK_MS. Goals/shots/cards/corners only happen with the ball in play.
+    else if (
+      this.breakPaused &&
+      ['goal', 'shot', 'miss', 'corner', 'yellow_card', 'red_card', 'penalty'].includes(ev.type)
+    ) {
+      this.endBreak();
+    }
 
     // RESOLVER branch — an event can only ever cause YES (NO comes from the
     // per-tick deadline sweep). Resolver-ish events route here and never reach the
@@ -992,26 +1014,43 @@ export class Orchestrator {
     if (this.breakPaused) return;
     this.breakPaused = true;
     this.breakStartedAt = Date.now();
+    // Snapshot each market's remaining resolve time. holdBreakDeadlines() re-applies it every
+    // tick so the client countdown FREEZES at this value through the break instead of draining
+    // to 0 (the "market hangs at 0 during a hydration break" bug).
+    const now = this.breakStartedAt;
+    for (const t of this.tracked.values()) {
+      const m = this.engine.get(t.marketId);
+      if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
+      t.breakFreezeMs = Math.max(0, m.resolveAt - now);
+    }
+    // Tell the client immediately so it shows "Hydration break" + freezes its countdowns.
+    this.server.broadcast({ t: 'game', game: { ...this.feed.state(), breakPaused: true } });
     console.log('[golazo/feed] break_start — markets paused (cooling/hydration)');
+  }
+
+  /** Hold every paused market's countdown steady (called each tick during a break). */
+  private holdBreakDeadlines(): void {
+    const now = Date.now();
+    for (const t of this.tracked.values()) {
+      if (t.breakFreezeMs === undefined) continue;
+      const m = this.engine.get(t.marketId);
+      if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
+      this.engine.extendResolve(t.marketId, now + t.breakFreezeMs); // extend-only; keeps time left constant
+    }
   }
 
   /** Resume after a break (ESPN "end delay", or the MAX_BREAK_MS auto-resume). */
   private endBreak(): void {
     if (!this.breakPaused) return;
     this.breakPaused = false;
-    const breakMs = Date.now() - this.breakStartedAt;
-    // The countdown shouldn't drain during a break — push every open/locked market's resolve
-    // deadline forward by however long the break lasted, so a market doesn't settle the instant
-    // play resumes (it gets back exactly the time the break ate). settleExpired was paused for
-    // the break, so nothing resolved meanwhile; this keeps the post-break timers honest.
-    if (breakMs > 0) {
-      for (const t of this.tracked.values()) {
-        const m = this.engine.get(t.marketId);
-        if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
-        this.extendMarketResolve(t, m.resolveAt + breakMs);
-      }
-    }
-    console.log(`[golazo/feed] break_end — markets resumed (+${Math.round(breakMs / 1000)}s deadlines)`);
+    this.breakEndedAt = Date.now();
+    const breakMs = this.breakEndedAt - this.breakStartedAt;
+    // The per-tick holdBreakDeadlines() already pushed each market's resolveAt forward to
+    // now+remaining, so the countdown held steady through the break and now resumes draining
+    // with exactly the time it had when the break started. Just clear the freeze markers.
+    for (const t of this.tracked.values()) t.breakFreezeMs = undefined;
+    this.server.broadcast({ t: 'game', game: { ...this.feed.state(), breakPaused: false } });
+    console.log(`[golazo/feed] break_end — markets resumed (held ${Math.round(breakMs / 1000)}s)`);
   }
 
   /**
@@ -1503,6 +1542,10 @@ export class Orchestrator {
     // During a hydration/cooling break there's no play — don't let markets time out to
     // NO. Their deadlines simply wait; the NO sweep resumes when the break ends.
     if (this.breakPaused) return;
+    // Just after a break, give held bets their anti-snipe window to clear into the pool before
+    // we resolve anything — otherwise a market whose deadline matured during the break would
+    // resolve on the first post-break tick and REJECT the still-held bet (it "vanishes").
+    if (this.breakEndedAt > 0 && now - this.breakEndedAt < BREAK_GRACE_MS) return;
     for (const t of [...this.tracked.values()]) {
       if (t.isPeriod) continue; // period markets settle on their own goal / FT
       const m = this.engine.get(t.marketId);
@@ -2061,6 +2104,7 @@ export class Orchestrator {
     this.matchFinalized = false;
     this.breakPaused = false;
     this.breakStartedAt = 0;
+    this.breakEndedAt = 0;
     this.extraTimeEntered = false;
     this.periodMarketPending = false;
     this.recent.length = 0;

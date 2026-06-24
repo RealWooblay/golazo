@@ -186,6 +186,12 @@ export function useGameFeed(): GameFeedApi {
   const pendingMarketQuestionRef = useRef("");
   const gameRef = useRef<GameState | null>(null);
   gameRef.current = game;
+  // Mirror the points pools + mode so recordClosedMarket (a [] callback) can read the FINAL
+  // points pool at settle, instead of the empty real-money twin pool.
+  const pointsPoolsRef = useRef(pointsPools);
+  pointsPoolsRef.current = pointsPools;
+  const pointsModeRef = useRef(pointsMode);
+  pointsModeRef.current = pointsMode;
   // OFFLINE: the live engine + the id of the market currently on screen. Held in
   // refs so placeBet can route the human's bet through the SAME engine the loop
   // is driving, without re-running the (heavy) setup effect.
@@ -342,10 +348,13 @@ export function useGameFeed(): GameFeedApi {
   /** Snapshot a settled market for the session history rail. */
   const recordClosedMarket = useCallback((m: Market) => {
     if (!m.settlement) return;
-    const yes = m.pool.yes;
-    const no = m.pool.no;
+    // In points mode read the FINAL points pool snapshot — the real-money twin pool is empty
+    // here, which is why the settled row showed "0 pts". Points are zero-rake.
+    const ptSnap = pointsModeRef.current ? pointsPoolsRef.current[m.id] : undefined;
+    const yes = ptSnap ? ptSnap.poolYes : m.pool.yes;
+    const no = ptSnap ? ptSnap.poolNo : m.pool.no;
     const gross = yes + no;
-    const net = gross * (1 - RAKE);
+    const net = gross * (1 - (ptSnap ? 0 : RAKE));
     const p = pendingByMarketRef.current[m.id];
     const userSide = p && p.marketId === m.id ? p.side : undefined;
     const userStake = p && p.marketId === m.id ? p.stake : undefined;
@@ -800,8 +809,12 @@ export function useGameFeed(): GameFeedApi {
               const hadBet = !!pending;
               recordClosedMarket(msg.market);
               if (hadBet) pendingMarketQuestionRef.current = msg.market.question;
-              if (pending && settlement) {
-                const bettorId = pointsMode ? pointsUserId : USER_ID;
+              // REAL mode only: derive the P/L from the on-chain settlement here. In POINTS
+              // mode this market's pool is the (empty) real-money twin — the points user isn't
+              // in its payouts, so it would patch a WRONG userDelta (e.g. +0 on a win). Points
+              // P/L is owned by the dedicated points_settle handler below.
+              if (pending && settlement && !pointsMode) {
+                const bettorId = USER_ID;
                 const won =
                   settlement.outcome !== "VOID" &&
                   pending.side === settlement.outcome;
@@ -869,13 +882,14 @@ export function useGameFeed(): GameFeedApi {
               break;
             case "points_settle": {
               if (msg.userId !== pointsId) break;
-              // Cross-mode score update — applies in BOTH modes.
-              store.setPointsState(msg.balance, pointsRank);
-              // The paper-pool reveal is driven by points_settle (the paper bet's
-              // payout). In REAL mode the reveal/pending is owned by market_resolve
-              // (real-$ settlement) — points_settle there only adjusts the score,
-              // so leave the real-money pending bet alone.
-              if (!pointsMode) break;
+              // REAL mode: points_settle is only the cross-mode score — apply it now (the
+              // real-money reveal/pending is owned by market_resolve). POINTS mode: the
+              // balance is GIVEN on the REVEAL tap (the "claim"), matching real money — so we
+              // DEFER the balance update into the reveal instead of crediting on settle.
+              if (!pointsMode) {
+                store.setPointsState(msg.balance, pointsRank);
+                break;
+              }
               const p = pendingByMarketRef.current[msg.marketId];
               if (p && p.marketId === msg.marketId) {
                 // WIN is side===outcome — NOT payout>stake. In a one-sided pool (a solo
@@ -906,8 +920,12 @@ export function useGameFeed(): GameFeedApi {
                   outcome: msg.outcome,
                   won,
                   payout,
+                  claimBalance: msg.balance, // credited to the displayed balance ON REVEAL
                 });
                 clearPendingForMarket(msg.marketId);
+              } else {
+                // Nothing of ours to reveal/claim on this market — just sync the score.
+                store.setPointsState(msg.balance, pointsRank);
               }
               break;
             }
@@ -1061,8 +1079,14 @@ export function useGameFeed(): GameFeedApi {
   const acknowledgeReveal = useCallback((marketId: string) => {
     const reveal = reveals.find((item) => item.marketId === marketId);
     if (!reveal) return;
-    if (reveal.won || reveal.outcome === "VOID") {
-      if (!pointsMode) store.credit(reveal.payout);
+    if (pointsMode) {
+      // POINTS: the reveal IS the claim — credit the settled balance now (deferred from settle),
+      // so points land exactly when you tap, just like claiming a real-money payout.
+      if (reveal.claimBalance !== undefined) {
+        store.setPointsState(reveal.claimBalance, pointsRank);
+      }
+    } else if (reveal.won || reveal.outcome === "VOID") {
+      store.credit(reveal.payout);
     }
     // Write a full BetRow (payout multiple + question) into the unified ledger, so the
     // Profile screen reads the real bet, not the lossy legacy HistoryRow shape.
@@ -1096,7 +1120,7 @@ export function useGameFeed(): GameFeedApi {
     });
     setReveals((prev) => prev.filter((item) => item.marketId !== marketId));
     clearPendingForMarket(reveal.marketId);
-  }, [reveals, store, teamWord, game, pointsMode, clearPendingForMarket]);
+  }, [reveals, store, teamWord, game, pointsMode, pointsRank, clearPendingForMarket]);
 
   const activeReveal = catchingUp ? null : (reveals[0] ?? null);
   const historicMarkets = closedMarkets

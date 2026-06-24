@@ -25,20 +25,28 @@ export interface PointsIdentity {
  * Real mode keeps the engine `USER_ID` (real bets settle under it), unchanged.
  */
 export function usePointsIdentity(): PointsIdentity {
-  const { session } = useStore();
+  const { session, wallet } = useStore();
   const account = useAccount();
   const playMode = session.moneyMode === "points";
 
+  // A LEADERBOARD identity (prefixed `acct_`) is anyone with a durable on-chain identity:
+  // a signed-in Privy account OR — since every user has an embedded Solana wallet — the
+  // embedded wallet ADDRESS. That's why the leaderboard wasn't showing anyone on native: the
+  // Privy account hook is a stub there, but the embedded wallet address is available, and it's
+  // a perfectly stable per-user key. Only a truly walletless, anonymous device stays `pts_*`.
   const accountId =
     account.enabled && account.authenticated && account.id
       ? `acct_${account.id}`
-      : null;
+      : wallet.connected && wallet.address
+        ? `acct_${wallet.address}`
+        : null;
 
   const pointsUserId = accountId ?? session.pointsUserId ?? "pts_anon";
   const userId = playMode ? pointsUserId : USER_ID;
-  const name =
-    (accountId ? session.displayName || account.handle : session.displayName) ||
-    "Player";
+  const walletShort = wallet.address
+    ? `${wallet.address.slice(0, 4)}…${wallet.address.slice(-4)}`
+    : undefined;
+  const name = session.displayName || account.handle || walletShort || "Player";
 
   return { userId, pointsUserId, name, fromAccount: accountId !== null };
 }

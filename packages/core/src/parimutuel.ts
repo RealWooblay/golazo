@@ -126,7 +126,9 @@ export function settle(
       userId: b.userId,
       side: b.side,
       stake: b.stake,
-      payout: won && winningPool > 0 ? (b.stake / winningPool) * distributable : 0,
+      // Winner: split the distributable pool by stake share. A one-sided winner (nobody on
+      // the losing side) has no pot to win FROM, so they get their stake back (1.0x) — never 0.
+      payout: won ? (winningPool > 0 ? (b.stake / winningPool) * distributable : b.stake) : 0,
       won,
     };
   });

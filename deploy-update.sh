@@ -53,7 +53,9 @@ AI_RESOLVE_TIMEOUT_MS=6000
 MIN_CONFIDENCE=0.6
 BET_DELAY_MS=5000
 BET_SAFETY_BUFFER_MS=2000
-AI_ENHANCER=1
+# Enhancer OFF: market titles come from the curated, clean templates only (no AI re-wording /
+# "slop"). The director stays ON — AI still chooses WHICH market to open, not its wording.
+AI_ENHANCER=0
 AI_DIRECTOR=1
 ENV
 if [ -s "$SECRETS_TMP" ]; then cat "$SECRETS_TMP" >>/opt/golazo/services/feed/.env; fi

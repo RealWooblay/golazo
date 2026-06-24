@@ -362,6 +362,7 @@ export default function MatchScreen() {
                       (chainMode && (!m.onChain || chainPreparing || chainLocked)) ||
                       marketClosing
                     }
+                    breakActive={!!game?.breakPaused}
                   />
                 </View>
               );
@@ -388,7 +389,7 @@ export default function MatchScreen() {
               }
               return (
                 <View key={m.id} style={styles.gutter}>
-                  <LockedStrip market={m} now={now} betLabel={betLabel} />
+                  <LockedStrip market={m} now={now} betLabel={betLabel} breakActive={!!game?.breakPaused} />
                 </View>
               );
             })}

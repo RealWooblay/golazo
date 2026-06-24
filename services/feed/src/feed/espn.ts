@@ -355,37 +355,39 @@ export class EspnFeed implements FeedSource {
     const mapped = mapKeyEventType(ke);
     const typeText = (ke.type?.text ?? '').trim();
 
-    // ESPN structured stoppage markers (drinks break, injury delay, etc.)
-    if (/^(start delay|inicio retrasado)$/i.test(typeText)) {
-      this.seen.add(seqId);
-      return {
-        gameId: this.game!.eventId,
-        ts: Date.now(),
-        type: 'calm',
-        text: ke.text || 'Stoppage in play',
-        meta: {
-          sequenceId: seqId,
-          source: 'espn.keyEvent',
-          clock: ke.clock?.displayValue,
-          delay: 'start',
-          ...(ke.wallclock ? { wallclock: ke.wallclock } : {}),
-        },
-      };
-    }
-    if (/^(end delay|fin del retraso)$/i.test(typeText)) {
+    // STOPPAGE / BREAK markers. ESPN labels these inconsistently — the structured "Start Delay"
+    // / "End Delay", but in practice also descriptive "Hydration break", "Cooling break",
+    // "Drinks break", "Water break", in EITHER the type or the text field. The old exact-match
+    // on typeText stopped firing when ESPN switched to the descriptive labels, so we now keyword
+    // -match across both fields. (Deliberately NOT "stoppage" — that's added TIME, not a break.)
+    const breakText = `${typeText} ${ke.text ?? ''}`.toLowerCase();
+    const isBreakEnd =
+      /\b(end delay|fin del retraso)\b/.test(breakText) ||
+      /\bbreak (?:is )?(?:over|ended|finished)\b/.test(breakText) ||
+      /\b(?:play|match)\b[^.]*\bresume[sd]?\b/.test(breakText);
+    const isBreakStart =
+      /\b(start delay|inicio retrasado|break in play)\b/.test(breakText) ||
+      /\b(?:hydration|cooling|drinks|water)\b[^.]*\bbreak\b/.test(breakText);
+    if (isBreakEnd) {
       this.seen.add(seqId);
       return {
         gameId: this.game!.eventId,
         ts: Date.now(),
         type: 'calm',
         text: ke.text || 'Play resumes',
-        meta: {
-          sequenceId: seqId,
-          source: 'espn.keyEvent',
-          clock: ke.clock?.displayValue,
-          delay: 'end',
-          ...(ke.wallclock ? { wallclock: ke.wallclock } : {}),
-        },
+        meta: { sequenceId: seqId, source: 'espn.keyEvent', clock: ke.clock?.displayValue, delay: 'end',
+          ...(ke.wallclock ? { wallclock: ke.wallclock } : {}) },
+      };
+    }
+    if (isBreakStart) {
+      this.seen.add(seqId);
+      return {
+        gameId: this.game!.eventId,
+        ts: Date.now(),
+        type: 'calm',
+        text: ke.text || 'Break in play',
+        meta: { sequenceId: seqId, source: 'espn.keyEvent', clock: ke.clock?.displayValue, delay: 'start',
+          ...(ke.wallclock ? { wallclock: ke.wallclock } : {}) },
       };
     }
 

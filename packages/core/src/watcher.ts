@@ -17,7 +17,7 @@ const SPECS: Partial<Record<FeedEvent['type'], AttackSpec>> = {
     kind: 'penalty_scored',
     prob: 0.78,
     windowMs: 9000,
-    label: (t) => `${t} penalty — will it be SCORED?`,
+    label: (t) => `${t} penalty scored?`,
   },
   dangerous_attack: {
     // "On this play" possession market: resolves on a shot/goal (YES) or when the
@@ -25,25 +25,25 @@ const SPECS: Partial<Record<FeedEvent['type'], AttackSpec>> = {
     kind: 'chance_from_play',
     prob: 0.5,
     windowMs: 6000,
-    label: (t) => `${t} breaking forward — SHOT this move?`,
+    label: (t) => `Shot from ${t} this move?`,
   },
   attack: {
     kind: 'chance_from_play',
     prob: 0.35,
     windowMs: 6000,
-    label: (t) => `${t} on the ball — SHOT this move?`,
+    label: (t) => `Shot from ${t} now?`,
   },
   corner: {
     kind: 'goal_from_corner',
     prob: 0.15,
     windowMs: 7000,
-    label: (t) => `${t} corner — GOAL from it?`,
+    label: (t) => `Goal from ${t} corner?`,
   },
   free_kick: {
     kind: 'goal_from_free_kick',
     prob: 0.17,
     windowMs: 7000,
-    label: (t) => `${t} free kick — GOAL?`,
+    label: (t) => `Goal from ${t} free kick?`,
   },
   // NOTE: var_check is handled by `varReviewTrigger` (below), not this table — its
   // market depends on WHAT the VAR is reviewing (a possible red card vs a penalty).
@@ -71,7 +71,7 @@ function varReviewTrigger(ev: FeedEvent): MarketTrigger {
   const isCard = !PENALTY_VAR_RE.test(ev.text) && RED_CARD_VAR_RE.test(ev.text);
   return {
     gameId: ev.gameId,
-    question: isCard ? `VAR review — RED card?` : `VAR review — will a penalty be awarded?`,
+    question: isCard ? `VAR check: red card?` : `VAR check: penalty given?`,
     kind: isCard ? 'red_card_given' : 'penalty_awarded',
     windowMs: 12000,
     trueProb: isCard ? 0.45 : 0.42,
