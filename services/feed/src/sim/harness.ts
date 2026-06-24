@@ -59,10 +59,14 @@ export function simConfig(overrides: Partial<Config> = {}): Config {
     pointsBotMaxStake: 60,
     espnPollMs: 2_500,
     rake: 0.06,
+    pointsStorePath: undefined, // sims/tests are pure in-memory — never touch disk
     feeRecipient: 'sim',
     baseSeed: 0,
-    // A little bot liquidity so NO/YES settlements aren't downgraded to VOID for
-    // want of a winning pool — makes the sim's outcome mix realistic.
+    // Bots are OFF in production (the live points/real multiple must move on real
+    // user money only). The offline sim has no human bettors, so it keeps them ON as
+    // bettor stand-ins: a little liquidity so NO/YES settlements aren't downgraded to
+    // VOID for want of a winning pool, keeping the sim's outcome mix realistic.
+    liquidityBotsEnabled: true,
     botCount: 8,
     resolveTimeoutMs: 30_000,
     betDelayMs: 2_000,

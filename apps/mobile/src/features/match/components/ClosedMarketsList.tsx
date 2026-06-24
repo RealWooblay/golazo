@@ -4,7 +4,7 @@ import { colors, radius, spacing, type } from "@/theme";
 import { Text } from "@/ui";
 import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
 import type { BetRow, ClosedMarketVM } from "@/state/types";
-import { outcomeDisplayLabel, sideDisplayLabel } from "../marketMeta";
+import { resultBadgeLabel, sideDisplayLabel } from "../marketMeta";
 
 function userResult(
   m: ClosedMarketVM,
@@ -83,10 +83,18 @@ export function ClosedMarketsList({
         {markets.map((m) => {
           const bet = betByMarket.get(m.marketId);
           const result = userResult(m, bet);
-          const voided = m.outcome === "VOID";
-          const yesWon = m.outcome === "YES";
-          const tint = voided ? colors.cyan : yesWon ? colors.yes : colors.no;
-          const label = outcomeDisplayLabel(m.outcome, m.kind, m.question);
+          // Badge = the market's verdict (YES/NO/team/VOID), COLOURED BY THE USER'S RESULT
+          // (won = green, lost = red, void = cyan) so it agrees with the row border. Markets
+          // you didn't bet stay neutral — a NO you never touched shouldn't read as a loss.
+          const tint =
+            result === "won"
+              ? colors.yes
+              : result === "lost"
+                ? colors.no
+                : result === "void"
+                  ? colors.cyan
+                  : colors.textFaint;
+          const label = resultBadgeLabel(m.outcome, m.question);
           const side = m.userSide ?? bet?.side;
           const sideLabel = side
             ? sideDisplayLabel(side, m.kind, m.question)

@@ -46,7 +46,7 @@ export function MarketCard({
   fixedOdds?: boolean;
   betDisabled?: boolean;
 }) {
-  const lane = laneOf(market.kind, market.slot);
+  const lane = laneOf(market.kind, market.slot, market.question);
   const labels = betLabels(market.kind, market.question);
   const eventDecided = isEventDecided(market.kind, market.question);
 

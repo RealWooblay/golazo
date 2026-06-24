@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>GOLAZO — UI mock</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@2.47.0/tabler-icons.min.css" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="stage">
+    <div class="phone">
+      <div class="screens">
+
+        <!-- ===== ONBOARDING ===== -->
+        <section class="screen is-active" data-screen="onboarding">
+          <div class="ob">
+            <div class="between">
+              <span class="row" style="gap:7px;"><span class="dot dot--live pulse"></span><span class="lane lane--accent">LIVE NOW</span></span>
+              <span class="dim" style="font-size:12px;font-weight:700;">3 matches</span>
+            </div>
+            <div style="margin-top:46px;">
+              <div class="ob__logo"><span class="mark"><i class="ti ti-ball-football"></i></span><span class="ob__name">GOLAZO</span></div>
+              <div class="ob__head">Bet the match.<br><span class="accent">Live.</span></div>
+              <div class="ob__sub">Read the game, call the next moment, watch it land. No pre-match — just now.</div>
+            </div>
+            <div class="card" style="margin-top:22px;">
+              <div class="between"><span class="clock muted" style="color:var(--text2);"><span class="dot dot--live pulse" style="width:7px;height:7px;"></span>67' · Algeria pressing</span><span class="num" style="font-size:13px;font-weight:700;">FRA 1 – 0 ALG</span></div>
+              <div class="between" style="margin-top:11px;padding-top:11px;border-top:1px solid var(--hairline);"><span style="font-size:13px;font-weight:700;">A goal in the next few minutes?</span><span class="lane lane--accent num" style="font-size:14px;padding:5px 9px;">2.3×</span></div>
+            </div>
+            <div class="grow"></div>
+            <button class="btn-primary" data-go="lobby"><i class="ti ti-bolt"></i>Play with points first</button>
+            <div style="text-align:center;margin-top:9px;font-size:12px;color:var(--text3);">Start now with <b style="color:var(--text2);"><span data-bal>1,284</span> points</b> · no wallet, no signup</div>
+            <div class="ob__divider"><span class="l"></span><span>or play for real</span><span class="l"></span></div>
+            <div class="ob__socials">
+              <button data-go="lobby" aria-label="Google"><i class="ti ti-brand-google"></i></button>
+              <button data-go="lobby" aria-label="Apple"><i class="ti ti-brand-apple"></i></button>
+              <button data-go="lobby" aria-label="Email"><i class="ti ti-mail"></i></button>
+              <button data-go="lobby" aria-label="Passkey"><i class="ti ti-fingerprint"></i></button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ===== LOBBY ===== -->
+        <section class="screen" data-screen="lobby">
+          <div class="appbar"><h1>Live now</h1><span class="balance-chip"><i class="ti ti-coin"></i><span data-bal>1,284</span></span></div>
+          <div class="cards" style="padding-top:0;">
+            <div class="match match--live" data-go="board">
+              <div class="between"><span class="clock"><span class="dot dot--live pulse" style="width:7px;height:7px;"></span><span data-clock>67'</span></span><span class="pill pill--accent">7 live markets</span></div>
+              <div class="match__teams"><span class="team"><span class="dot dot--home"></span>France</span><span class="num" style="font-size:18px;font-weight:700;">1 – 0</span><span class="team">Algeria<span class="dot dot--away"></span></span></div>
+              <div class="momentum" style="margin-top:11px;"><span style="width:37%;background:var(--home);"></span><span style="width:63%;background:var(--away);"></span></div>
+              <div class="dim" style="text-align:center;margin-top:6px;font-size:11px;">Algeria pressing · tap to enter</div>
+            </div>
+            <div class="match" data-go="board">
+              <div class="between"><span class="clock muted" style="color:var(--text2);"><span class="dot dot--live pulse" style="width:7px;height:7px;"></span>71'</span><span class="pill pill--neutral">5 live markets</span></div>
+              <div class="match__teams"><span class="team"><span class="dot dot--home"></span>Brazil</span><span class="num" style="font-size:18px;font-weight:700;">2 – 1</span><span class="team">Serbia<span class="dot dot--away"></span></span></div>
+            </div>
+            <div class="match" data-go="board">
+              <div class="between"><span class="clock muted" style="color:var(--text2);"><span class="dot dot--live pulse" style="width:7px;height:7px;"></span>23'</span><span class="pill pill--neutral">6 live markets</span></div>
+              <div class="match__teams"><span class="team"><span class="dot dot--home"></span>Spain</span><span class="num" style="font-size:18px;font-weight:700;">0 – 0</span><span class="team">Japan<span class="dot dot--away"></span></span></div>
+            </div>
+          </div>
+          <div class="tabbar-pad"></div>
+          <nav class="nav">
+            <button class="nav-item is-active" data-go="lobby"><i class="ti ti-bolt"></i><span>Live</span></button>
+            <button class="nav-item" data-go="friends"><i class="ti ti-users"></i><span>Friends</span></button>
+            <button class="nav-item" data-go="activity"><i class="ti ti-list"></i><span>Activity</span></button>
+            <button class="nav-item" data-go="wallet"><i class="ti ti-wallet"></i><span>Wallet</span></button>
+          </nav>
+        </section>
+
+        <!-- ===== BOARD ===== -->
+        <section class="screen" data-screen="board">
+          <div class="toast is-hidden" id="toast"></div>
+          <div class="demobar">
+            <span class="demobar__k">DEMO</span>
+            <button class="demobar__sim" id="sim"><i class="ti ti-player-play"></i>Simulate event</button>
+            <button class="demobar__sim demobar__sim--warn" id="sim-delay"><i class="ti ti-clock-exclamation"></i>Delayed feed</button>
+            <button class="demobar__reset" id="reset" aria-label="Reset"><i class="ti ti-refresh"></i></button>
+          </div>
+          <div class="appbar" style="padding:10px 16px 8px;">
+            <button class="backbtn" data-go="lobby"><i class="ti ti-chevron-left"></i></button>
+            <span class="mode-flag">PLAY · points</span>
+            <span class="balance-chip"><i class="ti ti-coin"></i><span data-bal>1,284</span></span>
+          </div>
+          <div class="match-head">
+            <div class="between"><span class="score" data-score>France 1 – 0 Algeria</span><span class="clock"><span class="dot dot--live pulse" style="width:7px;height:7px;"></span><span data-clock>67'</span></span></div>
+            <div class="momentum"><span style="width:37%;background:var(--home);"></span><span style="width:63%;background:var(--away);"></span></div>
+          </div>
+          <div class="ticker is-hidden" id="ticker"></div>
+          <div style="flex:1;overflow-y:auto;">
+            <div id="zone-open" class="cards"></div>
+            <div id="sec-locked" class="section-k is-hidden"><i class="ti ti-lock" style="font-size:13px;"></i>YOUR LIVE BETS · awaiting result</div>
+            <div id="zone-locked" class="cards" style="padding-top:0;"></div>
+            <div id="sec-results" class="section-k is-hidden"><i class="ti ti-flag-checkered" style="font-size:13px;"></i>RESULTS</div>
+            <div id="zone-results" class="cards" style="padding-top:0;"></div>
+          </div>
+          <div class="console">
+            <div class="mode-toggle">
+              <button data-mode="points" class="is-active">Points · play</button>
+              <button data-mode="real">Real · SOL</button>
+            </div>
+            <div class="stake"><span class="stake__label">STAKE</span><div class="chips" id="chips"></div><button class="stake__edit" aria-label="Custom"><i class="ti ti-pencil" style="font-size:15px;"></i></button></div>
+          </div>
+          <nav class="nav" style="position:static;">
+            <button class="nav-item is-active" data-go="board"><i class="ti ti-bolt"></i><span>Live</span></button>
+            <button class="nav-item" data-go="friends"><i class="ti ti-users"></i><span>Friends</span></button>
+            <button class="nav-item" data-go="activity"><i class="ti ti-list"></i><span>Activity</span></button>
+            <button class="nav-item" data-go="wallet"><i class="ti ti-wallet"></i><span>Wallet</span></button>
+          </nav>
+        </section>
+
+        <!-- ===== FRIENDS ===== -->
+        <section class="screen" data-screen="friends">
+          <div class="appbar"><h1>Friends</h1><span class="balance-chip"><i class="ti ti-coin"></i><span data-bal>1,284</span></span></div>
+          <div class="room-head">
+            <div class="between"><span class="room-head__name">Sunday Crew</span><span class="pill pill--neutral">pot 1,240</span></div>
+            <div class="avatars">
+              <span class="avatar" style="background:#27E08A;">Y</span>
+              <span class="avatar" style="background:#5B8DEF;">S</span>
+              <span class="avatar" style="background:#F5A524;">M</span>
+              <span class="avatar" style="background:#C77DFF;">D</span>
+              <span class="avatar" style="background:#1E2128;color:#98A0AC;">+2</span>
+            </div>
+            <div class="dim" style="margin-top:9px;font-size:12px;">Betting together on France v Algeria · everyone sees every pick</div>
+          </div>
+          <div class="section-k">LIVE IN THE ROOM</div>
+          <div id="friends-feed"></div>
+          <div class="section-k">SHARED MARKETS</div>
+          <div id="friends-board" class="cards" style="padding-top:0;"></div>
+          <button class="btn-ghost" style="margin:6px 16px 0;width:calc(100% - 32px);"><i class="ti ti-plus" style="font-size:15px;vertical-align:-2px;"></i>&nbsp; New room</button>
+          <div class="tabbar-pad"></div>
+          <nav class="nav">
+            <button class="nav-item" data-go="lobby"><i class="ti ti-bolt"></i><span>Live</span></button>
+            <button class="nav-item is-active" data-go="friends"><i class="ti ti-users"></i><span>Friends</span></button>
+            <button class="nav-item" data-go="activity"><i class="ti ti-list"></i><span>Activity</span></button>
+            <button class="nav-item" data-go="wallet"><i class="ti ti-wallet"></i><span>Wallet</span></button>
+          </nav>
+        </section>
+
+        <!-- ===== ACTIVITY ===== -->
+        <section class="screen" data-screen="activity">
+          <div class="appbar"><h1>Activity</h1></div>
+          <div class="metric-row">
+            <div class="metric"><div class="metric__k">Session P/L</div><div class="metric__v num win" id="act-pl">+0</div></div>
+            <div class="metric"><div class="metric__k">Balance</div><div class="metric__v num" data-bal>1,284</div></div>
+          </div>
+          <div class="section-k"><span class="dot dot--live pulse" style="width:6px;height:6px;"></span>LIVE · <span id="act-live-count">0</span> open</div>
+          <div id="act-live" style="padding:0 16px;"></div>
+          <div class="section-k">SETTLED</div>
+          <div id="act-settled"></div>
+          <div class="tabbar-pad"></div>
+          <nav class="nav">
+            <button class="nav-item" data-go="lobby"><i class="ti ti-bolt"></i><span>Live</span></button>
+            <button class="nav-item" data-go="friends"><i class="ti ti-users"></i><span>Friends</span></button>
+            <button class="nav-item is-active" data-go="activity"><i class="ti ti-list"></i><span>Activity</span></button>
+            <button class="nav-item" data-go="wallet"><i class="ti ti-wallet"></i><span>Wallet</span></button>
+          </nav>
+        </section>
+
+        <!-- ===== WALLET ===== -->
+        <section class="screen" data-screen="wallet">
+          <div class="appbar"><h1>Wallet</h1></div>
+          <div class="bal bal--accent">
+            <div class="between"><span class="bal__k accent">POINTS · play money</span><i class="ti ti-coin" style="font-size:18px;color:var(--accent);"></i></div>
+            <div class="bal__v num" id="wallet-points">1,284</div>
+            <button class="btn-primary" style="margin-top:12px;padding:12px 0;font-size:14px;">Top up points · free</button>
+          </div>
+          <div class="bal">
+            <div class="between"><span class="bal__k muted">REAL · on-chain</span><span class="dim row" style="gap:5px;font-size:11px;font-weight:700;"><i class="ti ti-lock" style="font-size:13px;"></i>Solana</span></div>
+            <div class="row" style="align-items:baseline;gap:8px;margin-top:6px;"><span class="bal__v" style="margin:0;"><span id="wallet-sol">0.84</span></span><span class="muted" style="font-size:15px;font-weight:700;">SOL</span><span class="dim num" style="font-size:13px;">≈ $128</span></div>
+            <div class="sides" style="margin-top:12px;"><button class="btn-ghost" style="padding:12px 0;">Deposit</button><button class="btn-ghost" style="padding:12px 0;color:var(--text2);">Withdraw</button></div>
+            <div class="addr"><span class="num">7xKq…B8yJ</span><i class="ti ti-copy dim" style="font-size:15px;"></i></div>
+          </div>
+          <div class="section-k">LEADERBOARD · this week</div>
+          <div class="lb-row"><span class="muted"><b class="dim">12</b>&nbsp;&nbsp;samir.sol</span><span class="muted num" style="font-weight:700;">+1,840</span></div>
+          <div class="lb-row lb-row--me"><span style="font-weight:700;"><b class="accent">13</b>&nbsp;&nbsp;You</span><span class="accent num" style="font-weight:700;">+1,612</span></div>
+          <div class="lb-row"><span class="muted"><b class="dim">14</b>&nbsp;&nbsp;mch_09</span><span class="muted num" style="font-weight:700;">+1,544</span></div>
+          <div class="tabbar-pad"></div>
+          <nav class="nav">
+            <button class="nav-item" data-go="lobby"><i class="ti ti-bolt"></i><span>Live</span></button>
+            <button class="nav-item" data-go="friends"><i class="ti ti-users"></i><span>Friends</span></button>
+            <button class="nav-item" data-go="activity"><i class="ti ti-list"></i><span>Activity</span></button>
+            <button class="nav-item is-active" data-go="wallet"><i class="ti ti-wallet"></i><span>Wallet</span></button>
+          </nav>
+        </section>
+
+      </div>
+    </div>
+    <div class="stage__hint">tap the live match → pick a stake → bet a side → <b>Simulate event</b> to lock &amp; resolve · try <b>Delayed feed</b> to see the anti-arb void/ignore · switch <b>Points / Real</b> &amp; <b>Friends</b></div>
+  </div>
+  <script src="engine.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

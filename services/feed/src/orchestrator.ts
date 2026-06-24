@@ -7,8 +7,7 @@
  *      • broadcast commentary
  *      • if it's an ATTACK-type "set moment":
  *          ── AI watcher (Claude) decides + phrases ──▶ MarketTrigger (or rules fallback)
- *          ── engine.openMarket(trigger) ──▶ Market
- *          ── BotSwarm fills the pool across the window
+ *          ── engine.openMarket(trigger) ──▶ Market (seeded two-sided, like the on-chain twin)
  *          ── schedule auto-lock at market.lockAt
  *          ── remember the event's sequenceId so we can correlate the resolution
  *      • if it's a GOAL/MISS resolution:
@@ -72,6 +71,7 @@ import {
   isWhichSideNextKind,
   decisiveEventTypes,
   inWhistleZone,
+  triggerWordingProblem,
 } from './ai/marketTuning';
 import {
   isGoalQuestionKind,
@@ -98,12 +98,11 @@ import { FeedServer } from './server';
 import { momentKey, parseClockKey } from './feed/espn';
 
 /**
- * Betting window for a momentum-opened market — kept SHORT (the play is live), but
- * lifted 10s→20s as the measured sweet spot: meaningfully more bettable time without
- * abandoning a snappy live window. (True 80% BETTABLE is unreachable with short windows;
- * 80%+ VISIBLE is — see the keep-alive opener + 2 lanes.)
+ * Betting window for a momentum-opened market — kept SHORT (the play is live). Capped at 8s:
+ * a snappy, fast-reaction window so you bet on the read, not after the play develops. (80%+
+ * VISIBLE coverage still comes from the keep-alive opener + 2 lanes, not a long bet window.)
  */
-const MOMENTUM_BET_WINDOW_MS = 20_000;
+const MOMENTUM_BET_WINDOW_MS = 8_000;
 /**
  * Min gap between momentum-opened markets for the SAME team. Tuned DOWN for volume
  * (momentum time-boxed markets are now the main opener path) — this just stops ONE
@@ -171,8 +170,9 @@ interface TrackedMarket {
   sequenceId: string | undefined;
   /** team the attack belongs to, so we know whose score to bump on a goal. */
   team: Team | undefined;
-  bots: BotSwarm;
-  pointsBots: PointsBotSwarm;
+  /** Liquidity-sim swarms — only present when `config.liquidityBotsEnabled` (off by default). */
+  bots?: BotSwarm;
+  pointsBots?: PointsBotSwarm;
   /** OVER/UNDER count markets: running count of qualifying events since open. */
   counter?: { countTypes: ReadonlySet<FeedEventType>; line: number; count: number };
   lockTimer: ReturnType<typeof setTimeout>;
@@ -270,6 +270,8 @@ export class Orchestrator {
   private readonly lastResolverByTeam = new Map<Team, number>();
   /** True once we've seen the clock enter extra time this match. */
   private extraTimeEntered = false;
+  /** True once full-time has swept every market (so the FT settle runs exactly once). */
+  private matchFinalized = false;
   /** Period market wanted but blocked by an active moment market — retry when clear. */
   private periodMarketPending = false;
   /** Throttle ESPN re-probes when waiting for a live game (empty/sim fallback). */
@@ -349,6 +351,7 @@ export class Orchestrator {
     this.server = new FeedServer({
       port: config.port,
       engine: this.engine,
+      pointsStorePath: this.config.pointsStorePath,
       getGame: () => this.feed.state(),
       onBet: (msg) => this.handleUserBet(msg),
       onPointsBet: (msg) => this.handlePointsBet(msg),
@@ -506,8 +509,8 @@ export class Orchestrator {
     if (this.enhancerTimer) clearInterval(this.enhancerTimer);
     if (this.directorTimer) clearInterval(this.directorTimer);
     for (const t of this.tracked.values()) {
-      t.bots.cancel();
-      t.pointsBots.cancel();
+      t.bots?.cancel();
+      t.pointsBots?.cancel();
       clearTimeout(t.lockTimer);
       if (t.chainLockTimer) clearTimeout(t.chainLockTimer);
     }
@@ -631,6 +634,20 @@ export class Orchestrator {
 
     this.recent.push(ev);
     this.commentary.push(ev); // feeds the off-path enhancer's narrative context
+
+    // TEAM ATTRIBUTION — the fix for "everything voids / goes NO". ESPN frequently omits
+    // the team on open-play shots / dangerous attacks (only goals, cards, and canonical
+    // "Corner, <Team>." lines reliably carry one). A teamless event is dropped by every
+    // team-gated resolver: versus contests never get a decisive side (→ VOID) and window
+    // markets time out (→ NO). When there's a CLEAR pressing side (the momentum bar),
+    // attribute the loose event to it — the side laying siege is overwhelmingly the one
+    // taking the shot / winning the corner. Goals and cards already carry their own team,
+    // so this only ever fills loose shots / attacks / corners.
+    if (!ev.team) {
+      const pressing = this.momentum.read().bar;
+      if (pressing) ev.team = pressing;
+    }
+
     this.bumpCountMarkets(ev); // over/under count markets: YES the instant they cross the line
     this.resolveWhichSideMarkets(ev); // which-side contests: decided by the next threat (any team)
     if (this.recent.length > 30) this.recent.shift();
@@ -671,7 +688,7 @@ export class Orchestrator {
     }
 
     if (ev.type === 'final') {
-      this.resolveOpenPeriodMarkets('NO');
+      this.finalizeMatch();
       return;
     }
 
@@ -868,7 +885,11 @@ export class Orchestrator {
     // ENHANCER: swap ONLY the human question for a richer AI line if one is pooled,
     // else keep the deterministic template. Chosen BEFORE open so the on-chain
     // question_hash matches the displayed text. Everything else stays template-decided.
-    const question = this.enhancer.pick(team, spec.kind, spec.question, Date.now());
+    const enhanced = this.enhancer.pick(team, spec.kind, spec.question, Date.now());
+    // WORDING GUARD: a window market settles on a TIMER, so the enhancer must never make it
+    // read like it settles at a whistle ("before full-time", "final whistle"). If the AI line
+    // drifts into period/whistle wording the kind doesn't have, fall back to the safe template.
+    const question = triggerWordingProblem(spec.kind, enhanced) ? spec.question : enhanced;
     const trigger: MarketTrigger = {
       gameId: game.gameId,
       question,
@@ -1276,6 +1297,17 @@ export class Orchestrator {
     const deadline = resolveDeadlineMs(trigger.kind);
     const armed: MarketTrigger = { ...trigger, slot, resolveWindowMs: deadline };
 
+    // GUARD: never open a self-contradictory market. A kind↔question mismatch (e.g. period/
+    // whistle wording — "before the final whistle" — on a TIMER-settled kind) would show the
+    // wrong label + countdown and resolve on a deadline rather than the whistle. The momentum
+    // path already substitutes a safe template; this REJECTS any other opener that drifts —
+    // notably the AI director, whose proposal question is otherwise not wording-checked.
+    const wordingIssue = triggerWordingProblem(armed.kind, armed.question, opts.isPeriod);
+    if (wordingIssue) {
+      console.warn(`[golazo/feed] market_rejected_wording ${wordingIssue}`);
+      return;
+    }
+
     console.log(
       `[golazo/feed] market_open ${opts.logLabel} resolve=${Math.round(deadline / 1000)}s ` +
         `q="${armed.question.slice(0, 60)}"`,
@@ -1308,21 +1340,26 @@ export class Orchestrator {
     this.metrics.marketsOpened++;
     this.audit.record('market_open', { question: armed.question, kind: armed.kind }, market.id);
 
-    const bots = new BotSwarm(this.engine, resolveBotConfig({ count: this.config.botCount }));
-    bots.start(market);
+    // Liquidity-simulation bots are DISABLED by default. On-chain, liquidity is real
+    // users, so the points/real parimutuel multiple must move only on real, aggregated
+    // user money. The swarms run only as a local liveliness/load aid (LIQUIDITY_BOTS=1).
+    let bots: BotSwarm | undefined;
+    let pointsBots: PointsBotSwarm | undefined;
+    if (this.config.liquidityBotsEnabled) {
+      bots = new BotSwarm(this.engine, resolveBotConfig({ count: this.config.botCount }));
+      bots.start(market);
 
-    // House-liquidity bots for the POINTS pool — random two-sided money leaning to the
-    // undervalued side so the points multiple actually MOVES (not pinned near ~1.1x).
-    const pointsBots = new PointsBotSwarm(
-      this.server.pointsManager,
-      (fx) => this.server.emitPoints(fx),
-      resolveBotConfig({
-        count: this.config.pointsBotCount,
-        minStake: this.config.pointsBotMinStake,
-        maxStake: this.config.pointsBotMaxStake,
-      }),
-    );
-    pointsBots.start(market);
+      pointsBots = new PointsBotSwarm(
+        this.server.pointsManager,
+        (fx) => this.server.emitPoints(fx),
+        resolveBotConfig({
+          count: this.config.pointsBotCount,
+          minStake: this.config.pointsBotMinStake,
+          maxStake: this.config.pointsBotMaxStake,
+        }),
+      );
+      pointsBots.start(market);
+    }
 
     const lockTimer = setTimeout(() => this.lockMarket(market.id), armed.windowMs);
 
@@ -1369,12 +1406,34 @@ export class Orchestrator {
     this.periodMarketPending = false;
   }
 
+  /**
+   * FULL TIME — settle EVERY still-open market so the match ends cleanly. Without this, only
+   * period markets resolve at the whistle; window/momentum/event/count/player/versus/set-piece
+   * markets hang unresolved, the feed goes quiet, and the client greys out waiting for
+   * resolutions that never come. Period markets settle NO (no stoppage goal); every other
+   * market had its window cut short by full-time, so it VOIDs + refunds — fair, and it avoids
+   * dumping a wall of NOs at the whistle. Runs exactly once, then pushes a final game snapshot
+   * so the client renders the full-time result instead of falling back to the offline screen.
+   */
+  private finalizeMatch(): void {
+    if (this.matchFinalized) return;
+    this.matchFinalized = true;
+    for (const t of [...this.tracked.values()]) {
+      const m = this.engine.get(t.marketId);
+      if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
+      if (t.isPeriod) this.finalizeMarket(t, 'NO');
+      else this.voidMarket(t, 'full_time');
+    }
+    this.periodMarketPending = false;
+    this.server.broadcast({ t: 'game', game: this.feed.state() });
+  }
+
   /** Lock a market: stop bots, lock the engine. The deadline sweep handles NO. */
   private lockMarket(marketId: string): void {
     const t = this.tracked.get(marketId);
     if (!t) return;
-    t.bots.cancel();
-    t.pointsBots.cancel();
+    t.bots?.cancel();
+    t.pointsBots?.cancel();
     const m = this.engine.get(marketId);
     if (m && m.status === 'open') this.engine.lock(marketId);
 
@@ -1829,6 +1888,16 @@ export class Orchestrator {
       return ev.type === 'yellow_card' || ev.type === 'red_card' || ev.type === 'card';
     }
     if (m.kind === 'goal_in_window') return ev.type === 'goal';
+    // MOMENTUM "spell" markets ("a SHOT / a SHOT or CORNER this spell?") — the question is
+    // whether the pressure produces a shot/corner at all. ESPN can't reliably attribute
+    // open-play shots, and during a side's siege the action is theirs anyway, so match
+    // EITHER team here, ABOVE the team guard: a real shot/corner inside the window is a
+    // clean YES instead of being dropped on a missing/mismatched team tag and timing out
+    // to a false NO. (This is the fix for "a corner happened but the market went red".)
+    if (m.kind === 'shot_in_window') return ev.type === 'goal' || ev.type === 'shot' || ev.type === 'miss';
+    if (m.kind === 'shot_or_corner_in_window') {
+      return ev.type === 'goal' || ev.type === 'shot' || ev.type === 'miss' || ev.type === 'corner';
+    }
     // OVER/UNDER count markets are settled by the bumpCountMarkets pass, never here.
     if (isCountKind(m.kind)) return false;
     // WHICH-SIDE-NEXT contests are settled by the dedicated resolveWhichSideMarkets pass,
@@ -1841,10 +1910,8 @@ export class Orchestrator {
       // Resolves YES only on a goal whose scorer (participants[0]) is THIS player.
       return ev.type === 'goal' && playerIdOf(ev) === t.playerId;
     }
-    if (m.kind === 'shot_in_window') return ev.type === 'goal' || ev.type === 'shot' || ev.type === 'miss';
-    if (m.kind === 'shot_or_corner_in_window') {
-      return ev.type === 'goal' || ev.type === 'shot' || ev.type === 'miss' || ev.type === 'corner';
-    }
+    // "do THEY SCORE?" stays team-bound — a goal must be the bound team's (goals always
+    // carry their team, so this resolves reliably without the loosening above).
     if (m.kind === 'score_in_window') return ev.type === 'goal';
     if (isSetPieceGoalKind(m.kind)) {
       return ev.type === 'goal' || ev.type === 'shot' || ev.type === 'miss' || ev.type === 'play_end';
@@ -1891,16 +1958,20 @@ export class Orchestrator {
   }
 
   /**
-   * VOID + refund. The ONLY caller is resetForNewMatch (a feed match-switch), so a
-   * VOID can ONLY ever mean "the match we opened this on is gone" — never "the event
-   * didn't arrive" (that's a deterministic NO via settleExpired). `cause` is recorded
-   * structurally so this invariant is auditable.
+   * VOID + refund. Callers are resetForNewMatch (feed match-switch) and finalizeMatch
+   * (full-time sweep) — a VOID here can ONLY ever mean "the match context ended before this
+   * market got a clean resolution", never "the event didn't arrive" (that's a deterministic
+   * NO via settleExpired). `cause` is recorded structurally so this invariant is auditable.
    */
   private voidMarket(target: TrackedMarket, cause = 'match_switch', commentary?: string): void {
     const seed = target.marketSeed;
     this.engine.resolve(target.marketId, 'VOID');
     this.metrics.marketsVoided++;
     this.audit.record('market_void', { cause, reason: commentary?.slice(0, 80) ?? cause }, target.marketId);
+    // Land the deferred chain-lock BEFORE settling so the operator never voids an on-chain
+    // market that's still Open to bets (a real-money bet could land after the void → stranded
+    // stake). Mirrors finalizeMarket; cleanupTracked would otherwise drop the lock unfired.
+    this.flushChainLock(target);
     this.cleanupTracked(target.marketId);
     if (seed !== undefined) void this.chain.settleMarket(seed, 'VOID');
     if (commentary) this.server.broadcast({ t: 'commentary', text: commentary, ts: Date.now() });
@@ -1987,6 +2058,7 @@ export class Orchestrator {
     this.commentary.clear();
     this.enhancer.resetForMatch(); // drop a prior fixture's pooled lines
     this.director.resetForMatch(); // drop a prior fixture's pooled proposals
+    this.matchFinalized = false;
     this.breakPaused = false;
     this.breakStartedAt = 0;
     this.extraTimeEntered = false;
@@ -2000,8 +2072,8 @@ export class Orchestrator {
   private cleanupTracked(marketId: string): void {
     const t = this.tracked.get(marketId);
     if (!t) return;
-    t.bots.cancel();
-    t.pointsBots.cancel();
+    t.bots?.cancel();
+    t.pointsBots?.cancel();
     clearTimeout(t.lockTimer);
     // Cancel any still-pending deferred chain-lock. finalizeMarket already flushed it
     // (fired) before settling; on a VOID/match-switch we simply drop it (refund anyway).
@@ -2118,11 +2190,17 @@ export class Orchestrator {
       return;
     }
 
+    // Cap the anti-snipe hold so it fires BEFORE the betting cutoff. Without this a
+    // short-window market (set pieces use a 5s window vs the 5s default hold) would clear the
+    // hold only AFTER lock, so engine.placeBet throws and every real-money bet is rejected.
+    // The cap only binds on short windows; set pieces are already arb-guarded by the
+    // timestamp taint gate, so a shorter hold there is safe.
+    const holdMs = Math.min(this.config.betDelayMs, Math.max(0, cutoff - Date.now() - 250));
     const held: HeldBet = {
       userId: msg.userId,
       side: msg.side,
       stake: msg.stake,
-      timer: setTimeout(() => this.acceptHeldBet(msg.marketId, msg.userId), this.config.betDelayMs),
+      timer: setTimeout(() => this.acceptHeldBet(msg.marketId, msg.userId), holdMs),
     };
     t.pending.set(msg.userId, held);
   }

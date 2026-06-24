@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PointsManager } from './points';
-import { PointsBotSwarm, resolveBotConfig } from './bots';
+import { PointsManager } from '../points';
+import { PointsBotSwarm, resolveBotConfig } from './index';
 import type { Market } from '@golazo/core';
 
 function fakeMarket(id: string, trueProb = 0.5): Market {
@@ -34,12 +34,12 @@ function lcg(seed: number): () => number {
   };
 }
 
-describe('points house-liquidity bots (the ~1.1x fix)', () => {
+describe('points house-liquidity bots (DISABLED by default; local liveliness aid)', () => {
   it('placeBotBet grows the pool with no balance check', () => {
     const pm = new PointsManager();
-    pm.onMarketOpen(fakeMarket('m1')); // seed 75/75
+    pm.onMarketOpen(fakeMarket('m1')); // empty pool — no house seed
     const fx = pm.placeBotBet('m1', 'YES', 40);
-    expect(fx.marketUpdate?.poolYes).toBe(75 + 40);
+    expect(fx.marketUpdate?.poolYes).toBe(40);
     expect(pm.marketImpliedYes('m1')).toBeGreaterThan(0.5); // YES now heavier
   });
 
@@ -61,9 +61,9 @@ describe('points house-liquidity bots (the ~1.1x fix)', () => {
 
       expect(updates.length).toBeGreaterThan(8); // most bots fired + broadcast
       const last = updates[updates.length - 1]!;
-      // Both sides got real bot money beyond the 75/75 seed.
-      expect(last.poolYes).toBeGreaterThan(75);
-      expect(last.poolNo).toBeGreaterThan(75);
+      // Both sides got real bot money (pool starts empty — no house seed).
+      expect(last.poolYes).toBeGreaterThan(0);
+      expect(last.poolNo).toBeGreaterThan(0);
 
       // A user's winning multiple on EITHER side is meaningful — not the pinned ~1.1x.
       const gross = last.poolYes + last.poolNo;

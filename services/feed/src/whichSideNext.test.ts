@@ -166,6 +166,24 @@ describe('which-side-next contest — the scoped decisive-event NO', () => {
       await orch.stop();
     });
 
+    // TEAM ATTRIBUTION FIX — the dominant cause of "every market voids / goes NO". ESPN
+    // frequently reports an open-play shot with NO team. With a clear pressing side, attribute
+    // the loose event to it so the contest RESOLVES instead of starving to the deadline VOID.
+    it('attributes a TEAMLESS threat to the pressing side (no more starve-to-VOID)', async () => {
+      const feed = new StubFeed();
+      const orch = new Orchestrator(simConfig(), feed);
+      const m = await openAndLockVersus(orch, feed); // momentum built on 'home'; contest team='home'
+      expect(m.team).toBe('home');
+
+      // A shot with NO team tag; 'home' is clearly pressing (the attack keeps the bar on home)
+      // → inferred to home → the home contest resolves YES instead of voiding.
+      feed.push([mk('attack', 'home'), mk('shot')]);
+      await orch.simTick();
+      const after = orch.simMarkets().find((x) => x.id === m.id)!;
+      expect(after.settlement?.outcome).toBe('YES');
+      await orch.stop();
+    });
+
     // ARB DEFENSE (verifier lens 3): once a decisive outcome is HELD (public) on an OPEN
     // market, a bet placed AFTER it must be rejected — a user who saw the result can't bet
     // the known winner during the remaining open window.
@@ -214,5 +232,47 @@ describe('which-side-next contest — the scoped decisive-event NO', () => {
       expect(after.settlement?.outcome).toBe('VOID');
       await orch.stop();
     });
+  });
+});
+
+// FULL-TIME SWEEP — the fix for "the game just stops and shows grey/offline". At the final
+// whistle EVERY still-open market must settle (period → NO, others → VOID/refund) so nothing
+// is left hanging and the client can render a clean full-time result.
+describe('full-time sweep', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('settles EVERY open/locked market at the final whistle (none left stuck)', async () => {
+    const feed = new StubFeed();
+    const orch = new Orchestrator(simConfig(), feed);
+
+    // Build up live play so a spread of markets is open/locked.
+    for (let i = 0; i < 8; i++) {
+      feed.push([mk('attack', 'home')]);
+      await orch.simTick();
+      await vi.advanceTimersByTimeAsync(9_000);
+    }
+    feed.push([mk('attack', 'home')]); // a fresh market that's definitely still live
+    await orch.simTick();
+    const liveBefore = orch.simMarkets().filter((m) => m.status === 'open' || m.status === 'locked');
+    expect(liveBefore.length, 'there should be live markets before FT').toBeGreaterThan(0);
+
+    // Full time.
+    feed.push([mk('final')]);
+    await orch.simTick();
+
+    const stuck = orch.simMarkets().filter((m) => m.status === 'open' || m.status === 'locked');
+    expect(stuck, 'no market may be left hanging at full time').toEqual([]);
+    for (const m of liveBefore) {
+      const after = orch.simMarkets().find((x) => x.id === m.id)!;
+      // None of these are period markets, so full-time refunds them (VOID), never a wall of NO.
+      expect(after.status).toBe('void');
+      expect(after.settlement?.outcome).toBe('VOID');
+    }
+    await orch.stop();
   });
 });

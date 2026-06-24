@@ -59,11 +59,12 @@ export interface PointsMarketSnapshot {
 }
 
 export function settlePointsMarket(market: PointsMarket, outcome: Outcome): Settlement {
-  const winnerStake =
-    outcome === 'YES' ? market.pool.yes : outcome === 'NO' ? market.pool.no : 0;
-  const effective: Outcome =
-    outcome !== 'VOID' && winnerStake <= 0 ? 'VOID' : outcome;
-  return settle(market.pool, market.bets, effective, POINTS_RAKE);
+  // ONE-SIDED RULE (no auto-VOID). If you back a side with no opponent:
+  //   • you WIN  → your stake straight back (1.0x — there's nothing to win FROM), and
+  //   • you're WRONG → you forfeit the stake (it's lost; the house keeps the unmatched money).
+  // Only an EXPLICIT market-level VOID (full-time cut-short, anti-arb taint, match switch)
+  // refunds — a normal YES/NO settle never refunds a loser just because they were alone.
+  return settle(market.pool, market.bets, outcome, POINTS_RAKE);
 }
 
 /**

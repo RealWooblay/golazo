@@ -65,6 +65,8 @@ export interface ServerDeps {
   getOpenGlobalMarkets?: () => Market[];
   /** Anti-latency hold before room pool bets land (mirrors orchestrator bet delay). */
   betDelayMs?: number;
+  /** Disk path for play-money points persistence (balances survive restarts). */
+  pointsStorePath?: string;
 }
 
 /** What socket belongs to which room/player (cleaned up on close). */
@@ -103,8 +105,8 @@ export class FeedServer {
    * `server.roomManager` to fire the AI relay hooks.
    */
   readonly roomManager: RoomManager;
-  /** Authoritative play-mode points + leaderboard. */
-  readonly pointsManager = new PointsManager();
+  /** Authoritative play-mode points + leaderboard (persisted across restarts). */
+  readonly pointsManager: PointsManager;
 
   /** Reverse index: points player on this socket (for targeted state on hello). */
   private readonly socketPoints = new WeakMap<WebSocket, SocketPoints>();
@@ -113,6 +115,7 @@ export class FeedServer {
   private readonly roomBetHeld = new Map<string, HeldRoomBet>();
 
   constructor(private readonly deps: ServerDeps) {
+    this.pointsManager = new PointsManager(deps.pointsStorePath);
     this.roomManager = new RoomManager({
       emit: (code, msg) => this.broadcastRoom(code, msg),
       matchId: () => this.deps.getGame().gameId,

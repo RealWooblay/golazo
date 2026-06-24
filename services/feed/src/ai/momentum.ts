@@ -120,7 +120,7 @@ function scoreWindowMinutes(): number {
  * window ("this spell" / "the next N minutes"), not a play phase, which is what
  * makes it resolve reliably under feed lag. The harder the press, the bigger the
  * ask: sustained siege opens a "to score in the next N minutes?" (score_in_window);
- * lighter pressure asks the answerable "a shot this spell?" (shot_in_window).
+ * lighter pressure asks the answerable "a shot next spell?" (shot_in_window).
  * Phrasing rotates by a counter so a long spell never repeats one line.
  *
  * The score_in_window title is CONCRETE — the "N minutes" is derived from the
@@ -151,13 +151,13 @@ export function momentumMarketSpec(
       trueProb: 0.22,
     };
   }
-  // Alternate the lighter-pressure window between the narrow "a SHOT this spell?" and
-  // the BROADER "a SHOT or CORNER this spell?" (a wider, higher-YES question) so the
+  // Alternate the lighter-pressure window between the narrow "a SHOT next spell?" and
+  // the BROADER "a SHOT or CORNER next spell?" (a wider, higher-YES question) so the
   // momentum board varies and resolves YES more often. Even counter → shot-or-corner.
   if (counter % 2 === 0) {
     const broadLines = [
-      `${teamName} on top — a SHOT or CORNER this spell?`,
-      `${teamName} pushing forward — a SHOT or CORNER this spell?`,
+      `${teamName} on top — a SHOT or CORNER next spell?`,
+      `${teamName} pushing forward — a SHOT or CORNER next spell?`,
     ];
     return {
       kind: 'shot_or_corner_in_window',
@@ -166,15 +166,15 @@ export function momentumMarketSpec(
     };
   }
   const shotLines = [
-    `${teamName} on top — a SHOT this spell?`,
+    `${teamName} on top — a SHOT next spell?`,
     `${teamName} building — get a SHOT away soon?`,
-    `${teamName} pushing forward — a SHOT this spell?`,
+    `${teamName} pushing forward — a SHOT next spell?`,
     `${teamName} pressing — another SHOT incoming?`,
     `${teamName} finding rhythm — do they create a SHOT?`,
     `${teamName} pinning them back — SHOT before it clears?`,
     `${teamName} on the front foot — a SHOT coming?`,
     `${teamName} keeping it alive — do they test the keeper?`,
-    `${teamName} probing again — SHOT from this spell?`,
+    `${teamName} probing again — SHOT from next spell?`,
     `${teamName} carrying momentum — a SHOT soon?`,
     `${teamName} in the box — do they get a chance?`,
     `${teamName} hungry here — SHOT on the way?`,

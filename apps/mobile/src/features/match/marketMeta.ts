@@ -21,7 +21,7 @@ export function withAlpha(hex: string, a: number): string {
  * The lane a market belongs to — the small tag + accent colour on the card and the
  * locked strip. Derived from the engine `kind` (precise), falling back to the slot.
  */
-export function laneOf(kind?: string, slot?: MarketSlot): Lane {
+export function laneOf(kind?: string, slot?: MarketSlot, question?: string): Lane {
   const k = kind ?? "";
   if (k === "player_to_score") return { label: "Player", color: colors.gold };
   if (k === "shot_in_window" || k === "score_in_window" || k === "shot_or_corner_in_window")
@@ -34,7 +34,8 @@ export function laneOf(kind?: string, slot?: MarketSlot): Lane {
   // Which-side-next CONTEST lane (next shot/corner/goal/card — which team?).
   if (k === "next_shot" || k === "next_corner" || k === "next_goal" || k === "next_card")
     return { label: "Next", color: colors.cyan };
-  if (k === "goal_in_stoppage") return { label: "Before half", color: VIOLET };
+  if (k === "goal_in_stoppage")
+    return { label: isFullTimeStoppage(question) ? "Before FT" : "Before half", color: VIOLET };
   if (k === "goal_in_extra_time") return { label: "Extra time", color: VIOLET };
   if (k === "penalty_scored") return { label: "Penalty", color: colors.cyan };
   if (k === "penalty_awarded" || k === "red_card_given")
@@ -76,6 +77,23 @@ export function outcomeDisplayLabel(
 ): string {
   if (outcome === "VOID") return "VOID";
   return sideDisplayLabel(outcome, kind, question);
+}
+
+/**
+ * Clean SETTLED verdict for the result badge. The badge is the market's answer, not a
+ * description of the event: versus/"who next" markets show the winning TEAM (the real
+ * answer), and everything else collapses to a plain YES / NO / VOID — never the
+ * event-verb labels like "No goal" / "Shot/corner" (those belong on the live bet
+ * buttons via betLabels, where they read as choices, not as a result).
+ */
+export function resultBadgeLabel(
+  outcome: "YES" | "NO" | "VOID",
+  question?: string,
+): string {
+  if (outcome === "VOID") return "VOID";
+  const versus = versusLabelsFromQuestion(question);
+  if (versus) return outcome === "YES" ? versus.yes : versus.no; // the winning team
+  return outcome; // "YES" / "NO"
 }
 
 /** The honest YES / NO verdict words — what the bet is actually ON, per market. */
@@ -129,8 +147,16 @@ export function isEventDecided(kind?: string, question?: string): boolean {
   );
 }
 
-export function whistleLabel(kind?: string): string {
-  return kind === "goal_in_extra_time" ? "until full-time" : "until half-time";
+/** A 2nd-half stoppage market reads "…before full-time?"; a 1st-half one "…before half-time?". */
+function isFullTimeStoppage(question?: string): boolean {
+  return /full[- ]?time|\bFT\b|final whistle/i.test(question ?? "");
+}
+
+export function whistleLabel(kind?: string, question?: string): string {
+  if (kind === "goal_in_extra_time") return "until full-time";
+  // goal_in_stoppage covers BOTH halves — the boundary is in the question, not the kind.
+  if (isFullTimeStoppage(question)) return "until full-time";
+  return "until half-time";
 }
 
 export function eventDecidedLabel(kind?: string): string {

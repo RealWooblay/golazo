@@ -673,6 +673,12 @@ export function useGameFeed(): GameFeedApi {
 
     const onDrop = (reason: string) => {
       if (cancelled) return;
+      // Game's over: a quiet/closed socket at full time is the END, not a fault. Keep the
+      // clean full-time card instead of painting a grey "reconnecting…" banner over it.
+      if (gameRef.current?.status === "final") {
+        setFallbackNotice(null);
+        return;
+      }
       const pendingBets = Object.values(pendingByMarketRef.current).filter(
         (p): p is PendingBet => !!p,
       );
@@ -723,6 +729,16 @@ export function useGameFeed(): GameFeedApi {
           switch (msg.t) {
             case "game":
               setGame((prev) => {
+                // Hold full time: once this match is final, ignore the server's post-match
+                // EmptyFeed/reset frame (empty or same gameId) so the clean full-time card
+                // isn't wiped back to a grey idle board. Only a genuinely new fixture
+                // (a different, non-empty gameId) takes over.
+                if (
+                  prev?.status === "final" &&
+                  (!msg.game.gameId || msg.game.gameId === prev.gameId)
+                ) {
+                  return prev;
+                }
                 if (prev?.gameId && prev.gameId !== msg.game.gameId) {
                   setClosedMarkets([]);
                   setReveals([]);

@@ -20,16 +20,19 @@ export function LockedStrip({
   now: number;
   betLabel?: string;
 }) {
-  const lane = laneOf(market.kind, market.slot);
+  const lane = laneOf(market.kind, market.slot, market.question);
   const whistle = isWhistleBound(market.kind);
   const eventDecided = isEventDecided(market.kind, market.question);
   const left = Math.max(0, market.resolveAt - now);
   const mins = Math.floor(left / 60000);
   const secs = Math.floor((left % 60000) / 1000);
+  const timeLeft = mins > 0 ? `${mins}m` : `${Math.ceil(left / 1000)}s`;
   const countdown = whistle
-    ? whistleLabel(market.kind)
+    ? whistleLabel(market.kind, market.question)
     : eventDecided
-      ? eventDecidedLabel(market.kind)
+      ? // versus/next markets resolve on the next event — but they VOID/refund at the deadline,
+        // so show that remaining time too (don't let it expire with no warning).
+        `${eventDecidedLabel(market.kind)} · ${timeLeft}`
       : mins > 0
         ? `${mins}:${String(secs).padStart(2, "0")}`
         : `${Math.ceil(left / 1000)}s`;

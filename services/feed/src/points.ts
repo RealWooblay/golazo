@@ -22,18 +22,8 @@ import {
   type Side,
 } from '@golazo/core';
 import { bettingClosesAt } from './ai/marketTuning';
-
-/**
- * House liquidity (in points) seeded into EACH paper market when it opens, split by
- * the model's YES probability. Without it a solo bettor faces an EMPTY pool: a
- * winning bet only refunds the stake (there's no opposing money to win FROM) and the
- * displayed odds are fictional. The seed gives every market a real two-sided book
- * from bet one — live odds that actually match the payout — without ever crediting a
- * real player: the seed lives only in the pool totals, never as a `bets` entry, so on
- * settle the house's losing-side stake funds the winners and its winning-side stake is
- * simply absorbed. Sized for a 500-point bankroll and 10–100 stakes.
- */
-export const HOUSE_SEED_POINTS = 150;
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 export interface PointsEffects {
   state?: { userId: string; balance: number; rank: number };
@@ -58,6 +48,65 @@ export class PointsManager {
   private readonly heldStakes = new Map<string, { userId: string; side: Side; stake: number }>();
   /** Monotonic id source for house-liquidity bot bets. */
   private botSeq = 0;
+
+  /**
+   * Optional disk path for balance persistence. Without it the leaderboard is pure
+   * in-memory and a process restart/redeploy resets everyone to START — which is the
+   * "I won, then my points reset" bug. With it, balances survive restarts: loaded on
+   * construct, snapshotted on a timer and immediately after every settlement.
+   */
+  constructor(private readonly storePath?: string) {
+    this.load();
+    if (storePath) {
+      // Tiny file, few players — a periodic snapshot is plenty. unref'd so it never
+      // keeps the process alive (settlements flush eagerly anyway).
+      const timer = setInterval(() => this.flush(), 5_000);
+      if (typeof timer.unref === 'function') timer.unref();
+    }
+  }
+
+  private load(): void {
+    if (!this.storePath || !existsSync(this.storePath)) return;
+    try {
+      const rows = JSON.parse(readFileSync(this.storePath, 'utf8')) as PointsPlayer[];
+      for (const p of rows) {
+        if (!p?.userId) continue;
+        this.players.set(p.userId, {
+          userId: p.userId,
+          name: p.name || 'Player',
+          balance: Number.isFinite(p.balance) ? p.balance : POINTS_START_BALANCE,
+          connected: false,
+          joinedAt: p.joinedAt || Date.now(),
+        });
+      }
+      console.log(`[golazo/points] restored ${this.players.size} balances from ${this.storePath}`);
+    } catch (e) {
+      console.warn(`[golazo/points] could not read points store: ${(e as Error).message}`);
+    }
+  }
+
+  /** Snapshot balances to disk (periodic + right after each settlement). No-op if unconfigured. */
+  flush(): void {
+    if (!this.storePath) return;
+    try {
+      mkdirSync(dirname(this.storePath), { recursive: true });
+      // Persist ONLY logged-in players (acct_*) — anonymous device sessions are ephemeral and
+      // shouldn't accumulate in the store. Their balances survive a reconnect within a process
+      // (in-memory), but a logged-in account is the durable, cross-device identity.
+      const rows = [...this.players.values()]
+        .filter((p) => p.userId.startsWith('acct_'))
+        .map((p) => ({
+          userId: p.userId,
+          name: p.name,
+          balance: p.balance,
+          joinedAt: p.joinedAt,
+          connected: false,
+        }));
+      writeFileSync(this.storePath, JSON.stringify(rows));
+    } catch (e) {
+      console.warn(`[golazo/points] could not persist points store: ${(e as Error).message}`);
+    }
+  }
 
   private holdKey(marketId: string, userId: string): string {
     return `${marketId}:${userId}`;
@@ -119,15 +168,14 @@ export class PointsManager {
 
   onMarketOpen(m: Market): void {
     if (this.markets.has(m.id)) return;
-    // Seed house liquidity split by the model's YES prob so the book is two-sided
-    // and a winner is paid real points out of the house's opposing stake. Clamp the
-    // prob so neither side is ever starved (which would mean absurd one-sided odds).
-    const p = Math.min(0.85, Math.max(0.15, m.trueProb || 0.5));
-    const seedYes = Math.round(HOUSE_SEED_POINTS * p);
+    // NO house seed. The points pool is PURE real user money: the multiple moves only as
+    // players back each side (parimutuel), exactly mirroring the on-chain program. A market
+    // that draws money on only one side settles VOID/refund (see settlePointsMarket) — a
+    // winner is never paid out of phantom house liquidity.
     this.markets.set(m.id, {
       id: m.id,
       status: 'open',
-      pool: { yes: seedYes, no: HOUSE_SEED_POINTS - seedYes },
+      pool: { yes: 0, no: 0 },
       openedAt: m.openedAt,
       lockAt: m.lockAt,
       windowMs: m.windowMs,
@@ -174,6 +222,7 @@ export class PointsManager {
     pm.outcome = settlement.outcome;
     pm.status = settlement.outcome === 'VOID' ? 'void' : 'resolved';
 
+    this.flush(); // persist winnings immediately — a redeploy must never reset a win
     return {
       settled,
       leaderboard: this.leaderboard(),
@@ -210,6 +259,7 @@ export class PointsManager {
     }
 
     if (settled.length === 0) return {};
+    this.flush(); // persist cross-mode points moved by a real-bet settlement
     return { settled, leaderboard: this.leaderboard() };
   }
 
@@ -335,8 +385,14 @@ export class PointsManager {
     return { marketUpdate: snapshotPointsMarket(pm) };
   }
 
+  /**
+   * Only LOGGED-IN players appear on the leaderboard. A logged-in (Privy) user's id is prefixed
+   * `acct_` (see the mobile usePointsIdentity); an anonymous device player (`pts_*`) can still
+   * play + see their own balance, but is never ranked. So "not logged in → not on the board".
+   */
   leaderboard(limit = 50): PointsPlayer[] {
     return [...this.players.values()]
+      .filter((p) => p.userId.startsWith('acct_'))
       .sort((a, b) => b.balance - a.balance || a.joinedAt - b.joinedAt)
       .slice(0, limit);
   }

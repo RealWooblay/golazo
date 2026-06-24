@@ -37,15 +37,18 @@ export interface MarketTypeKnob {
  * feed). Too short → a real goal lands after we've already settled NO.
  */
 export const MARKET_TYPES: Record<OpenableType, MarketTypeKnob> = {
-  penalty: { tier: 'set_piece', betWindowMs: 12_000, resolveWindowMs: 50_000 },
-  corner: { tier: 'set_piece', betWindowMs: 12_000, resolveWindowMs: 90_000 },
+  // Set pieces are FAST-REACTION markets: the short 5s betting window is deliberate — it
+  // closes quickly so a bettor can't watch the kick develop and bet the known outcome.
+  // (12s let the play resolve inside the window → gameable.)
+  penalty: { tier: 'set_piece', betWindowMs: 5_000, resolveWindowMs: 50_000 },
+  corner: { tier: 'set_piece', betWindowMs: 5_000, resolveWindowMs: 90_000 },
   // A free kick is a set piece like any other — if one is awarded and the slot is
   // free, open a market. The only free kick we DON'T open is a clearly defensive /
   // own-half one (filtered in the watcher); everything else just opens, no AI needed.
-  free_kick: { tier: 'set_piece', betWindowMs: 12_000, resolveWindowMs: 90_000 },
+  free_kick: { tier: 'set_piece', betWindowMs: 5_000, resolveWindowMs: 90_000 },
   // VAR reviews take real time (often 60–120s + feed lag) — a short window made
   // card/penalty markets settle NO before the decision was even reported. Wait it out.
-  var_check: { tier: 'set_piece', betWindowMs: 14_000, resolveWindowMs: 120_000 },
+  var_check: { tier: 'set_piece', betWindowMs: 8_000, resolveWindowMs: 120_000 },
 };
 
 export function knobFor(type: FeedEvent['type']): MarketTypeKnob | undefined {
@@ -160,7 +163,7 @@ export const COUNT_WINDOW_MS = 240_000; // 4-minute counting window
 export const COUNT_LAG_MS = 60_000; // + ~55–60s feed lag before NO
 
 /** Bet window for heartbeat-opened event/count/versus markets. */
-export const HEARTBEAT_BET_WINDOW_MS = 10_000;
+export const HEARTBEAT_BET_WINDOW_MS = 8_000;
 
 function pickRotated<T>(variants: readonly T[], seed: number): T {
   return variants[Math.abs(seed) % variants.length]!;
@@ -215,36 +218,40 @@ export function buildEventSlotTrigger(gameId: string, counter: number): MarketTr
   };
 }
 
-const CORNER_COUNT_QUESTIONS = [
-  (line: number) => `More than ${line} corners in the next few minutes?`,
-  (line: number) => `${line + 1}+ corners in this spell?`,
-  (line: number) => `Corner count — over ${line} soon?`,
-  (line: number) => `Will we see ${line + 1} corners pile up?`,
-  (line: number) => `Pressure building — ${line + 1}+ corners coming?`,
-  (line: number) => `Over ${line} corners before the spell cools?`,
-  (line: number) => `Set-piece barrage — ${line + 1} corners soon?`,
-  (line: number) => `Camped in their half — ${line + 1}+ corners?`,
-] as const;
+// `mins` = the real counting window (COUNT_WINDOW_MS), so "the next N minutes" matches when
+// the market actually settles instead of the vague "few minutes" (which read shorter than the
+// real ~4-min window). Spell-relative variants ignore mins.
+const CORNER_COUNT_QUESTIONS: ((line: number, mins: number) => string)[] = [
+  (line, mins) => `More than ${line} corners in the next ${mins} minutes?`,
+  (line) => `${line + 1}+ corners in this spell?`,
+  (line, mins) => `Corner count — over ${line} in ${mins} min?`,
+  (line) => `Will we see ${line + 1} corners pile up?`,
+  (line, mins) => `Pressure building — ${line + 1}+ corners in ${mins} min?`,
+  (line) => `Over ${line} corners before the spell cools?`,
+  (line) => `Set-piece barrage — ${line + 1} corners this spell?`,
+  (line) => `Camped in their half — ${line + 1}+ corners?`,
+];
 
-const SHOT_COUNT_QUESTIONS = [
-  (line: number) => `More than ${line} shots in the next few minutes?`,
-  (line: number) => `${line + 1}+ shots in this spell?`,
-  (line: number) => `Shot count — over ${line} soon?`,
-  (line: number) => `Will they rack up ${line + 1} shots?`,
-  (line: number) => `Peppering the goal — ${line + 1}+ shots coming?`,
-  (line: number) => `Over ${line} shots before the spell cools?`,
-  (line: number) => `Keeper busy — ${line + 1} shots soon?`,
-  (line: number) => `Throwing everything at it — ${line + 1}+ shots?`,
-] as const;
+const SHOT_COUNT_QUESTIONS: ((line: number, mins: number) => string)[] = [
+  (line, mins) => `More than ${line} shots in the next ${mins} minutes?`,
+  (line) => `${line + 1}+ shots in this spell?`,
+  (line, mins) => `Shot count — over ${line} in ${mins} min?`,
+  (line) => `Will they rack up ${line + 1} shots?`,
+  (line, mins) => `Peppering the goal — ${line + 1}+ shots in ${mins} min?`,
+  (line) => `Over ${line} shots before the spell cools?`,
+  (line) => `Keeper busy — ${line + 1} shots this spell?`,
+  (line) => `Throwing everything at it — ${line + 1}+ shots?`,
+];
 
 /** Rotating count-slot heartbeat — corners vs shots, varied copy. */
 export function buildCountSlotTrigger(gameId: string, counter: number): MarketTrigger {
   const isCorners = counter % 2 === 0;
   const kind = isCorners ? 'over_corners' : 'over_shots';
   const line = countLine(kind);
+  const mins = Math.round(COUNT_WINDOW_MS / 60_000);
   const q = isCorners
-    ? pickRotated(CORNER_COUNT_QUESTIONS, counter)(line)
-    : pickRotated(SHOT_COUNT_QUESTIONS, counter)(line);
+    ? pickRotated(CORNER_COUNT_QUESTIONS, counter)(line, mins)
+    : pickRotated(SHOT_COUNT_QUESTIONS, counter)(line, mins);
   return {
     gameId,
     question: q,
@@ -343,6 +350,29 @@ export function isWhichSideNextKind(kind: string): boolean {
     kind === 'next_goal' ||
     kind === 'next_card'
   );
+}
+
+/**
+ * Guard that a market's QUESTION matches its KIND's resolution model. The client derives the
+ * countdown label from the kind: period/stoppage kinds show "until full-time/half-time" (they
+ * settle on the whistle), everything else shows a numeric timer (it settles on a deadline). So
+ * a NON-period kind worded with a period boundary ("before full-time", "final whistle", "in
+ * stoppage") is a lie — it reads like it settles at the whistle but actually runs on a timer.
+ * That mismatch is the "verbage is messed up" bug. Returns a problem string, or null if the
+ * wording is consistent. Conservative: only flags the clear period/whistle contradiction, so
+ * legitimate phrasing is never flagged.
+ */
+export function triggerWordingProblem(kind: string, question: string, isPeriod = false): string | null {
+  const q = question.toLowerCase();
+  const periodWorded =
+    /final whistle|before (?:the )?full[- ]?time|before (?:the )?half[- ]?time|before the whistle|in stoppage|added time|in extra[- ]?time|\bin et\b|equali[sz]er in et/.test(
+      q,
+    );
+  const isPeriodKind = isPeriod || kind === 'goal_in_stoppage' || kind === 'goal_in_extra_time';
+  if (periodWorded && !isPeriodKind) {
+    return `period/whistle wording on non-period kind '${kind}': "${question}"`;
+  }
+  return null;
 }
 
 /** Feed event types that DECIDE a which-side-next market (whichever team does it first). */
@@ -738,8 +768,8 @@ export function confidenceWindowMs(baseMs: number, confidence: number, game: Gam
 // ───────────────────────────────────────────────────────────────────────────
 export const PERIOD_MARKET = {
   enabled: true,
-  /** Bet window — still snappy (you can't bet once it locks), per the "10s to bet" idea. */
-  betWindowMs: 12000,
+  /** Bet window — snappy (you can't bet once it locks), capped at the 8s fast-reaction max. */
+  betWindowMs: 8000,
   /** Safety net after lock — primary settlement is on matching goal or full time. */
   resolveWindowMs: 25 * 60_000,
   /** Only when the game is this close (≤ N goals) — a blowout isn't bettable. */
@@ -781,9 +811,11 @@ const HT_STOPPAGE_QUESTIONS = [
   'Stoppage time — will it go in before half-time?',
 ];
 
+// Every FT variant must NAME full-time/FT so the client labels it "Before FT" (not "Before
+// half") — a bare "before the whistle" is ambiguous between the two stoppage periods.
 const FT_STOPPAGE_QUESTIONS = [
   'Goal before full-time?',
-  'Added time — goal before the whistle?',
+  'Added time — goal before full-time?',
   'Late twist — goal before FT?',
   'Stoppage time — one more before full-time?',
 ];

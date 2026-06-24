@@ -10,6 +10,8 @@
 
 import { WS_DEFAULT_PORT } from '@golazo/core';
 import { FeedChainOperator } from './chain';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 /** How the feed source is selected (see src/feed/index.ts). */
 export type FeedMode = 'auto' | 'sim' | 'espn' | 'replay';
@@ -87,6 +89,15 @@ export interface Config {
   /** How often to poll the ESPN summary endpoint while a game is live (ms). */
   espnPollMs: number;
 
+  /**
+   * Disk path for PLAY-MONEY points persistence. Balances + the leaderboard are loaded
+   * from here on boot and snapshotted on settle, so a restart/redeploy never resets a
+   * player's points. Defaults to `~/.golazo/points.json` (outside the deploy bundle so a
+   * tarball redeploy can't wipe it); set POINTS_STORE_PATH to a persistent volume to be
+   * sure. Set empty to disable (pure in-memory).
+   */
+  pointsStorePath: string | undefined;
+
   /** Operator rake (house edge) handed to the MarketEngine. Default 6%. This IS the trade fee. */
   rake: number;
 
@@ -96,11 +107,20 @@ export interface Config {
   /** Deterministic seed base for the engine / sim, so runs are reproducible. */
   baseSeed: number;
 
-  /** How many simulated bots trickle bets into each market (real-money engine pool). */
+  /**
+   * MASTER SWITCH for the liquidity-simulation bots (both the engine swarm and the
+   * points swarm). DEFAULT OFF. On-chain liquidity is real users, so the points/real
+   * parimutuel multiple must move only on real, aggregated user money. Enable
+   * (`LIQUIDITY_BOTS=1`) only as a local liveliness / load-testing aid. When off, the
+   * bot counts below are ignored and no synthetic money ever enters any pool.
+   */
+  liquidityBotsEnabled: boolean;
+
+  /** How many simulated bots trickle bets into each market (real-money engine pool).
+   *  Only used when `liquidityBotsEnabled`. */
   botCount: number;
 
-  /** House-liquidity bots for the POINTS pool — random two-sided money so the points
-   *  multiple actually moves (fixes the always-~1.1x pin). Count + stake range. */
+  /** House-liquidity bots for the POINTS pool. Only used when `liquidityBotsEnabled`. */
   pointsBotCount: number;
   pointsBotMinStake: number;
   pointsBotMaxStake: number;
@@ -216,9 +236,14 @@ export const config: Config = {
   replayEventId: process.env.REPLAY_EVENT_ID?.trim() || '760437', // Croatia at England (WC)
   forceEventId: process.env.GOLAZO_EVENT_ID?.trim() || undefined,
   espnPollMs: num('ESPN_POLL_MS', 2500),
+  pointsStorePath:
+    process.env.POINTS_STORE_PATH === ''
+      ? undefined
+      : process.env.POINTS_STORE_PATH?.trim() || join(homedir(), '.golazo', 'points.json'),
   rake: num('RAKE', 0.06),
   feeRecipient: process.env.FEE_RECIPIENT?.trim() || '5kBBKSV2EUyLsa2sXoK9E1VVzmDXCaHnQiMfz8B8yJtP',
   baseSeed: num('BASE_SEED', 12345),
+  liquidityBotsEnabled: bool('LIQUIDITY_BOTS'),
   botCount: num('BOT_COUNT', 24),
   pointsBotCount: num('POINTS_BOT_COUNT', 12),
   pointsBotMinStake: num('POINTS_BOT_MIN_STAKE', 8),
@@ -247,7 +272,7 @@ export function describeConfig(c: Config): string {
     `espnLang=${c.espnCommentaryLang}`,
     `watcher=${c.anthropicApiKey ? `ai(${c.aiModel})` : 'rules(no ANTHROPIC_API_KEY)'}`,
     `rake=${c.rake} (fee→${c.feeRecipient.slice(0, 6)}…)`,
-    `bots=${c.botCount}`,
+    `bots=${c.liquidityBotsEnabled ? `on(${c.botCount}/${c.pointsBotCount})` : 'off'}`,
     describeChain(c),
   ].join(' ');
 }
