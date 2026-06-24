@@ -63,6 +63,10 @@ rm -f "$SECRETS_TMP"
 if [ -f /opt/golazo/services/feed/.env.deploy ]; then
   cat /opt/golazo/services/feed/.env.deploy >>/opt/golazo/services/feed/.env
 fi
+# FINAL authority: the enhancer stays OFF no matter what a box-local .env.deploy says.
+# Curated clean titles only — the director (which market to open) still respects .env.deploy.
+sed -i '/^AI_ENHANCER=/d' /opt/golazo/services/feed/.env
+echo 'AI_ENHANCER=0' >>/opt/golazo/services/feed/.env
 
 # Log AI layer state (never print the key).
 HAS_KEY=0
