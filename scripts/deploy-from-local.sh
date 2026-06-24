@@ -12,6 +12,7 @@ cd "$ROOT"
 tar -czf "$TARBALL" \
   --exclude=node_modules \
   --exclude=.git \
+  --exclude='trailer' \
   --exclude='programs/golazo-parimutuel/target/debug' \
   --exclude='apps/mobile/dist' \
   --exclude='apps/mobile/.expo' \
