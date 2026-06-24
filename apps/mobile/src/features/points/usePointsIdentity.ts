@@ -46,7 +46,13 @@ export function usePointsIdentity(): PointsIdentity {
   const walletShort = wallet.address
     ? `${wallet.address.slice(0, 4)}…${wallet.address.slice(-4)}`
     : undefined;
-  const name = session.displayName || account.handle || walletShort || "Player";
+  // PUBLIC leaderboard name — NEVER the email/phone from `account.handle` (that doxxes the
+  // user). Use a chosen display name, else the truncated wallet address (public, non-PII),
+  // else a stable handle from the account id. The server also sanitizes as a backstop.
+  const idHandle = accountId
+    ? `Player ${accountId.replace(/[^a-zA-Z0-9]/g, "").slice(-4).toUpperCase()}`
+    : undefined;
+  const name = session.displayName || walletShort || idHandle || "Player";
 
   return { userId, pointsUserId, name, fromAccount: accountId !== null };
 }

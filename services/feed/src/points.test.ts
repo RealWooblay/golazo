@@ -1,7 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { PointsManager } from './points';
+import { PointsManager, safeDisplayName } from './points';
 import type { Market } from '@golazo/core';
 import { POINTS_START_BALANCE } from '@golazo/core';
+
+describe('safeDisplayName — leaderboard must never doxx a user', () => {
+  it('replaces an email with a stable anonymous handle', () => {
+    const out = safeDisplayName('player@example.com', 'acct_did:privy:abcd1234');
+    expect(out).not.toContain('@');
+    expect(out).toBe('Player 1234');
+  });
+  it('catches a long email that would survive truncation', () => {
+    expect(safeDisplayName('a-really-long-personal-email-address@example.com', 'acct_xZ9q')).toBe('Player XZ9Q');
+  });
+  it('replaces a phone number', () => {
+    expect(safeDisplayName('+1 (415) 555-0199', 'acct_wallet9999')).toBe('Player 9999');
+  });
+  it('lets a real chosen handle through (trimmed, capped, hyphens/spaces kept)', () => {
+    expect(safeDisplayName('  Goal-Machine 7  ', 'acct_x')).toBe('Goal-Machine 7');
+    expect(safeDisplayName('x'.repeat(40), 'acct_x')).toHaveLength(24);
+  });
+  it('derives a handle for empty or bare "Player"', () => {
+    expect(safeDisplayName('', 'acct_AAbb12cd')).toBe('Player 12CD');
+    expect(safeDisplayName('player', 'acct_AAbb12cd')).toBe('Player 12CD');
+  });
+});
 
 function fakeMarket(id: string, status: Market['status'] = 'open'): Market {
   const now = Date.now();
@@ -24,6 +46,17 @@ function fakeMarket(id: string, status: Market['status'] = 'open'): Market {
     resolveAt: now + 90_000,
   };
 }
+
+describe('PointsManager — public leaderboard carries no PII', () => {
+  it('an email registered as a name never appears on the board', () => {
+    const pm = new PointsManager();
+    pm.register('acct_wallet_abcd', 'someone.real@privatemail.com');
+    const me = pm.leaderboard().find((p) => p.userId === 'acct_wallet_abcd');
+    expect(me).toBeTruthy();
+    expect(me!.name).not.toContain('@');
+    expect(me!.name).toBe('Player ABCD');
+  });
+});
 
 describe('PointsManager', () => {
   it('registers a player with starting balance', () => {

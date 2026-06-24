@@ -25,6 +25,25 @@ import { bettingClosesAt } from './ai/marketTuning';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+/**
+ * PUBLIC-SAFE display name for the leaderboard. The board is public, so a name must NEVER
+ * leak PII — no emails, no phone numbers, nothing that doxxes a user. A real chosen handle
+ * passes through (control chars stripped, length-capped); anything email/phone-shaped, empty,
+ * or the bare word "Player" is replaced with a stable, anonymous handle derived from the
+ * (opaque) account id. Applied on register (input), on load, AND on leaderboard output, so
+ * already-stored PII can never surface. The PII check runs on the FULL string before any
+ * truncation — so a long email can't be trimmed past its "@" and slip through.
+ */
+export function safeDisplayName(raw: string | undefined, userId: string): string {
+  const cleaned = (raw ?? '').replace(/[\x00-\x1f\x7f]/g, '').trim();
+  const looksLikeEmail = cleaned.includes('@');
+  const looksLikePhone = /(?:\+?\d[\s\-().]*){7,}/.test(cleaned);
+  const isGeneric = cleaned === '' || cleaned.toLowerCase() === 'player';
+  if (!looksLikeEmail && !looksLikePhone && !isGeneric) return cleaned.slice(0, 24);
+  const suffix = userId.replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase() || '0000';
+  return `Player ${suffix}`;
+}
+
 export interface PointsEffects {
   state?: { userId: string; balance: number; rank: number };
   leaderboard?: PointsPlayer[];
@@ -73,7 +92,8 @@ export class PointsManager {
         if (!p?.userId) continue;
         this.players.set(p.userId, {
           userId: p.userId,
-          name: p.name || 'Player',
+          // Sanitize legacy rows — an older build may have persisted an email as the name.
+          name: safeDisplayName(p.name, p.userId),
           balance: Number.isFinite(p.balance) ? p.balance : POINTS_START_BALANCE,
           connected: false,
           joinedAt: p.joinedAt || Date.now(),
@@ -144,14 +164,16 @@ export class PointsManager {
   }
 
   register(userId: string, name: string): PointsEffects {
+    // Sanitize at the door: a public leaderboard must never store a raw email/phone.
+    const safe = safeDisplayName(name, userId);
     const existing = this.players.get(userId);
     if (existing) {
-      existing.name = name.trim() || existing.name;
+      existing.name = safe;
       existing.connected = true;
     } else {
       this.players.set(userId, {
         userId,
-        name: name.trim() || 'Player',
+        name: safe,
         balance: POINTS_START_BALANCE,
         connected: true,
         joinedAt: Date.now(),
@@ -394,7 +416,10 @@ export class PointsManager {
     return [...this.players.values()]
       .filter((p) => p.userId.startsWith('acct_'))
       .sort((a, b) => b.balance - a.balance || a.joinedAt - b.joinedAt)
-      .slice(0, limit);
+      .slice(0, limit)
+      // Final guard at the public boundary: never emit a name that could doxx a user,
+      // even if a legacy/in-memory row somehow still holds PII.
+      .map((p) => ({ ...p, name: safeDisplayName(p.name, p.userId) }));
   }
 
   rankOf(userId: string): number {
