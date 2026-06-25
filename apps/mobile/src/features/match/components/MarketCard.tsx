@@ -14,6 +14,8 @@ import { RAKE, bettingClosesAt, bettingSafetyBufferMs } from "@/lib/config";
 import type { MarketVM, PendingBet } from "@/state/types";
 import { BetButton } from "./BetButton";
 import { betLabels, isEventDecided, isWhistleBound, laneOf, sideDisplayLabel, withAlpha } from "../marketMeta";
+import { useStore } from "@/state/store";
+import { hapticIf } from "@/ui/haptics";
 
 /**
  * MarketCard — the compact, one-tap betting card. A short window made catchable:
@@ -66,6 +68,22 @@ export function MarketCard({
   const betPlaced = pending != null && pending.marketId === market.id;
   const canBet = bettingOpen && !betPlaced;
   const overBalance = stake > balance;
+
+  // Gentle haptic countdown as the betting window runs out — a tactile "last call" tick at
+  // 3, 2, 1 so you can feel the window closing without staring at the timer. Respects the
+  // user's haptics pref and never fires once you've already placed your bet.
+  const { session } = useStore();
+  const lastTickRef = React.useRef(99);
+  React.useEffect(() => {
+    if (!locked && !betPlaced && !breakActive && seconds >= 1 && seconds <= 3) {
+      if (seconds !== lastTickRef.current) {
+        lastTickRef.current = seconds;
+        hapticIf(session.hapticsOn, "selection");
+      }
+    } else if (seconds > 3 || locked) {
+      lastTickRef.current = 99;
+    }
+  }, [seconds, locked, betPlaced, breakActive, session.hapticsOn]);
 
   // "how long is 'soon'?" — a small hint of the RESOLUTION window (the bar/count above is just
   // the few seconds left to BET). Only on timer-settled window markets; versus/whistle markets
