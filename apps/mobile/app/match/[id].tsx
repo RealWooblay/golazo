@@ -189,7 +189,6 @@ export default function MatchScreen() {
           the right slot, preserving the old behaviour. */}
       <UnifiedHeader
         variant="slim"
-        title="GOLAZO"
         onBack={leaveMatch}
         right={
           <View style={styles.headerRight}>

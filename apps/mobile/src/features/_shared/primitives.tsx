@@ -130,35 +130,37 @@ export function Surface({
   );
 }
 
+// Live/active state is carried by a colored BORDER; the glow is only the faintest edge
+// hint — never a full bloom (that was the "AI slop" look).
 const glowShadow: Record<NonNullable<SurfaceProps["glow"]>, ViewStyle> = {
   yes: {
     shadowColor: colors.yes,
-    shadowOpacity: 0.35,
-    shadowRadius: 24,
+    shadowOpacity: 0.12,
+    shadowRadius: 7,
     shadowOffset: { width: 0, height: 0 },
   },
   no: {
     shadowColor: colors.no,
-    shadowOpacity: 0.35,
-    shadowRadius: 24,
+    shadowOpacity: 0.11,
+    shadowRadius: 7,
     shadowOffset: { width: 0, height: 0 },
   },
   cyan: {
     shadowColor: colors.cyan,
-    shadowOpacity: 0.32,
-    shadowRadius: 22,
+    shadowOpacity: 0.1,
+    shadowRadius: 7,
     shadowOffset: { width: 0, height: 0 },
   },
   gold: {
     shadowColor: colors.gold,
-    shadowOpacity: 0.4,
-    shadowRadius: 22,
+    shadowOpacity: 0.11,
+    shadowRadius: 7,
     shadowOffset: { width: 0, height: 0 },
   },
   live: {
     shadowColor: colors.yes,
-    shadowOpacity: 0.28,
-    shadowRadius: 30,
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
     shadowOffset: { width: 0, height: 0 },
   },
 };
@@ -182,12 +184,14 @@ export function Vignette({
   cy?: string;
   style?: StyleProp<ViewStyle>;
 }) {
+  // Keep the canvas flat — cap the wash to a whisper so no caller can bloom the background.
+  const op = Math.min(opacity, 0.05);
   return (
     <View pointerEvents="none" style={[StyleSheet.absoluteFill, style]}>
       <Svg width="100%" height="100%">
         <Defs>
           <RadialGradient id="golazoVignette" cx={cx} cy={cy} r="70%">
-            <Stop offset="0%" stopColor={color} stopOpacity={opacity} />
+            <Stop offset="0%" stopColor={color} stopOpacity={op} />
             <Stop offset="100%" stopColor={color} stopOpacity={0} />
           </RadialGradient>
         </Defs>

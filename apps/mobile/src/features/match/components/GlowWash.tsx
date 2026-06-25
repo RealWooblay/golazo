@@ -25,12 +25,15 @@ export function GlowWash({
   style?: StyleProp<ViewStyle>;
 }) {
   const id = `mwash_${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
+  // Keep the canvas flat: cap the wash so even hero/celebration callers read as a faint
+  // tint, never a full bloom (the old 0.5 washes were the "AI slop" look).
+  const op = Math.min(opacity, 0.1);
   return (
     <View pointerEvents="none" style={[StyleSheet.absoluteFill, style]}>
       <Svg width="100%" height="100%">
         <Defs>
           <RadialGradient id={id} cx={cx} cy={cy} r={r}>
-            <Stop offset="0%" stopColor={color} stopOpacity={opacity} />
+            <Stop offset="0%" stopColor={color} stopOpacity={op} />
             <Stop offset="100%" stopColor={color} stopOpacity={0} />
           </RadialGradient>
         </Defs>

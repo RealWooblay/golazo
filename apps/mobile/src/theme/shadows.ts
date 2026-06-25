@@ -45,13 +45,14 @@ export const shadows = {
   /** Deep — sheets, hero panels, floating tab bar. */
   lg: soft("#000", 0.55, 40, 18, 16),
 
-  // ── Colored glows (active/live only) — a faint edge, never a bloom ──
-  glowYes: soft(colors.yes, 0.2, 11, 0, 6),
-  glowNo: soft(colors.no, 0.18, 11, 0, 6),
-  glowCyan: soft(colors.cyan, 0.16, 10, 0, 5),
-  glowGold: soft(colors.gold, 0.18, 11, 0, 6),
-  /** Live-market ambient halo (whisper-quiet). */
-  glowLive: soft(colors.yes, 0.14, 14, 0, 5),
+  // ── Colored glows (active/live only) — a faint edge, never a bloom. Live state is
+  //    carried by a colored BORDER; these add only the lightest hint, no full halo. ──
+  glowYes: soft(colors.yes, 0.1, 5, 0, 3),
+  glowNo: soft(colors.no, 0.09, 5, 0, 3),
+  glowCyan: soft(colors.cyan, 0.08, 5, 0, 2),
+  glowGold: soft(colors.gold, 0.09, 5, 0, 3),
+  /** Live-market ambient hint (barely-there). */
+  glowLive: soft(colors.yes, 0.08, 6, 0, 2),
 } as const;
 
 export type ShadowName = keyof typeof shadows;
