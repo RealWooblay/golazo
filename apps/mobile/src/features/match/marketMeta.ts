@@ -111,38 +111,16 @@ export function resultBadgeLabel(
   return outcome; // "YES" / "NO"
 }
 
-/** The honest YES / NO verdict words — what the bet is actually ON, per market. */
+/**
+ * Bet-side labels. EVERY market is a plain Yes / No — no custom verbiage (no "Shot/No
+ * shot", "Over/Under", "Goal/No goal" …). The ONLY exception is the head-to-head
+ * "which team next?" contest, where Yes/No is meaningless and the two team names are the
+ * buttons. Keeping one consistent vocabulary across the whole board.
+ */
 export function betLabels(kind?: string, question?: string): { yes: string; no: string } {
-  const k = kind ?? "";
-  const q = (question ?? "").toLowerCase();
-  // Which-side-next contest — "Next shot — A or B?": the two team names ARE the buttons.
-  // Gated on KIND so a window market worded "a SHOT or CORNER …?" isn't parsed as versus.
-  if (isVersusKind(k)) {
+  if (isVersusKind(kind ?? "")) {
     return versusLabelsFromQuestion(question) ?? { yes: "Yes", no: "No" };
   }
-  // Over/under count markets — the honest verdict is over/under the line.
-  if (k === "over_corners" || k === "over_shots") return { yes: "Over", no: "Under" };
-  // "A shot OR corner …?" is a plain yes/no question (what if BOTH happen?) — not a choice
-  // between the two — so the buttons are YES / NO, not "Shot/corner".
-  if (k === "shot_or_corner_in_window") return { yes: "Yes", no: "No" };
-  // "A booking in the next few minutes?" — a card is the YES.
-  if (k === "card_in_window") return { yes: "Card", no: "No card" };
-  // "A goal in the next few minutes? (either team)" — a goal is the YES.
-  if (k === "goal_in_window") return { yes: "Goal", no: "No goal" };
-  if (k === "shot_in_window" || (/\bshot\b/.test(q) && !/goal/.test(q)))
-    return { yes: "Shot", no: "No shot" };
-  if (k === "player_to_score") return { yes: "Scores", no: "Doesn't" };
-  if (k === "red_card_given" || /\bred card\b/.test(q)) return { yes: "Red", no: "No red" };
-  if (k === "penalty_awarded" || (/\bpenalty\b/.test(q) && /awarded|var/.test(q)))
-    return { yes: "Pen", no: "No pen" };
-  if (
-    k === "score_in_window" ||
-    k === "penalty_scored" ||
-    k.startsWith("goal_from") ||
-    k.startsWith("goal_in") ||
-    /\b(score|goal)\b/.test(q)
-  )
-    return { yes: "Goal", no: "No goal" };
   return { yes: "Yes", no: "No" };
 }
 
