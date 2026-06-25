@@ -141,7 +141,6 @@ export function MarketCard({
 
   return (
     <Surface radius={radius.lg} style={styles.card}>
-      <View style={[styles.rail, { backgroundColor: urgent ? colors.no : lane.color }]} />
       <View style={styles.body}>
         <View style={styles.header}>
           <View style={[styles.lanePill, { backgroundColor: withAlpha(lane.color, 0.14) }]}>
@@ -259,7 +258,8 @@ function PriceHalf({
         {verdict}
       </Text>
       <Text style={[styles.odds, { color }]} allowFontScaling={false}>
-        {multiple(odds)}
+        {multiple(odds).replace(/x$/, "")}
+        <Text style={styles.oddsX}>x</Text>
       </Text>
       <Text style={[styles.ret, { color }]} numberOfLines={1}>
         {stake > 0 ? `${format(stake)} → ${format(payout)}` : " "}
@@ -326,15 +326,12 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     borderWidth: 1,
     borderColor: colors.hairline,
-    flexDirection: "row",
   },
-  rail: { width: 3 },
-  body: { flex: 1, padding: spacing.md, gap: spacing.sm },
+  body: { padding: spacing.md, gap: spacing.sm },
 
   header: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   lanePill: { borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },
   laneText: { ...type.overline, fontSize: 10, letterSpacing: 0.8 },
-  tele: { ...type.mono, fontSize: 11.5, color: colors.textMuted },
   count: { ...type.mono, fontSize: 13, color: colors.textMuted },
   countUrgent: { color: colors.no, fontWeight: "700" },
 
@@ -351,6 +348,7 @@ const styles = StyleSheet.create({
   half: { justifyContent: "center", alignItems: "center", paddingHorizontal: 6, gap: 1 },
   verdict: { ...type.overline, fontSize: 11, letterSpacing: 0.6 },
   odds: { ...type.display, fontSize: 30, lineHeight: 34 },
+  oddsX: { fontSize: 17, opacity: 0.55 },
   ret: { ...type.mono, fontSize: 11, opacity: 0.8 },
 
   fuse: { flexDirection: "row", gap: 3, marginTop: spacing.xs },

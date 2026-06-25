@@ -25,7 +25,7 @@ export function laneOf(kind?: string, slot?: MarketSlot, question?: string): Lan
   const k = kind ?? "";
   if (k === "player_to_score") return { label: "Player", color: colors.gold };
   if (k === "shot_in_window" || k === "score_in_window" || k === "shot_or_corner_in_window")
-    return { label: "Spell", color: colors.yes };
+    return { label: "Open play", color: colors.yes };
   // Teamless either-team "event" lane (a booking / a goal in the next few minutes).
   if (k === "card_in_window") return { label: "Booking", color: colors.cyan };
   if (k === "goal_in_window") return { label: "Either team", color: colors.yes };
@@ -41,7 +41,7 @@ export function laneOf(kind?: string, slot?: MarketSlot, question?: string): Lan
   if (k === "penalty_awarded" || k === "red_card_given")
     return { label: "VAR", color: colors.cyan };
   if (k.startsWith("goal_from")) return { label: "Set piece", color: colors.cyan };
-  if (slot === "window") return { label: "Spell", color: colors.yes };
+  if (slot === "window") return { label: "Open play", color: colors.yes };
   if (slot === "player") return { label: "Player", color: colors.gold };
   if (slot === "period") return { label: "Before half", color: VIOLET };
   if (slot === "event") return { label: "Either team", color: colors.yes };
