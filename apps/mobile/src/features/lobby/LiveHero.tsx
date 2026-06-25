@@ -8,7 +8,6 @@ import {
   PressableScale,
   PulseDot,
   StatusChip,
-  Vignette,
 } from "../_shared/primitives";
 import type { Fixture } from "./fixtures";
 
@@ -36,11 +35,7 @@ export function LiveHero({
         onPress={onPress}
         style={styles.card}
       >
-        {/* layered depth */}
-        <Vignette color={colors.raw.surface3} opacity={0.9} cx="50%" cy="30%" />
-        <View pointerEvents="none" style={styles.limeWash}>
-          <Vignette color={colors.yes} opacity={0.1} cx="78%" cy="88%" />
-        </View>
+        {/* crisp 1px top edge — clean depth, no muddy wash */}
         <View pointerEvents="none" style={styles.topHighlight} />
 
         <View style={styles.headerRow}>
@@ -105,20 +100,19 @@ const styles = StyleSheet.create({
   card: {
     borderRadius: radius.xl,
     borderWidth: 1,
-    borderColor: "rgba(0,229,138,0.34)",
+    // confident live accent border + a crisp (not muddy) green energy glow
+    borderColor: "rgba(39,224,138,0.55)",
     backgroundColor: colors.surface1,
     overflow: "hidden",
     paddingHorizontal: spacing.xl,
     paddingTop: spacing.lg,
     paddingBottom: spacing.lg,
-    // live ambient glow
     shadowColor: colors.yes,
-    shadowOpacity: 0.26,
-    shadowRadius: 34,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 14,
+    shadowOpacity: 0.16,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
   },
-  limeWash: { ...StyleSheet.absoluteFillObject },
   topHighlight: {
     position: "absolute",
     top: 0,

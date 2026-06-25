@@ -143,6 +143,19 @@ export function MarketCard({
         </Text>
         {windowHint ? <Text style={styles.window}>{windowHint}</Text> : null}
 
+        {/* POOL SPLIT — where the crowd's money sits, read at a glance (the market's own
+            implied odds). The data-forward heartbeat of the card. */}
+        {!betPlaced ? (
+          <View style={styles.splitRow}>
+            <Text style={styles.splitPctYes}>{Math.round(market.yesShare)}%</Text>
+            <View style={styles.splitTrack}>
+              <View style={{ width: `${Math.max(2, Math.min(98, market.yesShare))}%`, backgroundColor: colors.yes }} />
+              <View style={{ flex: 1, backgroundColor: colors.no }} />
+            </View>
+            <Text style={styles.splitPctNo}>{Math.round(100 - market.yesShare)}%</Text>
+          </View>
+        ) : null}
+
         {betPlaced ? (
           <BetConfirmation
             pending={pending!}
@@ -234,6 +247,17 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
   btns: { flexDirection: "row", gap: spacing.sm, marginTop: 2 },
+  splitRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: 2 },
+  splitTrack: {
+    flex: 1,
+    height: 6,
+    borderRadius: 3,
+    flexDirection: "row",
+    overflow: "hidden",
+    backgroundColor: colors.surface2,
+  },
+  splitPctYes: { ...type.mono, fontSize: 11.5, color: colors.yes, width: 36 },
+  splitPctNo: { ...type.mono, fontSize: 11.5, color: colors.no, width: 36, textAlign: "right" },
   locked: {
     flexDirection: "row",
     alignItems: "center",
