@@ -40,6 +40,8 @@ export interface ButtonProps {
   fullWidth?: boolean;
   /** Show the colored glow halo (default true for filled variants). */
   glow?: boolean;
+  /** Flat CTA: a solid colour fill, NO gradient and NO glow (the redesign default). */
+  flat?: boolean;
   /** Haptic fired on press-in. Default 'select'. Pass null to silence. */
   haptic?: HapticName | null;
   /** Optional leading element (icon). */
@@ -94,6 +96,7 @@ export function Button({
   loading = false,
   fullWidth = false,
   glow,
+  flat = false,
   haptic = "select",
   left,
   right,
@@ -104,7 +107,7 @@ export function Button({
   // Unique per-instance gradient id — React.useId() can contain ':' which is
   // invalid in an SVG id / url(#…), so strip it.
   const gradId = `uiBtn-${variant}-${React.useId().replace(/[^a-zA-Z0-9]/g, "")}`;
-  const showGlow = (glow ?? !isGhost) && !disabled;
+  const showGlow = (glow ?? !isGhost) && !disabled && !flat;
   const glowShadow =
     variant === "primary"
       ? shadows.glowYes
@@ -133,7 +136,7 @@ export function Button({
         style,
       ]}
     >
-      {!isGhost ? (
+      {!isGhost && !flat ? (
         <View
           style={[
             StyleSheet.absoluteFill,

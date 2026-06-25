@@ -72,7 +72,7 @@ export function Carousel({
           <Dot
             key={s.key}
             active={i === index}
-            color={slides[index]?.accent ?? colors.yes}
+            color={colors.yes}
           />
         ))}
       </View>
@@ -112,7 +112,7 @@ function Page({
         {slide.scene}
       </Animated.View>
       <Animated.View style={[styles.copy, textStyle]}>
-        <Text style={[type.overline, { color: slide.accent }]}>
+        <Text style={[type.overline, { color: colors.textMuted }]}>
           {slide.eyebrow}
         </Text>
         <Text preset="hero" style={styles.title}>

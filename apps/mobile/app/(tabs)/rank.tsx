@@ -2,7 +2,7 @@
 import React from "react";
 import { StyleSheet, View } from "react-native";
 import { useStore } from "@/state/store";
-import { colors, spacing, type } from "@/theme";
+import { colors, radius, spacing, type } from "@/theme";
 import { Screen, Text } from "@/ui";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { PointsLeaderboard } from "@/features/points/PointsLeaderboard";
@@ -22,48 +22,82 @@ export default function RankTab() {
 
   usePointsLeaderboardSync(true);
 
+  const isLeading = hasAccount && store.pointsRank === 1;
+
   return (
-    <Screen vignette="gold">
+    <Screen>
       <UnifiedHeader variant="screen" title="Rank" />
 
-      <Text preset="caption" muted style={styles.sub}>
-        One global leaderboard — you earn points on every bet, real or paper.
-      </Text>
-
       {hasAccount ? (
-        <View style={styles.youRow}>
-          <Text style={styles.youLabel}>Your standing</Text>
-          <Text style={styles.youRank}>#{store.pointsRank || "—"}</Text>
-          <Text style={styles.youBal}>{pts(store.pointsBalance)}</Text>
+        <View style={styles.standing}>
+          <View style={styles.statCell}>
+            <Text style={styles.statLabel}>RANK</Text>
+            <Text style={styles.statValue}>#{store.pointsRank || "—"}</Text>
+          </View>
+          <View style={styles.statCell}>
+            <Text style={styles.statLabel}>POINTS</Text>
+            <Text style={styles.statValue}>{pts(store.pointsBalance)}</Text>
+          </View>
+          {isLeading ? (
+            <View style={styles.laneChip}>
+              <Text style={styles.laneChipText}>LEADING</Text>
+            </View>
+          ) : null}
         </View>
       ) : (
-        <View style={styles.youRow}>
-          <Text style={styles.youLabel}>Your standing</Text>
-          <Text style={styles.youHint}>Sign in to claim a rank</Text>
+        <View style={styles.standing}>
+          <View style={styles.statCell}>
+            <Text style={styles.statLabel}>RANK</Text>
+            <Text style={styles.statHint}>Sign in to claim a rank</Text>
+          </View>
         </View>
       )}
 
-      <PointsLeaderboard players={store.pointsLeaderboard} meId={hasAccount ? meId : undefined} />
+      <PointsLeaderboard
+        players={store.pointsLeaderboard}
+        meId={hasAccount ? meId : undefined}
+        compact={false}
+      />
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  sub: { lineHeight: 18, marginBottom: spacing.md },
-  youRow: {
+  // Flat "your standing" card: stat cells + an optional LEADING lane chip.
+  standing: {
     flexDirection: "row",
     alignItems: "center",
-    gap: spacing.md,
-    marginBottom: spacing.lg,
+    gap: spacing.xl,
+    marginBottom: spacing.md,
     paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
-    borderRadius: 12,
+    paddingHorizontal: spacing.lg,
     backgroundColor: colors.surface1,
+    borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.hairline,
   },
-  youLabel: { ...type.caption, color: colors.textMuted, flex: 1 },
-  youRank: { ...type.mono, fontSize: 18, color: colors.yes },
-  youBal: { ...type.mono, fontSize: 16, color: colors.textPrimary },
-  youHint: { ...type.caption, color: colors.yes },
+  statCell: { gap: 2 },
+  statLabel: {
+    ...type.overline,
+    fontSize: 8,
+    color: colors.textFaint,
+    letterSpacing: 1.4,
+  },
+  statValue: { ...type.display, fontSize: 22, color: colors.textPrimary },
+  statHint: { ...type.mono, fontSize: 14, color: colors.textMuted },
+
+  // Green LEADING lane chip — the card's only colour splash (accent @14%).
+  laneChip: {
+    marginLeft: "auto",
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    backgroundColor: colors.alpha.yes,
+  },
+  laneChipText: {
+    ...type.overline,
+    fontSize: 10,
+    color: colors.yes,
+    letterSpacing: 1.2,
+  },
 });

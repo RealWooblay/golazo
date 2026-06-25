@@ -11,7 +11,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useStore } from "@/state/store";
 import { colors, MAX_WIDTH, radius, spacing, type } from "@/theme";
-import { GrainOverlay, Pressable, Surface, Text, Vignette, Button, Toast } from "@/ui";
+import { Pressable, Surface, Text, Button, Toast } from "@/ui";
 import { haptics } from "@/ui/haptics";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { CountUp, PressableScale } from "@/features/_shared/primitives";
@@ -123,8 +123,6 @@ export default function PlayTab() {
 
   return (
     <View style={styles.root}>
-      <Vignette tint="yes" intensity={0.42} />
-
       {/* Top bar pinned above the scroll, under the status bar. */}
       <View
         style={[styles.topBarWrap, { paddingTop: insets.top + spacing.xs }]}
@@ -282,7 +280,6 @@ export default function PlayTab() {
         </View>
       </ScrollView>
 
-      <GrainOverlay opacity={0.035} />
       <Toast
         message={pointsRefill.message}
         tone="info"
@@ -366,20 +363,14 @@ const balStyles = StyleSheet.create({
 function FriendsEntry({ onPress }: { onPress: () => void }) {
   return (
     <Pressable onPress={onPress} haptic={null} scaleTo={0.98}>
-      <Surface
-        radius={radius.lg}
-        glow="cyan"
-        borderColor={colors.glow.cyanSoft}
-        style={friendStyles.row}
-      >
+      <Surface flat radius={radius.lg} style={friendStyles.row}>
         <View style={friendStyles.icon}>
           <Text style={friendStyles.iconGlyph}>VS</Text>
         </View>
         <View style={friendStyles.text}>
           <Text preset="bodyStrong">Play with friends</Text>
           <Text preset="caption" muted>
-            Same live match — bet your friends for real, settle up at full time.
-            Create a room or join a code.
+            Bet your friends on the same match. Create a room or join a code.
           </Text>
         </View>
         <View style={friendStyles.arrow} />
@@ -402,7 +393,7 @@ const friendStyles = StyleSheet.create({
     borderRadius: 20,
     backgroundColor: colors.alpha.cyan,
     borderWidth: 1,
-    borderColor: "rgba(22,198,255,0.4)",
+    borderColor: colors.hairline,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -443,6 +434,6 @@ const styles = StyleSheet.create({
   scroll: { alignItems: "center", flexGrow: 1 },
   body: { paddingHorizontal: spacing.lg, paddingTop: spacing.md },
   refillWrap: { paddingHorizontal: spacing.lg, marginBottom: spacing.sm },
-  section: { marginTop: spacing.xxl },
+  section: { marginTop: spacing.lg },
   list: { gap: spacing.sm },
 });

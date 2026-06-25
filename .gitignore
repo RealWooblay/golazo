@@ -26,3 +26,4 @@ services/feed/operator-keypair.json
 .claude/settings.local.json
 .vscode/
 trailer/
+.claude/

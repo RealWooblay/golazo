@@ -96,9 +96,9 @@ export function Toast({
   return (
     <Animated.View
       pointerEvents="none"
-      style={[styles.wrap, { top: insets.top + spacing.sm }, animated, style]}
+      style={[styles.wrap, { top: insets.top + 54 }, animated, style]}
     >
-      <View style={[styles.pill, { borderColor: t.border }, t.glow]}>
+      <View style={[styles.pill, { borderColor: t.border }]}>
         <View style={[styles.dot, { backgroundColor: t.fg }]} />
         <Text style={[type.bodyStrong, styles.text]} numberOfLines={2}>
           {message}

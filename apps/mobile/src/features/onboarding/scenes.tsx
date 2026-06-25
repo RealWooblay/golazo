@@ -165,21 +165,19 @@ export function SceneMarketPop() {
           <Text style={styles.cardChipText}>LIVE · 7s</Text>
         </View>
         <Text style={styles.cardQ} numberOfLines={2}>
-          Argentina on the attack — GOAL?
+          Argentina to score next?
         </Text>
-        <View style={styles.cardBtns}>
-          <Animated.View style={[styles.yesBtn, yesStyle]}>
-            <View style={styles.btnFill}>
-              <GradientFill
-                colors={["#1fff9f", "#00d27e"]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-              />
-            </View>
-            <Text style={styles.yesText}>YES 3.4x</Text>
+        {/* split PRICE BOARD — the real product's unit: one pill, the divider seated
+            at the crowd's lean, the multiple as the hero. */}
+        <View style={styles.board}>
+          <Animated.View style={[styles.boardHalf, styles.boardYes, yesStyle]}>
+            <Text style={styles.boardVerdict}>YES</Text>
+            <Text style={styles.boardOdds}>3.4x</Text>
           </Animated.View>
-          <View style={styles.noBtn}>
-            <Text style={styles.noText}>NO 1.5x</Text>
+          <View style={styles.boardSeam} />
+          <View style={[styles.boardHalf, styles.boardNo]}>
+            <Text style={[styles.boardVerdict, styles.boardVerdictNo]}>NO</Text>
+            <Text style={[styles.boardOdds, styles.boardOddsNo]}>1.5x</Text>
           </View>
         </View>
         {/* the tapping finger */}
@@ -478,30 +476,22 @@ const styles = StyleSheet.create({
     backgroundColor: colors.yes,
   },
   cardChipText: { ...type.overline, color: colors.yes, fontSize: 8 },
-  cardQ: { ...type.subtitle, color: colors.textPrimary, fontSize: 15 },
-  cardBtns: { flexDirection: "row", gap: spacing.sm, marginTop: 2 },
-  yesBtn: {
-    flex: 1,
-    height: 38,
-    borderRadius: radius.sm,
+  cardQ: { ...type.subtitle, color: colors.textPrimary, fontSize: 15, marginBottom: spacing.sm },
+  board: {
+    flexDirection: "row",
+    height: 54,
+    borderRadius: radius.md,
     overflow: "hidden",
-    alignItems: "center",
-    justifyContent: "center",
   },
-  btnFill: { ...StyleSheet.absoluteFillObject },
-  yesText: { ...type.subtitle, color: colors.onYes, fontSize: 13 },
-  noBtn: {
-    flex: 1,
-    height: 38,
-    borderRadius: radius.sm,
-    backgroundColor: colors.alpha.no,
-    borderWidth: 1,
-    borderColor: "rgba(255,77,109,0.4)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  noText: { ...type.subtitle, color: colors.no, fontSize: 13 },
-  finger: { position: "absolute", right: 30, bottom: -6 },
+  boardHalf: { justifyContent: "center", alignItems: "center" },
+  boardYes: { flex: 58, backgroundColor: "rgba(39,224,138,0.16)" },
+  boardNo: { flex: 42, backgroundColor: "rgba(255,82,103,0.16)" },
+  boardSeam: { width: 2, backgroundColor: colors.bg },
+  boardVerdict: { ...type.overline, fontSize: 9.5, letterSpacing: 0.8, color: colors.yes },
+  boardVerdictNo: { color: colors.no },
+  boardOdds: { ...type.display, fontSize: 22, lineHeight: 25, color: colors.yes },
+  boardOddsNo: { color: colors.no },
+  finger: { position: "absolute", left: 96, bottom: -6 },
 
   // pay scene
   payWrap: { alignItems: "center", gap: spacing.xs },

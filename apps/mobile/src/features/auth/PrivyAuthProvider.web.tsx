@@ -15,7 +15,7 @@ export function PrivyAuthProvider({ children }: { children: React.ReactNode }) {
     <PrivyProvider
       appId={appId}
       config={{
-        loginMethods: ["email", "google", "apple", "passkey"],
+        loginMethods: ["email", "passkey"],
         appearance: { theme: "dark", accentColor: "#00e58a" },
         // Auto-create a Solana embedded wallet for users who log in without one,
         // and sign WITHOUT a confirmation modal — bets must be one-tap, with zero

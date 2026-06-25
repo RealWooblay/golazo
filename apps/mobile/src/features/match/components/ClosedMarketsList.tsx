@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 import { StyleSheet, View } from "react-native";
-import { colors, radius, spacing, type } from "@/theme";
-import { Text } from "@/ui";
+import { colors, spacing, type } from "@/theme";
+import { FlatRow, MiniBadge, MonoStat, Overline, Text } from "@/ui";
 import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
 import type { BetRow, ClosedMarketVM } from "@/state/types";
 import { resultBadgeLabel, sideDisplayLabel } from "../marketMeta";
@@ -35,9 +35,18 @@ function sessionNet(
   return undefined;
 }
 
+/** Badge fill + on-colour, coloured by the user's RESULT (not the raw outcome). */
+function badgeColors(result: ReturnType<typeof userResult>): { bg: string; fg: string } {
+  if (result === "won") return { bg: colors.yes, fg: colors.onYes };
+  if (result === "lost") return { bg: colors.no, fg: "#ffffff" };
+  if (result === "void") return { bg: colors.cyan, fg: "#04122e" };
+  return { bg: colors.surface2, fg: colors.textMuted };
+}
+
 /**
- * Your session's settled markets — slim rows with outcome badges. Markets you bet
- * on get a green (win) or red (loss) border; everything else stays neutral.
+ * Your session's settled markets — dense flat rows: question · outcome badge · net P/L.
+ * A 2px left stripe (green win / red loss) on markets you bet; nothing you didn't touch
+ * reads as a result. No pool readout — just what happened and what it cost you.
  */
 export function ClosedMarketsList({
   markets,
@@ -45,11 +54,10 @@ export function ClosedMarketsList({
   catchingUp = false,
 }: {
   markets: ClosedMarketVM[];
-  /** Settled bets on this match — used for borders, side labels, and W/L header. */
   userBets?: BetRow[];
   catchingUp?: boolean;
 }) {
-  const { format, signedFormat } = useDisplayBalance();
+  const { signedFormat } = useDisplayBalance();
   const betByMarket = useMemo(
     () => new Map(userBets.map((b) => [b.marketId, b] as const)),
     [userBets],
@@ -78,59 +86,44 @@ export function ClosedMarketsList({
 
   return (
     <View style={styles.wrap}>
-      <Text style={styles.header}>{header}</Text>
+      <Overline size={8} style={styles.header}>
+        {header}
+      </Overline>
       <View style={styles.list}>
         {markets.map((m) => {
           const bet = betByMarket.get(m.marketId);
           const result = userResult(m, bet);
-          // Badge = the market's verdict (YES/NO/team/VOID), COLOURED BY THE USER'S RESULT
-          // (won = green, lost = red, void = cyan) so it agrees with the row border. Markets
-          // you didn't bet stay neutral — a NO you never touched shouldn't read as a loss.
-          const tint =
-            result === "won"
-              ? colors.yes
-              : result === "lost"
-                ? colors.no
-                : result === "void"
-                  ? colors.cyan
-                  : colors.textFaint;
+          const badge = badgeColors(result);
           const label = resultBadgeLabel(m.outcome, m.kind, m.question);
           const side = m.userSide ?? bet?.side;
-          const sideLabel = side
-            ? sideDisplayLabel(side, m.kind, m.question)
-            : null;
+          const sideLabel = side ? sideDisplayLabel(side, m.kind, m.question) : null;
           const net = sessionNet(m, bet, result);
-          const rowBorder =
-            result === "won"
-              ? styles.rowWon
-              : result === "lost"
-                ? styles.rowLost
-                : null;
+          const accent =
+            result === "won" ? colors.yes : result === "lost" ? colors.no : undefined;
 
           return (
-            <View key={m.marketId} style={[styles.row, rowBorder]}>
+            <FlatRow key={m.marketId} faint compact accent={accent}>
               <View style={styles.main}>
-                <Text style={[styles.question, side ? styles.questionMine : null]} numberOfLines={1}>
+                <Text style={styles.question} numberOfLines={1}>
                   {m.question}
                 </Text>
                 {sideLabel ? (
-                  <Text style={styles.youLine} numberOfLines={1}>
-                    You · {sideLabel}
-                    {net !== undefined && result !== "none"
-                      ? result === "void"
-                        ? " · refund"
-                        : ` · ${signedFormat(net)}`
-                      : ""}
-                  </Text>
+                  <Overline size={8.5} style={styles.youLine}>
+                    YOU · {sideLabel}
+                  </Overline>
                 ) : null}
               </View>
-              <View style={styles.meta}>
-                <View style={[styles.badge, { backgroundColor: tint }]}>
-                  <Text style={styles.badgeText}>{label}</Text>
-                </View>
-                <Text style={styles.pool}>{format(m.poolTotal)}</Text>
-              </View>
-            </View>
+              <MiniBadge label={label} bg={badge.bg} fg={badge.fg} />
+              {net !== undefined && result !== "none" ? (
+                <MonoStat
+                  size={12}
+                  color={net > 0 ? colors.yes : net < 0 ? colors.no : colors.textFaint}
+                  style={styles.net}
+                >
+                  {result === "void" ? "void" : signedFormat(net)}
+                </MonoStat>
+              ) : null}
+            </FlatRow>
           );
         })}
       </View>
@@ -139,63 +132,11 @@ export function ClosedMarketsList({
 }
 
 const styles = StyleSheet.create({
-  wrap: { gap: spacing.xs },
-  header: {
-    ...type.overline,
-    fontSize: 8,
-    color: colors.textFaint,
-    letterSpacing: 1.2,
-    paddingHorizontal: spacing.xs,
-  },
-  list: { gap: 4 },
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: spacing.sm,
-    paddingVertical: 6,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radius.sm,
-    backgroundColor: colors.surface0,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-  },
-  rowWon: { borderColor: colors.glow.yesSoft },
-  rowLost: { borderColor: colors.glow.noSoft },
+  wrap: { gap: spacing.sm },
+  header: { paddingHorizontal: spacing.xs },
+  list: { gap: spacing.xs },
   main: { flex: 1, gap: 2 },
-  question: {
-    ...type.caption,
-    fontSize: 11.5,
-    color: colors.textMuted,
-    lineHeight: 14,
-  },
-  questionMine: { color: colors.textSecondary },
-  youLine: {
-    ...type.overline,
-    fontSize: 8.5,
-    color: colors.textFaint,
-    letterSpacing: 0.4,
-  },
-  meta: { flexDirection: "row", alignItems: "center", gap: 6 },
-  badge: {
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-    borderRadius: 3,
-    minWidth: 28,
-    alignItems: "center",
-  },
-  badgeText: {
-    ...type.overline,
-    fontSize: 8,
-    color: "#0a0b0f",
-    fontWeight: "700",
-    letterSpacing: 0.4,
-  },
-  pool: {
-    ...type.mono,
-    fontSize: 10,
-    color: colors.textFaint,
-    minWidth: 36,
-    textAlign: "right",
-  },
+  question: { ...type.caption, fontSize: 12, color: colors.textMuted, lineHeight: 15 },
+  youLine: { letterSpacing: 0.4, color: colors.textFaint },
+  net: { minWidth: 48, textAlign: "right" },
 });

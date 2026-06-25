@@ -171,7 +171,7 @@ export default function Onboarding() {
                     variant="primary"
                     size="lg"
                     fullWidth
-                    glow
+                    flat
                     haptic="tap"
                   />
                   <PressableScale

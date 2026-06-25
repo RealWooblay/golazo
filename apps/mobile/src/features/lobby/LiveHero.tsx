@@ -1,10 +1,9 @@
 import React from "react";
 import { StyleSheet, Text, View } from "react-native";
-import { colors, gradients, radius, spacing, type } from "@/theme";
+import { colors, radius, spacing, type } from "@/theme";
 import { Crest } from "./Crest";
 import {
   Entrance,
-  GradientFill,
   PressableScale,
   PulseDot,
   StatusChip,
@@ -76,11 +75,6 @@ export function LiveHero({
         ) : null}
 
         <View style={styles.cta}>
-          <GradientFill
-            colors={gradients.yes}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-          />
           <View style={styles.ctaSide} />
           <Text style={styles.ctaText}>Bet the play</Text>
           <View style={[styles.ctaSide, styles.ctaSideRight]}>
@@ -98,20 +92,15 @@ export function LiveHero({
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: radius.xl,
+    borderRadius: radius.lg,
     borderWidth: 1,
-    // confident live accent border + a crisp (not muddy) green energy glow
-    borderColor: "rgba(39,224,138,0.55)",
+    // flat live-accent border — no glow, no shadow, no gloss
+    borderColor: "rgba(39,224,138,0.35)",
     backgroundColor: colors.surface1,
     overflow: "hidden",
     paddingHorizontal: spacing.xl,
-    paddingTop: spacing.lg,
+    paddingTop: spacing.md,
     paddingBottom: spacing.lg,
-    shadowColor: colors.yes,
-    shadowOpacity: 0.16,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 8,
   },
   topHighlight: {
     position: "absolute",
@@ -170,13 +159,14 @@ const styles = StyleSheet.create({
   moment: { ...type.bodyStrong, color: colors.textPrimary, fontSize: 16 },
   cta: {
     marginTop: spacing.lg,
-    height: 52,
+    height: 48,
     borderRadius: radius.md,
     overflow: "hidden",
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: spacing.md,
     gap: spacing.sm,
+    backgroundColor: colors.yes,
   },
   // equal-width flex sides keep the centred label centred while the meta chip
   // stays an in-flow sibling on the right — so the two can never overlap.

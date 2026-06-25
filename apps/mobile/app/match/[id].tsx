@@ -11,7 +11,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { BackHandler, StyleSheet, View } from "react-native";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { colors, spacing, type } from "@/theme";
-import { AnimatedNumber, Banner, Chip, Confetti, Screen, Text, Toast } from "@/ui";
+import { AnimatedNumber, Banner, Button, Chip, Confetti, MonoStat, Overline, Screen, Text, Toast } from "@/ui";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useStore } from "@/state/store";
 import { bettingClosesAt, bettingSafetyBufferMs, RAKE } from "@/lib/config";
@@ -30,14 +30,12 @@ import { resolveTeams } from "@/features/match/teams";
 import { sideDisplayLabel } from "@/features/match/marketMeta";
 import {
   ClosedMarketsList,
-  CommentaryTicker,
-  FullTimeCard,
-  LiveScoreboard,
   MarketCard,
   MatchFriendsBar,
   RevealCard,
   WaitingCard,
 } from "@/features/match/components";
+import { PitchHero } from "@/features/match/components/PitchHero";
 import { StakeBar } from "@/features/match/components/StakeBar";
 import { LockedStrip } from "@/features/match/components/LockedStrip";
 
@@ -127,6 +125,12 @@ export default function MatchScreen() {
   // to the open market's team for offline/sim where there's no momentum feed.
   const momentumTeam =
     finished || halftime ? undefined : (momentum ?? market?.team ?? undefined);
+  // The hero already shows FT + the score, so the old standalone full-time scoreboard is
+  // a redundant second scoreline — we drop it and fold the verdict into the hero note.
+  const ftVerdict =
+    (game?.scoreHome ?? 0) === (game?.scoreAway ?? 0)
+      ? "Full time · draw"
+      : `${((game?.scoreHome ?? 0) > (game?.scoreAway ?? 0) ? teams.home : teams.away).abbr} win · full time`;
 
   // On-chain layer. Each live market can carry its own on-chain twin; bets and
   // claims are tracked per market so new cards never hide old receipts.
@@ -222,15 +226,15 @@ export default function MatchScreen() {
 
       <View style={styles.body}>
         <View style={styles.gutter}>
-          <LiveScoreboard
+          <PitchHero
             home={teams.home}
             away={teams.away}
             scoreHome={game?.scoreHome ?? 0}
             scoreAway={game?.scoreAway ?? 0}
-            clock={finished ? "FT" : halftime ? "HT" : (game?.clock ?? "0'")}
-            momentum={momentumTeam}
+            clock={game?.clock ?? "0'"}
+            status={finished ? "final" : halftime ? "halftime" : "live"}
             momentumLean={finished || halftime ? null : momentumLean}
-            live={!finished && !halftime}
+            note={finished ? ftVerdict : commentary}
           />
         </View>
 
@@ -239,10 +243,6 @@ export default function MatchScreen() {
             <Banner tone="info" message={fallbackNotice} />
           </View>
         ) : null}
-
-        <View style={styles.gutter}>
-          <CommentaryTicker text={commentary} />
-        </View>
 
         {/* Social choice: stay in the public pool (live head-count) or break off
             into a private room for this match. Hidden once the game's over. */}
@@ -272,13 +272,7 @@ export default function MatchScreen() {
             the idle radar fills the gap between moments. ── */}
         {finished ? (
           <View style={styles.gutter}>
-            <FullTimeCard
-              home={teams.home}
-              away={teams.away}
-              scoreHome={game?.scoreHome ?? 0}
-              scoreAway={game?.scoreAway ?? 0}
-              onExit={leaveMatch}
-            />
+            <Button flat fullWidth label="Back to the lobby" onPress={leaveMatch} />
           </View>
         ) : halftime ? (
           <>
@@ -429,6 +423,24 @@ export default function MatchScreen() {
             catchingUp={catchingUp}
           />
         </View>
+
+        {(() => {
+          const sb = game ? store.bets.filter((b) => b.gameId === game.gameId) : [];
+          if (sb.length === 0) return null;
+          const net = sb.reduce((s, b) => s + (b.delta ?? 0), 0);
+          const w = sb.filter((b) => b.won).length;
+          const l = sb.filter((b) => !b.won && b.outcome !== "VOID").length;
+          return (
+            <View style={styles.gutter}>
+              <View style={styles.pnl}>
+                <MonoStat size={28} color={net >= 0 ? colors.yes : colors.no}>
+                  {(net >= 0 ? "+" : "−") + stakeFormat(Math.abs(net))}
+                </MonoStat>
+                <Overline size={11}>{w + "W · " + l + "L"}</Overline>
+              </View>
+            </View>
+          );
+        })()}
       </View>
 
       {/* overlays */}
@@ -451,6 +463,17 @@ export default function MatchScreen() {
 const styles = StyleSheet.create({
   body: { gap: spacing.md, marginTop: spacing.xs },
   gutter: { paddingHorizontal: spacing.lg },
+  pnl: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    backgroundColor: colors.surface1,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: 16,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
   // Header right slot — the mode chip + animated balance pill, mirroring the old
   // MatchHeader's right block so the count-up + label read identically.
   headerRight: { flexDirection: "row", alignItems: "center", gap: spacing.sm },

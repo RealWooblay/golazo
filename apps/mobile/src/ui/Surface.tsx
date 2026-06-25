@@ -28,6 +28,7 @@ export function Surface({
   elevated = false,
   glow,
   borderColor,
+  flat = false,
 }: {
   children?: React.ReactNode;
   style?: ViewStyle | ViewStyle[];
@@ -35,7 +36,27 @@ export function Surface({
   elevated?: boolean;
   glow?: GlowKind;
   borderColor?: string;
+  /** Flat card: a plain surface fill + 1px hairline — NO gradient body, glow, or highlight.
+   *  The canonical card surface in the redesigned, decluttered UI. */
+  flat?: boolean;
 }) {
+  if (flat) {
+    return (
+      <View
+        style={[
+          styles.base,
+          {
+            borderRadius: radius,
+            borderColor: borderColor ?? colors.hairline,
+            backgroundColor: colors.surface1,
+          },
+          style,
+        ]}
+      >
+        {children}
+      </View>
+    );
+  }
   const stops = elevated
     ? [colors.surface3, colors.surface2]
     : [colors.surface2, colors.surface1];

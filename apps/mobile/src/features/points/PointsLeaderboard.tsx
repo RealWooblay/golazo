@@ -3,12 +3,14 @@ import { StyleSheet, View } from "react-native";
 import type { PointsPlayer } from "@golazo/core";
 import { POINTS_START_BALANCE } from "@golazo/core";
 import { colors, radius, spacing, type } from "@/theme";
-import { AnimatedNumber, Chip, Surface, Text } from "@/ui";
+import { AnimatedNumber, Text } from "@/ui";
 import { pts } from "@/lib/format";
 
 /**
- * ONE global points leaderboard — everyone, real + paper. Same visual language
- * as friends room standings. Points move on every bet, so it's always live.
+ * ONE global points leaderboard — everyone, real + paper. FLAT design language:
+ * each entry is a flat row (surface1 fill + hairline, no gradient/glow), a fixed
+ * rank number, the player name (+ a cyan YOU badge if it's you), and the points
+ * right-aligned. No leader glow, no per-rank colouring — accent stays surgical.
  */
 export function PointsLeaderboard({
   players,
@@ -19,73 +21,54 @@ export function PointsLeaderboard({
   meId?: string;
   compact?: boolean;
 }) {
-  const top = players[0]?.balance ?? 0;
-  const second = players[1]?.balance ?? top;
-  const hasLeader = players.length > 1 && top > second;
-
   if (players.length === 0) {
     return (
-      <Surface radius={radius.lg} style={styles.empty}>
+      <View style={styles.empty}>
         <Text style={styles.emptyTitle}>No players yet</Text>
         <Text style={styles.emptySub}>
-          Place a bet on a live match to get on the board — everyone starts at{" "}
+          Place a bet to get on the board. Everyone starts at{" "}
           {pts(POINTS_START_BALANCE)}.
         </Text>
-      </Surface>
+      </View>
     );
   }
 
   return (
     <View style={styles.wrap}>
       {players.map((p, i) => {
-        const isLeader = hasLeader && i === 0;
         const isMe = !!meId && p.userId === meId;
         return (
-          <Surface
+          <View
             key={p.userId}
-            radius={radius.lg}
-            glow={isLeader ? "gold" : undefined}
-            borderColor={isLeader ? colors.glow.goldSoft : undefined}
             style={StyleSheet.flatten([
               styles.row,
               compact ? styles.rowCompact : undefined,
             ])}
           >
-            <View style={styles.rank}>
-              <Text
-                style={[styles.rankNum, isLeader && styles.rankNumLead]}
-                allowFontScaling={false}
-              >
-                {i + 1}
-              </Text>
-            </View>
+            <Text style={styles.rankNum} allowFontScaling={false}>
+              {i + 1}
+            </Text>
+
             <View style={styles.who}>
-              <View style={styles.nameRow}>
-                <Text style={styles.name} numberOfLines={1}>
-                  {p.name || "Player"}
-                </Text>
-                {isMe ? <Chip label="YOU" tone="info" /> : null}
-              </View>
-              {isLeader ? (
-                <Text style={styles.leadCaption}>
-                  {pts(top - second)} ahead
-                </Text>
-              ) : (
-                <Text style={styles.sub}>Live session</Text>
-              )}
+              <Text style={styles.name} numberOfLines={1}>
+                {p.name || "Player"}
+              </Text>
+              {isMe ? (
+                <View style={styles.youBadge}>
+                  <Text style={styles.youBadgeText}>YOU</Text>
+                </View>
+              ) : null}
             </View>
+
             <View style={styles.points}>
               <AnimatedNumber
                 value={p.balance}
                 format={pts}
-                style={StyleSheet.flatten([
-                  styles.ptsValue,
-                  isLeader ? styles.ptsValueLead : undefined,
-                ])}
+                style={styles.ptsValue}
               />
-              <Text style={styles.ptsLabel}>POINTS</Text>
+              <Text style={styles.ptsLabel}>PTS</Text>
             </View>
-          </Surface>
+          </View>
         );
       })}
     </View>
@@ -94,33 +77,72 @@ export function PointsLeaderboard({
 
 const styles = StyleSheet.create({
   wrap: { gap: spacing.sm },
-  empty: { padding: spacing.xl, gap: spacing.sm },
+
+  // ── Empty state (flat card) ──
+  empty: {
+    backgroundColor: colors.surface1,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    padding: spacing.xl,
+    gap: spacing.sm,
+  },
   emptyTitle: { ...type.subtitle, color: colors.textPrimary },
   emptySub: { ...type.caption, color: colors.textMuted, lineHeight: 18 },
+
+  // ── Leaderboard row (flat) ──
   row: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.md,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
+    backgroundColor: colors.surface1,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.hairline,
   },
   rowCompact: { paddingVertical: spacing.sm },
-  rank: { width: 22, alignItems: "center" },
-  rankNum: { ...type.display, fontSize: 20, color: colors.textGhost },
-  rankNumLead: { color: colors.gold },
-  who: { flex: 1, gap: 2 },
-  nameRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+
+  rankNum: {
+    ...type.mono,
+    fontSize: 18,
+    color: colors.textFaint,
+    width: 22,
+    textAlign: "center",
+  },
+
+  who: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
   name: {
     ...type.subtitle,
     fontSize: 16,
     color: colors.textPrimary,
     flexShrink: 1,
   },
-  sub: { ...type.caption, fontSize: 11, color: colors.textFaint },
-  leadCaption: { ...type.caption, fontSize: 11, color: colors.gold },
+
+  // cyan "YOU" outcome pill
+  youBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: radius.sm,
+    backgroundColor: colors.alpha.cyan,
+    borderWidth: 1,
+    borderColor: colors.glow.cyanSoft,
+  },
+  youBadgeText: {
+    ...type.overline,
+    fontSize: 9,
+    color: colors.cyan,
+    letterSpacing: 1.2,
+  },
+
   points: { alignItems: "flex-end", minWidth: 72 },
   ptsValue: { ...type.mono, fontSize: 18, color: colors.textPrimary },
-  ptsValueLead: { color: colors.gold },
   ptsLabel: {
     ...type.overline,
     fontSize: 8,

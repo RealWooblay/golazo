@@ -64,6 +64,18 @@ export { EmptyState } from "./EmptyState";
 export { Text } from "./Text";
 export type { TextProps } from "./Text";
 
+// Shared redesign kit — the minimal vocabulary every screen composes from.
+export {
+  withAlpha,
+  LaneChip,
+  Overline,
+  MonoStat,
+  StatCell,
+  MiniBadge,
+  IconPill,
+  FlatRow,
+} from "./kit";
+
 export { GrainOverlay } from "./GrainOverlay";
 export { Vignette } from "./Vignette";
 export { Blur } from "./Blur";

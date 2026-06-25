@@ -144,7 +144,6 @@ export function MarketCard({
 
   return (
     <Surface radius={radius.lg} style={styles.card}>
-      <View style={[styles.rail, { backgroundColor: urgent ? colors.no : lane.color }]} />
       <View style={styles.body}>
         <View style={styles.header}>
           <View style={[styles.lanePill, { backgroundColor: withAlpha(lane.color, 0.14) }]}>
@@ -250,7 +249,7 @@ function PriceHalf({
       </Text>
       <Text style={[styles.odds, { color }]} allowFontScaling={false}>
         {odds.toFixed(2)}
-        <Text style={styles.oddsX}>x</Text>
+        <Text style={[styles.oddsX, { color }]}>x</Text>
       </Text>
     </Pressable>
   );
@@ -314,10 +313,8 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     borderWidth: 1,
     borderColor: colors.hairline,
-    flexDirection: "row",
   },
-  rail: { width: 3 },
-  body: { flex: 1, padding: spacing.md, gap: spacing.sm },
+  body: { padding: spacing.md, gap: spacing.sm },
 
   header: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   lanePill: { borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },
@@ -327,20 +324,20 @@ const styles = StyleSheet.create({
   timerLabel: { ...type.overline, fontSize: 8.5, letterSpacing: 1, color: colors.textFaint },
   timerValue: { ...type.mono, fontSize: 16, color: colors.textPrimary, marginTop: 1 },
 
-  question: { ...type.title, fontSize: 18, lineHeight: 23, color: colors.textPrimary },
+  question: { ...type.title, fontSize: 16.5, lineHeight: 20, color: colors.textPrimary },
 
   board: {
     flexDirection: "row",
-    height: 74,
+    height: 62,
     borderRadius: radius.md,
     overflow: "hidden",
     marginTop: 2,
   },
   seam: { width: 2, backgroundColor: colors.bg },
-  half: { justifyContent: "center", alignItems: "center", paddingHorizontal: 6, gap: 2 },
-  verdict: { ...type.overline, fontSize: 11, letterSpacing: 0.8 },
-  odds: { ...type.display, fontSize: 30, lineHeight: 34 },
-  oddsX: { fontSize: 18 },
+  half: { justifyContent: "center", alignItems: "center", paddingHorizontal: 6, gap: 1 },
+  verdict: { ...type.overline, fontSize: 10.5, letterSpacing: 0.8 },
+  odds: { ...type.display, fontSize: 27, lineHeight: 30 },
+  oddsX: { fontSize: 16 },
 
   fuse: { flexDirection: "row", gap: 3, marginTop: spacing.xs },
   pip: { flex: 1, height: 4, borderRadius: 2 },

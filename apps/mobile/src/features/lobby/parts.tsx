@@ -89,7 +89,6 @@ export function NextMatch({
 }) {
   return (
     <View style={styles.next}>
-      <View pointerEvents="none" style={styles.nextTopHighlight} />
       <View style={styles.nextHead}>
         <View style={styles.titleRow}>
           <View style={[styles.staticDot, { backgroundColor: colors.cyan }]} />
@@ -223,23 +222,15 @@ const styles = StyleSheet.create({
   },
   // — NextMatch ("up next") card —
   next: {
-    borderRadius: radius.xl,
+    borderRadius: radius.lg,
     borderWidth: 1,
-    borderColor: colors.glow.cyanSoft,
+    borderColor: colors.hairline,
     backgroundColor: colors.surface1,
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.lg,
     paddingBottom: spacing.lg,
     overflow: "hidden",
     alignItems: "center",
-  },
-  nextTopHighlight: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 1,
-    backgroundColor: colors.topHighlight,
   },
   nextHead: {
     flexDirection: "row",
