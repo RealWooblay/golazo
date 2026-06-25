@@ -154,8 +154,8 @@ export function momentumMarketSpec(
   // momentum board varies and resolves YES more often. Even counter → shot-or-corner.
   if (counter % 2 === 0) {
     const broadLines = [
-      `${teamName} shot or corner next?`,
-      `Shot or corner for ${teamName} next?`,
+      `${teamName} shot or corner coming?`,
+      `Shot or corner for ${teamName}?`,
       `${teamName} to win a shot or corner?`,
     ];
     return {
@@ -165,12 +165,12 @@ export function momentumMarketSpec(
     };
   }
   const shotLines = [
-    `${teamName} to get a shot next?`,
-    `Shot for ${teamName} next?`,
+    `Shot from ${teamName} coming?`,
     `${teamName} shot incoming?`,
     `${teamName} to test the keeper?`,
     `${teamName} to create a chance?`,
-    `Next shot from ${teamName}?`,
+    `${teamName} to get a shot off?`,
+    `Will ${teamName} shoot soon?`,
   ];
   return {
     kind: 'shot_in_window',
