@@ -148,13 +148,8 @@ export function MarketCard({
             <Text style={[styles.laneText, { color: lane.color }]}>{lane.label}</Text>
           </View>
           <View style={{ flex: 1 }} />
-          {market.pool > 0 ? (
-            <Text style={styles.tele}>
-              {money(market.pool)} · {market.participants} in
-            </Text>
-          ) : null}
           <Text style={[styles.count, urgent && styles.countUrgent]}>
-            {breakActive ? "⏸" : closing ? "lock" : `${seconds}s`}
+            {breakActive ? "on hold" : closing ? "betting closed" : `${seconds}s to bet`}
           </Text>
         </View>
 
@@ -212,10 +207,12 @@ export function MarketCard({
             </View>
 
             <View style={styles.footer}>
-              <Text style={styles.footHint}>{windowHint ?? `closes in ${seconds}s`}</Text>
-              <Text style={styles.footLean}>
-                {Math.round(market.yesShare)}% on {labels.yes}
+              <Text style={styles.footHint}>
+                {market.pool > 0
+                  ? `${formatStake(market.pool)} pool · ${market.participants} playing`
+                  : "be the first in"}
               </Text>
+              {windowHint ? <Text style={styles.footLean}>{windowHint}</Text> : null}
             </View>
           </>
         )}
