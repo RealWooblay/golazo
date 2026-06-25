@@ -1,31 +1,46 @@
 import React, { useEffect } from "react";
-import { StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 import Animated, {
+  Easing,
   FadeIn,
+  cancelAnimation,
+  interpolate,
   useAnimatedStyle,
   useSharedValue,
+  withRepeat,
   withSequence,
   withSpring,
+  withTiming,
 } from "react-native-reanimated";
 import { colors, radius, spacing, spring, type } from "@/theme";
-import { Surface, Text } from "@/ui";
+import { AnimatedNumber, Surface, Text } from "@/ui";
 import { money, multiple } from "@/lib/format";
 import { RAKE, bettingClosesAt, bettingSafetyBufferMs } from "@/lib/config";
 import type { MarketVM, PendingBet } from "@/state/types";
-import { BetButton } from "./BetButton";
-import { betLabels, isEventDecided, isWhistleBound, laneOf, sideDisplayLabel, withAlpha } from "../marketMeta";
+import {
+  betLabels,
+  isEventDecided,
+  isWhistleBound,
+  laneOf,
+  sideDisplayLabel,
+  withAlpha,
+} from "../marketMeta";
 import { useStore } from "@/state/store";
 import { hapticIf } from "@/ui/haptics";
 
+const FUSE_PIPS = 12;
+
 /**
- * MarketCard — the compact, one-tap betting card. A short window made catchable:
- * a draining countdown bar across the top (red in the last seconds), a lane tag,
- * the bold question, and two big honest-verdict buttons (Shot / No shot, Goal / No
- * goal, Scores / Doesn't…). No per-card stake row — the stake is global. Locked
- * markets are rendered as thin strips by the parent, so this is the OPEN state.
+ * MarketCard — the live betting unit as a split PRICE BOARD (DraftKings × Polymarket).
  *
- * Mode-aware: `formatStake` ($ vs points), `betDisabled` (on-chain twin preparing
- * / window closing), and the live `quote` all flow from the parent.
+ * One pill whose DIVIDER sits at the crowd's lean, so the geometry itself is the implied
+ * odds — the split bar and the two buttons collapse into a single object. Each half is a
+ * tap target showing the live payout multiple as the hero plus a "$25 → $50" return.
+ * Around it: a lane-colour spine, a telemetry header (pool · players · timer), a segmented
+ * FUSE countdown, and a lean footer. Placed → one drifting receipt bar.
+ *
+ * Mode-aware: `formatStake` ($ vs points), `betDisabled` (chain twin preparing / window
+ * closing), and the live `quote` flow from the parent.
  */
 export function MarketCard({
   market,
@@ -63,15 +78,13 @@ export function MarketCard({
   const betWindow = Math.max(1, market.windowMs - bettingSafetyBufferMs(market.windowMs));
   const barFrac = breakActive ? 1 : locked || closing ? 0 : Math.max(0, Math.min(1, left / betWindow));
   const urgent = !breakActive && !locked && (closing || seconds <= 3);
-  const barColor = urgent ? colors.no : lane.color;
 
   const betPlaced = pending != null && pending.marketId === market.id;
   const canBet = bettingOpen && !betPlaced;
   const overBalance = stake > balance;
 
   // Gentle haptic countdown as the betting window runs out — a tactile "last call" tick at
-  // 3, 2, 1 so you can feel the window closing without staring at the timer. Respects the
-  // user's haptics pref and never fires once you've already placed your bet.
+  // 3, 2, 1 so you can feel the window closing without staring at the timer.
   const { session } = useStore();
   const lastTickRef = React.useRef(99);
   React.useEffect(() => {
@@ -85,16 +98,14 @@ export function MarketCard({
     }
   }, [seconds, locked, betPlaced, breakActive, session.hapticsOn]);
 
-  // "how long is 'soon'?" — a small hint of the RESOLUTION window (the bar/count above is just
-  // the few seconds left to BET). Only on timer-settled window markets; versus/whistle markets
-  // say their own timeframe in the wording.
+  // A small hint of the RESOLUTION window (the timer above is just the seconds left to BET).
   const resolveSec = Math.round((market.resolveAt - market.lockAt) / 1000);
   const windowHint =
     eventDecided || isWhistleBound(market.kind)
       ? null
       : resolveSec >= 100
-        ? `resolves over ~${Math.round(resolveSec / 60)} min`
-        : `resolves over ~${resolveSec}s`;
+        ? `resolves ~${Math.round(resolveSec / 60)} min`
+        : `resolves ~${resolveSec}s`;
 
   const yesPool = market.pool * (market.yesShare / 100);
   const noPool = market.pool - yesPool;
@@ -107,9 +118,8 @@ export function MarketCard({
     return sidePool > 0 ? (nextGross * (1 - RAKE)) / sidePool : 1;
   };
 
-  // LIVE multiple for a placed bet — recomputed from the CURRENT pool every render, so
-  // the user WATCHES their payout settle as others pile in (parimutuel drifts), instead
-  // of being shown a frozen bet-time number that no longer matches what they'll receive.
+  // LIVE multiple for a placed bet — recomputed every render so the user WATCHES their
+  // payout drift as the parimutuel pool fills.
   const liveMult =
     betPlaced && pending
       ? (() => {
@@ -118,46 +128,42 @@ export function MarketCard({
         })()
       : 0;
 
-  return (
-    <Surface
-      radius={radius.lg}
-      style={[styles.card, { borderColor: withAlpha(lane.color, 0.4) }]}
-    >
-      <View style={styles.barTrack}>
-        <View
-          style={[styles.barFill, { width: `${barFrac * 100}%`, backgroundColor: barColor }]}
-        />
-      </View>
+  // The divider seat = the crowd's lean. Floor each side so a lopsided pool never crushes a
+  // half's hero number to nothing.
+  const yesFlex = Math.max(30, Math.min(70, market.yesShare));
+  const noFlex = 100 - yesFlex;
+  const litCount = Math.ceil(barFrac * FUSE_PIPS);
 
+  const tap = (side: "YES" | "NO") => {
+    hapticIf(session.hapticsOn, side === "YES" ? "select" : "heavy");
+    onBet(side);
+  };
+
+  return (
+    <Surface radius={radius.lg} style={styles.card}>
+      <View style={[styles.rail, { backgroundColor: urgent ? colors.no : lane.color }]} />
       <View style={styles.body}>
-        <View style={styles.head}>
-          <Text style={[styles.tag, { color: lane.color }]}>{lane.label}</Text>
+        <View style={styles.header}>
+          <View style={[styles.lanePill, { backgroundColor: withAlpha(lane.color, 0.14) }]}>
+            <Text style={[styles.laneText, { color: lane.color }]}>{lane.label}</Text>
+          </View>
           <View style={{ flex: 1 }} />
-          <Text style={[styles.count, urgent && { color: colors.no }]}>
-            {breakActive ? "⏸ break" : closing ? "closing" : eventDecided ? `${seconds}s to bet` : `${seconds}s`}
+          {market.pool > 0 ? (
+            <Text style={styles.tele}>
+              {money(market.pool)} · {market.participants} in
+            </Text>
+          ) : null}
+          <Text style={[styles.count, urgent && styles.countUrgent]}>
+            {breakActive ? "⏸" : closing ? "lock" : `${seconds}s`}
           </Text>
         </View>
 
         <Text style={styles.question} numberOfLines={2}>
           {market.question}
         </Text>
-        {windowHint ? <Text style={styles.window}>{windowHint}</Text> : null}
-
-        {/* POOL SPLIT — where the crowd's money sits, read at a glance (the market's own
-            implied odds). The data-forward heartbeat of the card. */}
-        {!betPlaced ? (
-          <View style={styles.splitRow}>
-            <Text style={styles.splitPctYes}>{Math.round(market.yesShare)}%</Text>
-            <View style={styles.splitTrack}>
-              <View style={{ width: `${Math.max(2, Math.min(98, market.yesShare))}%`, backgroundColor: colors.yes }} />
-              <View style={{ flex: 1, backgroundColor: colors.no }} />
-            </View>
-            <Text style={styles.splitPctNo}>{Math.round(100 - market.yesShare)}%</Text>
-          </View>
-        ) : null}
 
         {betPlaced ? (
-          <BetConfirmation
+          <ReceiptBar
             pending={pending!}
             mult={liveMult}
             format={formatStake}
@@ -165,31 +171,107 @@ export function MarketCard({
             question={market.question}
           />
         ) : (
-          <View style={styles.btns}>
-            <BetButton
-              side="YES"
-              odds={quote("YES")}
-              label={labels.yes}
-              onPress={() => onBet("YES")}
-              disabled={!canBet || overBalance}
-              picked={null}
-            />
-            <BetButton
-              side="NO"
-              odds={quote("NO")}
-              label={labels.no}
-              onPress={() => onBet("NO")}
-              disabled={!canBet || overBalance}
-              picked={null}
-            />
-          </View>
+          <>
+            <View style={styles.board}>
+              <PriceHalf
+                flex={yesFlex}
+                color={colors.yes}
+                verdict={labels.yes}
+                odds={quote("YES")}
+                stake={stake}
+                format={formatStake}
+                disabled={!canBet || overBalance}
+                onPress={() => tap("YES")}
+              />
+              <View style={styles.seam} />
+              <PriceHalf
+                flex={noFlex}
+                color={colors.no}
+                verdict={labels.no}
+                odds={quote("NO")}
+                stake={stake}
+                format={formatStake}
+                disabled={!canBet || overBalance}
+                onPress={() => tap("NO")}
+              />
+            </View>
+
+            <View style={styles.fuse}>
+              {Array.from({ length: FUSE_PIPS }).map((_, i) => (
+                <View
+                  key={i}
+                  style={[
+                    styles.pip,
+                    {
+                      backgroundColor:
+                        i < litCount ? (urgent ? colors.no : lane.color) : colors.surface2,
+                    },
+                  ]}
+                />
+              ))}
+            </View>
+
+            <View style={styles.footer}>
+              <Text style={styles.footHint}>{windowHint ?? `closes in ${seconds}s`}</Text>
+              <Text style={styles.footLean}>
+                {Math.round(market.yesShare)}% on {labels.yes}
+              </Text>
+            </View>
+          </>
         )}
       </View>
     </Surface>
   );
 }
 
-function BetConfirmation({
+function PriceHalf({
+  flex,
+  color,
+  verdict,
+  odds,
+  stake,
+  format,
+  disabled,
+  onPress,
+}: {
+  flex: number;
+  color: string;
+  verdict: string;
+  odds: number;
+  stake: number;
+  format: (n: number) => string;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  const payout = stake > 0 ? Math.round(stake * odds) : 0;
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      style={({ pressed }) => [
+        styles.half,
+        {
+          flex,
+          backgroundColor: withAlpha(color, pressed ? 0.32 : 0.15),
+          opacity: disabled ? 0.45 : 1,
+          transform: [{ scale: pressed ? 0.98 : 1 }],
+        },
+      ]}
+    >
+      <Text style={[styles.verdict, { color }]} numberOfLines={1}>
+        {verdict}
+      </Text>
+      <Text style={[styles.odds, { color }]} allowFontScaling={false}>
+        {multiple(odds)}
+      </Text>
+      <Text style={[styles.ret, { color }]} numberOfLines={1}>
+        {stake > 0 ? `${format(stake)} → ${format(payout)}` : " "}
+      </Text>
+    </Pressable>
+  );
+}
+
+function ReceiptBar({
   pending,
   mult,
   format = money,
@@ -197,7 +279,6 @@ function BetConfirmation({
   question,
 }: {
   pending: PendingBet;
-  /** LIVE multiple from the current pool (drifts until lock); falls back to bet-time est. */
   mult: number;
   format?: (n: number) => string;
   kind?: string;
@@ -206,69 +287,102 @@ function BetConfirmation({
   const isYes = pending.side === "YES";
   const tint = isYes ? colors.yes : colors.no;
   const fill = isYes ? colors.alpha.yes : colors.alpha.no;
-  const pickLabel = sideDisplayLabel(pending.side, kind, question);
-  const scale = useSharedValue(0.9);
+  const pick = sideDisplayLabel(pending.side, kind, question);
+  const m = mult > 0 ? mult : pending.estimatedMult;
+
+  const scale = useSharedValue(0.96);
+  const shimmer = useSharedValue(0);
   useEffect(() => {
-    scale.value = withSequence(withSpring(1.04, spring.bouncy), withSpring(1, spring.smooth));
-  }, [scale]);
+    scale.value = withSequence(withSpring(1.02, spring.bouncy), withSpring(1, spring.smooth));
+    shimmer.value = withRepeat(
+      withTiming(1, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
+      -1,
+      false,
+    );
+    return () => cancelAnimation(shimmer);
+  }, [scale, shimmer]);
   const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  const shimStyle = useAnimatedStyle(() => ({
+    transform: [{ translateX: interpolate(shimmer.value, [0, 1], [-240, 360]) }, { skewX: "-18deg" }],
+  }));
 
   return (
     <Animated.View
       entering={FadeIn.duration(160)}
-      style={[styles.locked, { backgroundColor: fill, borderColor: tint }, animStyle]}
+      style={[styles.receipt, { backgroundColor: fill, borderColor: tint }, animStyle]}
     >
-      <View style={[styles.lockedDot, { backgroundColor: tint }]} />
-      <Text style={[styles.lockedText, { color: tint }]}>
-        {pickLabel} · {multiple(mult > 0 ? mult : pending.estimatedMult)}
+      <Animated.View pointerEvents="none" style={[styles.shimmer, shimStyle]} />
+      <View style={[styles.receiptDot, { backgroundColor: tint }]} />
+      <Text style={[styles.receiptPick, { color: tint }]} numberOfLines={1}>
+        {pick}
       </Text>
-      <Text style={styles.lockedStake}>{format(pending.stake)} in</Text>
+      <View style={{ flex: 1 }} />
+      <AnimatedNumber value={m} format={multiple} style={[styles.receiptMult, { color: tint }]} />
+      <Text style={styles.receiptStake}>· {format(pending.stake)} in</Text>
     </Animated.View>
   );
 }
 
 const styles = StyleSheet.create({
-  card: { padding: 0, overflow: "hidden", borderWidth: 1 },
-  barTrack: { height: 3, backgroundColor: colors.surface2 },
-  barFill: { height: 3 },
-  body: { padding: spacing.md, gap: spacing.sm },
-  head: { flexDirection: "row", alignItems: "center" },
-  tag: {
-    ...type.overline,
-    fontSize: 10.5,
-    letterSpacing: 0.6,
-  },
-  count: { ...type.mono, fontSize: 13, color: colors.textMuted },
-  window: { ...type.mono, fontSize: 11, color: colors.textFaint, marginTop: -2 },
-  question: {
-    ...type.title,
-    fontSize: 18,
-    lineHeight: 23,
-    color: colors.textPrimary,
-  },
-  btns: { flexDirection: "row", gap: spacing.sm, marginTop: 2 },
-  splitRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: 2 },
-  splitTrack: {
-    flex: 1,
-    height: 6,
-    borderRadius: 3,
-    flexDirection: "row",
+  card: {
+    padding: 0,
     overflow: "hidden",
-    backgroundColor: colors.surface2,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    flexDirection: "row",
   },
-  splitPctYes: { ...type.mono, fontSize: 11.5, color: colors.yes, width: 36 },
-  splitPctNo: { ...type.mono, fontSize: 11.5, color: colors.no, width: 36, textAlign: "right" },
-  locked: {
+  rail: { width: 3 },
+  body: { flex: 1, padding: spacing.md, gap: spacing.sm },
+
+  header: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  lanePill: { borderRadius: 6, paddingHorizontal: 7, paddingVertical: 3 },
+  laneText: { ...type.overline, fontSize: 10, letterSpacing: 0.8 },
+  tele: { ...type.mono, fontSize: 11.5, color: colors.textMuted },
+  count: { ...type.mono, fontSize: 13, color: colors.textMuted },
+  countUrgent: { color: colors.no, fontWeight: "700" },
+
+  question: { ...type.title, fontSize: 18, lineHeight: 23, color: colors.textPrimary },
+
+  board: {
+    flexDirection: "row",
+    height: 76,
+    borderRadius: radius.md,
+    overflow: "hidden",
+    marginTop: 2,
+  },
+  seam: { width: 2, backgroundColor: colors.bg },
+  half: { justifyContent: "center", alignItems: "center", paddingHorizontal: 6, gap: 1 },
+  verdict: { ...type.overline, fontSize: 11, letterSpacing: 0.6 },
+  odds: { ...type.display, fontSize: 30, lineHeight: 34 },
+  ret: { ...type.mono, fontSize: 11, opacity: 0.8 },
+
+  fuse: { flexDirection: "row", gap: 3, marginTop: spacing.xs },
+  pip: { flex: 1, height: 4, borderRadius: 2 },
+
+  footer: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  footHint: { ...type.mono, fontSize: 11, color: colors.textFaint },
+  footLean: { ...type.mono, fontSize: 11, color: colors.textMuted },
+
+  receipt: {
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
     paddingHorizontal: spacing.md,
-    height: 44,
-    borderRadius: radius.sm,
+    height: 54,
+    borderRadius: radius.md,
     borderWidth: 1,
     marginTop: 2,
+    overflow: "hidden",
   },
-  lockedDot: { width: 8, height: 8, borderRadius: 4 },
-  lockedText: { ...type.subtitle, fontSize: 15, flex: 1 },
-  lockedStake: { ...type.mono, fontSize: 13, color: colors.textSecondary },
+  shimmer: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    width: 70,
+    backgroundColor: "rgba(255,255,255,0.05)",
+  },
+  receiptDot: { width: 8, height: 8, borderRadius: 4 },
+  receiptPick: { ...type.subtitle, fontSize: 15 },
+  receiptMult: { ...type.display, fontSize: 17 },
+  receiptStake: { ...type.mono, fontSize: 12, color: colors.textSecondary },
 });
