@@ -229,7 +229,9 @@ export function buildCountSlotTrigger(gameId: string, counter: number): MarketTr
   const isCorners = counter % 2 === 0;
   const kind = isCorners ? 'over_corners' : 'over_shots';
   const line = countLine(kind);
-  const mins = Math.round(COUNT_WINDOW_MS / 60_000);
+  // State the FULL window the market settles on (its resolve deadline) so the title's
+  // "in N min" matches the card's RESOLVES-IN timer exactly — events count until then.
+  const mins = Math.max(1, Math.round(resolveDeadlineMs(kind) / 60_000));
   const q = isCorners
     ? pickRotated(CORNER_COUNT_QUESTIONS, counter)(line, mins)
     : pickRotated(SHOT_COUNT_QUESTIONS, counter)(line, mins);

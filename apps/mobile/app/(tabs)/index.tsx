@@ -116,11 +116,6 @@ export default function PlayTab() {
     router.push("/(modals)/deposit");
   };
 
-  const playWithFriend = () => {
-    if (hx) haptics.tap();
-    router.push("/friends");
-  };
-
   return (
     <View style={styles.root}>
       {/* Top bar pinned above the scroll, under the status bar. */}
@@ -209,20 +204,6 @@ export default function PlayTab() {
                     onHowItWorks={() => router.push("/how-it-works")}
                   />
                 )}
-
-                {/* Friends mode sits up top — it's a real, primary feature, not
-                    a footer afterthought. Directly under the hero so it's one of
-                    the first things you see. */}
-                <View style={styles.section}>
-                  <SectionHeader
-                    title="Play with friends"
-                    caption="PRIVATE ROOM"
-                    tone="gold"
-                  />
-                  <Entrance delay={40}>
-                    <FriendsEntry onPress={playWithFriend} />
-                  </Entrance>
-                </View>
 
                 {restLive.length > 0 ? (
                   <View style={styles.section}>
@@ -353,65 +334,6 @@ const balStyles = StyleSheet.create({
     paddingVertical: 8,
   },
   addText: { ...type.bodyStrong, color: colors.cyan, fontSize: 13 },
-});
-
-/**
- * FriendsEntry — the lobby's tasteful door into friends mode. A
- * single tappable Surface row (matches the slate's visual weight, no fake data):
- * a versus glyph, a one-line pitch, and a chevron into /friends.
- */
-function FriendsEntry({ onPress }: { onPress: () => void }) {
-  return (
-    <Pressable onPress={onPress} haptic={null} scaleTo={0.98}>
-      <Surface flat radius={radius.lg} style={friendStyles.row}>
-        <View style={friendStyles.icon}>
-          <Text style={friendStyles.iconGlyph}>VS</Text>
-        </View>
-        <View style={friendStyles.text}>
-          <Text preset="bodyStrong">Play with friends</Text>
-          <Text preset="caption" muted>
-            Bet your friends on the same match. Create a room or join a code.
-          </Text>
-        </View>
-        <View style={friendStyles.arrow} />
-      </Surface>
-    </Pressable>
-  );
-}
-
-const friendStyles = StyleSheet.create({
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-  },
-  icon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.alpha.cyan,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  iconGlyph: {
-    ...type.subtitle,
-    fontSize: 13,
-    color: colors.cyan,
-    letterSpacing: 1,
-  },
-  text: { flex: 1, gap: 1 },
-  arrow: {
-    width: 8,
-    height: 8,
-    borderTopWidth: 2,
-    borderRightWidth: 2,
-    borderColor: colors.textFaint,
-    transform: [{ rotate: "45deg" }],
-  },
 });
 
 const styles = StyleSheet.create({

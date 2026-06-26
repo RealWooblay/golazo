@@ -31,7 +31,6 @@ import { sideDisplayLabel } from "@/features/match/marketMeta";
 import {
   ClosedMarketsList,
   MarketCard,
-  MatchFriendsBar,
   RevealCard,
   WaitingCard,
 } from "@/features/match/components";
@@ -244,18 +243,6 @@ export default function MatchScreen() {
           </View>
         ) : null}
 
-        {/* Social choice: stay in the public pool (live head-count) or break off
-            into a private room for this match. Hidden once the game's over. */}
-        {!finished ? (
-          <View style={styles.gutter}>
-            <MatchFriendsBar
-              playerCount={market?.participants ?? 0}
-              onPrivate={() => router.push("/friends")}
-              hapticsEnabled={hapticsOn}
-            />
-          </View>
-        ) : null}
-
         {/* On-chain wallet + real-bet receipt (only when chain mode is live). */}
         {chain.configured ? (
           <View style={styles.gutter}>
@@ -414,16 +401,6 @@ export default function MatchScreen() {
           </View>
         ))}
 
-        <View style={styles.gutter}>
-          <ClosedMarketsList
-            markets={historicMarkets}
-            userBets={
-              game ? store.bets.filter((b) => b.gameId === game.gameId) : []
-            }
-            catchingUp={catchingUp}
-          />
-        </View>
-
         {(() => {
           const sb = game ? store.bets.filter((b) => b.gameId === game.gameId) : [];
           if (sb.length === 0) return null;
@@ -441,6 +418,16 @@ export default function MatchScreen() {
             </View>
           );
         })()}
+
+        <View style={styles.gutter}>
+          <ClosedMarketsList
+            markets={historicMarkets}
+            userBets={
+              game ? store.bets.filter((b) => b.gameId === game.gameId) : []
+            }
+            catchingUp={catchingUp}
+          />
+        </View>
       </View>
 
       {/* overlays */}

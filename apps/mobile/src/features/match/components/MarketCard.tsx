@@ -104,7 +104,9 @@ export function MarketCard({
   // timer-settled markets have a meaningful countdown; event/whistle markets settle on the
   // next event, so they show none.
   const timerSettled = !eventDecided && !isWhistleBound(market.kind);
-  const resolveLeft = Math.max(0, market.resolveAt - now);
+  // The resolve clock holds at the full window while betting is open, then starts draining
+  // once betting closes (lockAt) — it counts down the RESOLUTION, not the bet window.
+  const resolveLeft = Math.max(0, market.resolveAt - Math.max(now, market.lockAt));
   const rMin = Math.floor(resolveLeft / 60000);
   const rSec = Math.floor((resolveLeft % 60000) / 1000);
   const resolveClock = timerSettled
@@ -301,7 +303,7 @@ function ReceiptBar({
         {pick}
       </Text>
       <View style={{ flex: 1 }} />
-      <AnimatedNumber value={m} format={multiple} style={[styles.receiptMult, { color: tint }]} />
+      <Text style={[styles.receiptMult, { color: tint }]}>{multiple(m)}</Text>
       <Text style={styles.receiptStake}>· {format(pending.stake)} in</Text>
     </Animated.View>
   );
