@@ -167,7 +167,14 @@ export default function MatchScreen() {
   // placed/settled on a previous visit reappears on return. Live rows win on conflict
   // (richer pool/odds/kind/voidReason); a persistence-only row still renders a clean
   // YES/NO/VOID badge + your side + net via the question.
+  //
+  // DEMO EXCEPTION: the offline sim reuses ONE gameId ("sim-arg-fra") and auto-resets, so
+  // store.bets piles up cross-run bets — many VOID'd when a prior run reset with open markets.
+  // Seeding those would fill the demo's history with stale VOID rows. The demo never "returns"
+  // to a persistent match, so just show THIS run's settled markets (they already carry the
+  // user's side/stake/delta). Persistence stays on for live matches, which have unique gameIds.
   const sessionMarkets = useMemo<ClosedMarketVM[]>(() => {
+    if (effectiveMode === "offline") return historicMarkets;
     const byId = new Map<string, ClosedMarketVM>();
     for (const b of gameBets) {
       byId.set(b.marketId, {
@@ -191,7 +198,7 @@ export default function MatchScreen() {
     return Array.from(byId.values()).sort(
       (a, b) => (b.revealedAt ?? b.settledAt) - (a.revealedAt ?? a.settledAt),
     );
-  }, [gameBets, historicMarkets]);
+  }, [effectiveMode, gameBets, historicMarkets]);
 
   // ── Win confetti: fire when a reveal is acknowledged as a win ───────────────
   const [confettiTrigger, setConfettiTrigger] = useState(0);
@@ -436,7 +443,16 @@ export default function MatchScreen() {
         ))}
 
         {(() => {
-          const sb = gameBets;
+          // DEMO: scope the P&L to THIS run (markets settled this session) so cross-run bets in
+          // the reused "sim-arg-fra" ledger don't inflate it — matches the session list above.
+          // LIVE: the full persisted set for this match.
+          const sb =
+            effectiveMode === "offline"
+              ? (() => {
+                  const runIds = new Set(historicMarkets.map((m) => m.marketId));
+                  return gameBets.filter((b) => runIds.has(b.marketId));
+                })()
+              : gameBets;
           if (sb.length === 0) return null;
           const net = sb.reduce((s, b) => s + (b.delta ?? 0), 0);
           const w = sb.filter((b) => b.won).length;
