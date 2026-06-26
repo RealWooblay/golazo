@@ -24,7 +24,7 @@ import { createHash } from "crypto";
 import { readFileSync } from "fs";
 
 const RPC = process.env.RPC_URL || "http://127.0.0.1:8899";
-const PROGRAM_ID = new PublicKey("GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu");
+const PROGRAM_ID = new PublicKey("3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM");
 const SYS = SystemProgram.programId;
 const USX_DECIMALS = 6;
 const usx = (n) => Math.round(n * 10 ** USX_DECIMALS); // $ → USX base units

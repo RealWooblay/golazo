@@ -17,7 +17,7 @@ import {
 import { createHash } from "crypto";
 import { readFileSync } from "fs";
 
-const PROGRAM_ID = new PublicKey("GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu");
+const PROGRAM_ID = new PublicKey("3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM");
 const USX_MINT = new PublicKey("6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG");
 const TOKEN_PROGRAM = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const ATA_PROGRAM = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");

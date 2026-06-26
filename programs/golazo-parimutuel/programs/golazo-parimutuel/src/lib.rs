@@ -45,7 +45,7 @@ use state::{Outcome, Side};
 // Program id — synced to the built program keypair
 // (target/deploy/golazo_parimutuel-keypair.json) so the on-chain id, the
 // declared id, and every PDA derivation agree. Keep Anchor.toml in sync.
-declare_id!("GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu");
+declare_id!("3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM");
 
 /// The one stablecoin the whole protocol settles in: **USX** (SPL classic).
 ///
