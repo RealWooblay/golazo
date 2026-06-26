@@ -116,6 +116,12 @@ const MOMENTUM_OPEN_COOLDOWN_MS = 8_000;
  */
 const SCORE_COOLOFF_MS = 25_000;
 /**
+ * After a team SCORES, the game restarts from the centre circle and the OTHER team kicks off,
+ * so it's nonsense to open ANY momentum market for the scorer ("Will Sweden shoot soon?" right
+ * after Sweden scored). Hold all of the scoring team's momentum markets through the restart.
+ */
+const GOAL_RESTART_MS = 45_000;
+/**
  * After a goal, a teamless "a goal in the next few minutes?" market reads as nonsense (the
  * game just restarted from the centre circle). Suppress the event-slot goal-window market
  * for this long after ANY goal — rotate to the booking market instead.
@@ -894,16 +900,13 @@ export class Orchestrator {
     const openClockMin = oc.base + oc.stopp / 100;
 
     const spec = momentumMarketSpec(name, read.intensity, this.momentumCounter++);
-    // POST-GOAL COOL-OFF: don't open a "to SCORE in N min?" right after this team
-    // scored — it reads as an instant open+shut off the goal that just happened (and
-    // the late-goal rescue could otherwise settle it YES off that same goal). A shot
-    // market can still open; only the score market is held back briefly.
-    if (
-      spec.kind === 'score_in_window' &&
-      Date.now() - (this.lastGoalAt.get(team) ?? 0) < SCORE_COOLOFF_MS
-    ) {
-      return;
-    }
+    // POST-GOAL COOL-OFF. The scoring team just put it in the net and the game restarts from
+    // the centre (the OTHER team kicks off), so opening "Will Sweden shoot/score soon?" for
+    // Sweden right after Sweden scored is nonsense. Hold ALL of the scorer's momentum markets
+    // through the restart; the score market stays held a little longer.
+    const sinceGoal = Date.now() - (this.lastGoalAt.get(team) ?? 0);
+    if (sinceGoal < GOAL_RESTART_MS) return;
+    if (spec.kind === 'score_in_window' && sinceGoal < SCORE_COOLOFF_MS) return;
     // ENHANCER: swap ONLY the human question for a richer AI line if one is pooled,
     // else keep the deterministic template. Chosen BEFORE open so the on-chain
     // question_hash matches the displayed text. Everything else stays template-decided.
