@@ -105,6 +105,8 @@ export interface ClosedMarketVM {
   userDelta?: number;
   /** When you acknowledged the reveal (bet markets); drives session list order. */
   revealedAt?: number;
+  /** Short human reason this market was voided/refunded (set only on voids). */
+  voidReason?: string;
 }
 
 // ── Persisted ledger (Profile screen + history) ──────────────────────────────

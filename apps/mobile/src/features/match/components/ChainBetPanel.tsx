@@ -10,8 +10,8 @@ const openUrl = (url?: string) => {
   if (url) Linking.openURL(url).catch(() => {});
 };
 
-/** On-chain bet receipts for friends room markets (place + claim). */
-export function FriendsChainPanel({
+/** On-chain bet receipts for the live match's markets (place + claim). */
+export function ChainBetPanel({
   bets,
   error,
   onClaim,

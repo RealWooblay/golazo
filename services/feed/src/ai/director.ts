@@ -55,6 +55,102 @@ const TEAM_BOUND: ReadonlySet<string> = new Set([
   'next_card',
 ]);
 
+/**
+ * CURATED WORDING BANK — the "heap of text options" per director kind. The director SELECTS a
+ * line from here by INDEX; it never writes text. Team-bound kinds use {team} (and {opp} for the
+ * versus "X or Y?" contest, which the client splits on the ':' into the two side labels). Every
+ * line is hand-written to obey the question rules — ends '?', no digits, names the team, and no
+ * whistle/set-piece framing — so a selected line is always valid, on-model, and never slop.
+ */
+const LINE_BANK: Record<string, readonly string[]> = {
+  shot_in_window: [
+    '{team} to get a shot away this spell?',
+    'Can {team} work a shot here?',
+    '{team} to test the keeper soon?',
+    'A shot brewing for {team}?',
+    '{team} to have a crack at goal?',
+    '{team} to threaten the goal this spell?',
+  ],
+  score_in_window: [
+    '{team} to score in the next few minutes?',
+    '{team} to break through soon?',
+    'Can {team} find the net here?',
+    '{team} to make this pressure pay?',
+    '{team} to grab one in this spell?',
+    'A goal coming for {team}?',
+  ],
+  shot_or_corner_in_window: [
+    '{team} to win a shot or a corner this spell?',
+    '{team} to force a corner or an effort soon?',
+    '{team} to carve out a chance or a corner?',
+    '{team} to threaten with a shot or corner?',
+  ],
+  next_shot: [
+    'Who threatens next: {team} or {opp}?',
+    'Next shot: {team} or {opp}?',
+    'Next effort on goal: {team} or {opp}?',
+    'Who has the next chance: {team} or {opp}?',
+  ],
+  next_corner: [
+    'Next corner: {team} or {opp}?',
+    'Who wins the next corner: {team} or {opp}?',
+    'Next one at the flag: {team} or {opp}?',
+  ],
+  next_goal: [
+    'Who scores next: {team} or {opp}?',
+    'Next goal: {team} or {opp}?',
+  ],
+  next_card: [
+    'Who is booked next: {team} or {opp}?',
+    'Next card: {team} or {opp}?',
+    'Next into the book: {team} or {opp}?',
+  ],
+  card_in_window: [
+    'A booking in the next few minutes?',
+    'A card coming as this heats up?',
+    'Ref to reach for a card soon?',
+    'A yellow in this spell?',
+    'A booking on the cards soon?',
+  ],
+  goal_in_window: [
+    'A goal for either side in the next few minutes?',
+    'Either team to score soon?',
+    'A goal coming in this spell?',
+    'Either side to break through soon?',
+    'A goal for either team shortly?',
+  ],
+  over_corners: [
+    'A flurry of corners coming soon?',
+    'Plenty more corners in this spell?',
+    'Corners to pile up from here?',
+  ],
+  over_shots: [
+    'Shots coming thick and fast soon?',
+    'A burst of shots in this spell?',
+    'Plenty more efforts on goal soon?',
+  ],
+};
+
+/** Build the on-model question from the bank by index (clamped into range), substituting names. */
+function buildQuestion(kind: string, lineIdx: number, game: GameState, team?: Team): string | null {
+  const bank = LINE_BANK[kind];
+  if (!bank || bank.length === 0) return null;
+  const n = bank.length;
+  const idx = Number.isFinite(lineIdx) ? ((Math.trunc(lineIdx) % n) + n) % n : 0;
+  let q = bank[idx]!;
+  if (team) {
+    const teamName = team === 'home' ? game.home.name : game.away.name;
+    const oppName = team === 'home' ? game.away.name : game.home.name;
+    q = q.replace(/\{team\}/g, teamName).replace(/\{opp\}/g, oppName);
+  }
+  return q;
+}
+
+/** The bank rendered for the model — each kind with its numbered wording options to choose from. */
+const BANK_BRIEF: string = Object.entries(LINE_BANK)
+  .map(([kind, lines]) => `${kind}:\n${lines.map((l, i) => `  ${i}. ${l}`).join('\n')}`)
+  .join('\n');
+
 /** A validated, ready-to-open market proposal + when it was generated (for staleness). */
 export interface MarketProposal {
   kind: string;
@@ -144,6 +240,16 @@ export class MarketDirector {
     return pick;
   }
 
+  /**
+   * PEEK — is a servable proposal ready for a currently-free slot? Does NOT consume one (unlike
+   * proposeNext). Used by the "market incoming" telegraph so the client only counts down when a
+   * director market will actually open, without burning the proposal on a paced bail.
+   */
+  hasReady(now: number, slotIsFree: (slot: MarketSlot) => boolean): boolean {
+    if (!this.active) return false;
+    return this.pool.some((p) => now - p.bornAt < STALE_MS && slotIsFree(p.slot));
+  }
+
   /** Clear all state on a match switch so a prior fixture's proposals never leak across. */
   resetForMatch(): void {
     this.pool = [];
@@ -172,7 +278,7 @@ export class MarketDirector {
         {
           model: this.opts.model,
           max_tokens: 500,
-          system: DIRECTOR_SYSTEM,
+          system: DIRECTOR_SYSTEM_FULL,
           messages: [{ role: 'user', content: this.situationPrompt(game, momentum, secondsSinceGoal) }],
         },
         { timeout: this.opts.timeoutMs },
@@ -222,35 +328,26 @@ export class MarketDirector {
 
 const DIRECTOR_SYSTEM = [
   'You are the market DIRECTOR for a live soccer in-play betting board. From the situation,',
-  'choose 2-4 markets that fit THIS moment. Return ONLY JSON: an array of',
-  '{"kind","team","question","trueProb","windowMs","relevance"}.',
+  'choose 2-4 markets that fit THIS moment. You do NOT write any text — you SELECT a market',
+  'KIND and the INDEX of a ready-made wording line for it. Return ONLY JSON: an array of',
+  '{"kind","team","line","trueProb","windowMs","relevance"}.',
   '',
-  'Allowed kinds ONLY (anything else is dropped):',
-  '- shot_in_window (team): will TEAM get a shot away this spell?',
-  '- score_in_window (team): will TEAM SCORE in the next few minutes? (use for a real siege)',
-  '- shot_or_corner_in_window (team): a shot OR corner from TEAM this spell? (broader, higher yes)',
-  '- next_shot (team): who threatens NEXT — shot/corner/danger before the other side?',
-  '- next_corner (team): who gets the NEXT corner before the other side?',
-  '- next_goal (team): who scores NEXT before the other side? (only when end-to-end and open)',
-  '- next_card (team): whose player is booked NEXT before the other side?',
-  '- card_in_window (no team): a booking in the next few minutes?',
-  '- goal_in_window (no team): a goal by EITHER team in the next few minutes?',
-  '- over_corners / over_shots (no team): more than the line of corners/shots soon?',
+  'RULES: team kinds MUST set "team" to "home" or "away" (the side you back, or who acts first',
+  'on a "who next" contest); teamless kinds MUST omit "team". "line" is the 0-based index of the',
+  'wording you pick from that kind\'s options below. trueProb in 0.05..0.95 (your honest YES',
+  'chance); windowMs is the BET window in 6000..20000; relevance in 0..1 (fit to the moment).',
   '',
-  'RULES: team kinds MUST set "team" to "home" or "away"; teamless kinds MUST omit it.',
-  'The question must NAME the team for team kinds, end with "?", be under 90 chars, and contain',
-  'NO score, scoreline, minute, or player name. trueProb in 0.05..0.95 (your honest YES chance);',
-  'windowMs is the BET window in 6000..20000; relevance in 0..1 (how well it fits the moment).',
+  'VARIETY IS THE JOB. Across your 2-4 proposals use DIFFERENT kinds — never two of the same kind.',
+  'Fit the moment: a siege -> score_in_window for the pressing team; end-to-end -> next_shot; a',
+  'scrappy, niggly game -> next_card or card_in_window; a quiet, even game -> a broad over-under',
+  'or goal_in_window. Pick the LINE that best matches the recent commentary, and vary the line',
+  'index across proposals + over time so the board never loops.',
   '',
-  'VARIETY IS THE JOB. Across your 2-4 proposals use DIFFERENT kinds — never two of the same',
-  'kind, and avoid repeating a kind you would have just proposed. Fit the moment: a siege →',
-  'score_in_window for the pressing team; end-to-end → next_shot; a scrappy, niggly game →',
-  'next_card or card_in_window; a quiet, even game → a broad over-under or goal_in_window.',
-  '',
-  'WORDING: write each question like a mate watching live — punchy, specific to THIS moment,',
-  'never a generic template. Vary your phrasing every time so the board feels alive and real,',
-  'not looped. Pull a detail from the recent commentary when you can (without naming a player).',
+  'KINDS + WORDING OPTIONS (choose "kind" + the "line" index):',
 ].join('\n');
+
+/** Full system prompt = the rules above + the live, indexed wording bank to select from. */
+const DIRECTOR_SYSTEM_FULL = `${DIRECTOR_SYSTEM}\n${BANK_BRIEF}`;
 
 /** Parse the model's JSON array defensively (it may wrap in prose/fences). */
 function safeParseProposals(s: string): unknown[] | null {
@@ -292,8 +389,12 @@ export function validateProposal(raw: unknown, game: GameState, now: number): Ma
   }
   const teamName = team === 'home' ? game.home.name : team === 'away' ? game.away.name : undefined;
 
-  const question = typeof o.question === 'string' ? o.question.trim() : '';
-  if (!validateQuestion(question, teamName)) return null;
+  // SELECTION-ONLY: the director picks a wording LINE from the curated bank (by index); it never
+  // writes text. Build the question from the bank — any free text in o.question is ignored, so
+  // the AI literally cannot create or mangle wording. validateQuestion is a belt-and-braces check
+  // on the (already hand-written) line.
+  const question = buildQuestion(kind, toNum(o.line, 0), game, team);
+  if (!question || !validateQuestion(question, teamName)) return null;
 
   const trueProb = clamp(toNum(o.trueProb, 0.4), MIN_PROB, MAX_PROB);
   const windowMs = clamp(Math.round(toNum(o.windowMs, 10_000)), MIN_WINDOW_MS, MAX_WINDOW_MS);

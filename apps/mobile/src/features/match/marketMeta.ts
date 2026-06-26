@@ -130,12 +130,24 @@ export function isWhistleBound(kind?: string): boolean {
 }
 
 /**
- * Versus / next-side markets resolve on the first decisive event, not a deadline timer.
- * Gated on KIND only — a window market ("a SHOT or CORNER …?") is timer-settled and must
- * NOT show "until next threat" (the bug where a timer + "until next threat" appeared together).
+ * Markets that resolve on the first decisive EVENT, not a clock — so they show "until X",
+ * never a countdown. Three families:
+ *   • versus "who's next?" contests (next shot/corner/goal/booking) — settle on that event;
+ *   • set-piece goal markets (goal_from_*) — settle deterministically when the set piece ends
+ *     (the feed resolves them on `play_end`: a goal → YES, play resumes → NO);
+ *   • VAR / penalty markets — settle on the review's decision.
+ * Each waits for its event and only VOIDs at the whistle if it never comes. Gated on KIND only
+ * — a window market ("a SHOT or CORNER …?") is timer-settled and must NOT show an "until …" label.
  */
 export function isEventDecided(kind?: string): boolean {
-  return isVersusKind(kind);
+  if (isVersusKind(kind)) return true;
+  const k = kind ?? "";
+  return (
+    k.startsWith("goal_from") ||
+    k === "penalty_scored" ||
+    k === "penalty_awarded" ||
+    k === "red_card_given"
+  );
 }
 
 /** A 2nd-half stoppage market reads "…before full-time?"; a 1st-half one "…before half-time?". */
@@ -151,8 +163,14 @@ export function whistleLabel(kind?: string, question?: string): string {
 }
 
 export function eventDecidedLabel(kind?: string): string {
-  if (kind === "next_corner") return "until next corner";
-  if (kind === "next_goal") return "until next goal";
-  if (kind === "next_card") return "until next booking";
-  return "until next threat";
+  if (kind === "next_corner") return "until the next corner";
+  if (kind === "next_goal") return "until the next goal";
+  if (kind === "next_card") return "until the next booking";
+  if (kind === "next_shot") return "until the next shot";
+  if (kind === "goal_from_corner") return "until the corner clears";
+  if (kind === "goal_from_free_kick") return "until the free kick";
+  if (kind?.startsWith("goal_from")) return "until the set piece ends";
+  if (kind === "penalty_scored") return "until the penalty";
+  if (kind === "penalty_awarded" || kind === "red_card_given") return "until the VAR call";
+  return "until the next play";
 }

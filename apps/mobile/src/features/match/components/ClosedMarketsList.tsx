@@ -112,17 +112,36 @@ export function ClosedMarketsList({
                     YOU · {sideLabel}
                   </Overline>
                 ) : null}
+                {result === "void" && m.voidReason ? (
+                  <Overline size={8.5} style={styles.voidLine}>
+                    {m.voidReason}
+                  </Overline>
+                ) : null}
               </View>
-              <MiniBadge label={label} bg={badge.bg} fg={badge.fg} />
-              {net !== undefined && result !== "none" ? (
+              <View style={styles.result}>
+                <View style={styles.badgeCol}>
+                  <MiniBadge label={label} bg={badge.bg} fg={badge.fg} />
+                </View>
                 <MonoStat
                   size={12}
-                  color={net > 0 ? colors.yes : net < 0 ? colors.no : colors.textFaint}
+                  color={
+                    net !== undefined && result !== "none"
+                      ? net > 0
+                        ? colors.yes
+                        : net < 0
+                          ? colors.no
+                          : colors.textFaint
+                      : colors.textFaint
+                  }
                   style={styles.net}
                 >
-                  {result === "void" ? "void" : signedFormat(net)}
+                  {net !== undefined && result !== "none"
+                    ? result === "void"
+                      ? "void"
+                      : signedFormat(net)
+                    : ""}
                 </MonoStat>
-              ) : null}
+              </View>
             </FlatRow>
           );
         })}
@@ -138,5 +157,11 @@ const styles = StyleSheet.create({
   main: { flex: 1, gap: 2 },
   question: { ...type.caption, fontSize: 12, color: colors.textMuted, lineHeight: 15 },
   youLine: { letterSpacing: 0.4, color: colors.textFaint },
+  voidLine: { letterSpacing: 0.3, color: colors.cyan },
+  // Right cluster: badge + net share one vertically-centred row so they sit on a clean
+  // baseline (the MiniBadge's own alignSelf:flex-start no longer pulls it to the top), and
+  // the fixed-width columns keep badges + nets aligned down the whole list.
+  result: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  badgeCol: { minWidth: 46, alignItems: "flex-start" },
   net: { minWidth: 48, textAlign: "right" },
 });

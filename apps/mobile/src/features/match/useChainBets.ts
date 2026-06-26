@@ -1,6 +1,6 @@
 /**
- * On-chain betting for FRIENDS rooms — same wallet + place_bet + claim flow as the
- * public match, but supports multiple open room markets at once.
+ * On-chain betting for the live match — wallet + place_bet + claim against the on-chain market
+ * twins, supporting multiple open markets at once, with live (pool-derived) odds + twin readiness.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MarketVM } from "@/state/types";
@@ -27,7 +27,7 @@ const errMsg = (e: unknown) => {
   return raw || "On-chain action failed";
 };
 
-export interface UseRoomChainBets {
+export interface UseChainBets {
   bets: ChainBetVM[];
   placing: boolean;
   error: string | null;
@@ -44,12 +44,12 @@ export interface UseRoomChainBets {
   clearError: () => void;
 }
 
-export function useRoomChainBets(
+export function useChainBets(
   chain: UseChain,
   stake: number,
   enabled: boolean,
   openMarkets: MarketVM[],
-): UseRoomChainBets {
+): UseChainBets {
   const [bets, setBets] = useState<ChainBetVM[]>([]);
   const [placing, setPlacing] = useState(false);
   const [error, setError] = useState<string | null>(null);

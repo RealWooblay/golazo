@@ -82,7 +82,6 @@ export { Blur } from "./Blur";
 
 export { Screen } from "./Screen";
 export { StubScreen } from "./StubScreen";
-export { TabBar } from "./TabBar";
 
 export { haptics, hapticIf } from "./haptics";
 export type { HapticName } from "./haptics";

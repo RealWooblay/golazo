@@ -42,6 +42,8 @@ export interface Market {
   /** Absolute deadline for resolution (lockAt + resolveWindowMs). */
   resolveAt: number;
   settlement?: Settlement;
+  /** Human, one-line reason this market VOIDED (refunded) — shown to users; set only on voids. */
+  voidReason?: string;
   /**
    * On-chain twin identity, set ONLY in chain mode (the feed operator mirrors
    * each market on Solana). Lets the app derive the program PDAs and place a

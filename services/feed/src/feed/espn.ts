@@ -162,6 +162,22 @@ export interface EspnFeedOptions {
   forceEventId?: string;
 }
 
+/**
+ * Human label for a detected break, derived from the ESPN break text. Specific when the type is
+ * named (hydration / cooling / drinks / injury / VAR), else a generic "Break" — it NEVER defaults
+ * to a wrong specific type. A plain "Start Delay" / "Break in play" (no descriptor — e.g. an
+ * injury stoppage that ESPN only marks as a generic delay) reads as "Break", not "Hydration break".
+ */
+function breakLabelFromText(text: string): string {
+  const t = text.toLowerCase();
+  if (/\bhydration\b/.test(t)) return 'Hydration break';
+  if (/\bcooling\b/.test(t)) return 'Cooling break';
+  if (/\b(drinks|water)\b/.test(t)) return 'Drinks break';
+  if (/\b(injury|injured|medical|stretcher)\b/.test(t)) return 'Injury delay';
+  if (/\bvar\b/.test(t)) return 'VAR check';
+  return 'Break';
+}
+
 export class EspnFeed implements FeedSource {
   readonly kind = 'espn' as const;
   private readonly league: string;
@@ -387,6 +403,7 @@ export class EspnFeed implements FeedSource {
         type: 'calm',
         text: ke.text || 'Break in play',
         meta: { sequenceId: seqId, source: 'espn.keyEvent', clock: ke.clock?.displayValue, delay: 'start',
+          breakLabel: breakLabelFromText(breakText),
           ...(ke.wallclock ? { wallclock: ke.wallclock } : {}) },
       };
     }

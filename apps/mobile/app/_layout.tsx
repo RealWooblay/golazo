@@ -9,7 +9,6 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StoreProvider, useStore } from "@/state/store";
 import { ChainProvider } from "@/features/chain/useChain";
 import { PrivyAuthProvider } from "@/features/auth/PrivyAuthProvider";
-import { FriendsRoomProvider } from "@/features/friends";
 import { GestureHandlerRootViewSafe } from "@/ui/GestureRoot";
 import { BottomSheetProviderSafe } from "@/ui/BottomSheetProvider";
 import { useAppFonts } from "@/ui/useAppFonts";
@@ -80,9 +79,8 @@ function BootGate() {
   if (!ready) return null;
 
   return (
-    <FriendsRoomProvider>
-      <View style={{ flex: 1, backgroundColor: colors.bg }} onLayout={onLayout}>
-        <StatusBar style="light" />
+    <View style={{ flex: 1, backgroundColor: colors.bg }} onLayout={onLayout}>
+      <StatusBar style="light" />
         <Stack
         screenOptions={{
           headerShown: false,
@@ -93,9 +91,6 @@ function BootGate() {
       >
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="match/[id]" options={{ animation: "fade" }} />
-        <Stack.Screen name="friends/index" />
-        <Stack.Screen name="friends/[code]" options={{ animation: "fade" }} />
-        <Stack.Screen name="join/[code]" />
         <Stack.Screen
           name="onboarding"
           options={{ animation: "fade", gestureEnabled: false }}
@@ -111,6 +106,5 @@ function BootGate() {
         <Stack.Screen name="how-it-works" options={{ presentation: "modal" }} />
         </Stack>
       </View>
-    </FriendsRoomProvider>
   );
 }

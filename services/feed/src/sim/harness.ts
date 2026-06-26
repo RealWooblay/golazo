@@ -44,7 +44,6 @@ export function simConfig(overrides: Partial<Config> = {}): Config {
     aiModel: 'sim',
     aiTimeoutMs: 1_000,
     aiResolveTimeoutMs: 1_000,
-    aiEnhancerEnabled: false,
     aiDirectorEnabled: false,
     aiRefreshMs: 15_000,
     aiMatchTokenBudget: 120_000,

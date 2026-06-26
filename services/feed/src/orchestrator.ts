@@ -85,7 +85,6 @@ import {
   momentumMarketSpec,
   type MomentumRead,
 } from './ai/momentum';
-import { QuestionEnhancer } from './ai/enhancer';
 import { MarketDirector, type MarketProposal } from './ai/director';
 import { CommentaryBuffer } from './ai/commentaryBuffer';
 import { AuditLog } from './observability/auditLog';
@@ -135,6 +134,27 @@ const PLAYER_BACK_TO_BACK_COOLDOWN_MS = 120_000;
 const SET_PIECE_UNTAKEN_GRACE_MS = 20_000;
 const SET_PIECE_AFTER_TAKEN_GRACE_MS = 25_000;
 const SET_PIECE_MAX_UNCONFIRMED_MS = 180_000;
+/**
+ * ABSOLUTE wall-clock backstop for a goal-from-set-piece market, stamped at OPEN. Past this it
+ * ALWAYS settles (YES already fired on a clean goal; otherwise NO) — it can never hang for ages
+ * on a play_end that never arrives, and a much-later unrelated goal can't be misattributed to the
+ * set piece (the market is closed NO before it). Comfortably exceeds the kick + scramble window.
+ */
+const SET_PIECE_HARD_TIMEOUT_MS = 120_000;
+/**
+ * WHICH-SIDE-NEXT re-arm: a "who wins the next corner/booking?" race must not refund just
+ * because the contest hasn't happened yet — it stays live until the deciding event resolves
+ * it, or full-time voids it. When its deadline matures we simply push it out by this much and
+ * keep waiting (finalizeMatch is the real backstop at the whistle).
+ */
+const WHICH_SIDE_REARM_MS = 120_000;
+/**
+ * SET-PIECE FRESHNESS — a "goal from this corner/free kick?" market must open RIGHT AFTER the
+ * kick is awarded, never a beat later (by then the set piece has already been taken/cleared, so
+ * betting on it is stale + unfair). We allow the kick's true time to trail "now" by the feed's
+ * own measured lag PLUS this grace; anything older is stale and the open is skipped.
+ */
+const SET_PIECE_FRESHNESS_MS = 15_000;
 /**
  * FLOW PACING — minimum gap between any two market opens, so the board drips at a clean,
  * deliberate rhythm instead of dumping a whole ESPN poll-batch at once ("nothing, then 2
@@ -215,6 +235,9 @@ interface TrackedMarket {
   playerId?: string;
   /** Set-piece goal markets do not time out NO until the kick/corner is actually taken. */
   setPieceTakenAt?: number;
+  /** Absolute wall-clock deadline (set at OPEN) by which a set-piece market MUST settle — the
+   *  hard backstop against hanging + late-goal misattribution. No extend may push resolve past it. */
+  setPieceHardDeadline?: number;
   /** During a hydration break: ms of resolve time remaining when the break started, held
    *  steady each tick so the client countdown freezes instead of draining to 0. */
   breakFreezeMs?: number;
@@ -295,9 +318,6 @@ export class Orchestrator {
   /** The agent's live read of who's pressing — drives the bar AND momentum markets. */
   private readonly momentum = new MomentumTracker();
   private readonly commentary = new CommentaryBuffer();
-  /** AI question enhancer (off-hot-path, fail-open). Constructed in the constructor. */
-  private enhancer!: QuestionEnhancer;
-  private enhancerTimer?: ReturnType<typeof setInterval>;
   /** AI market director (off-hot-path, fail-open, palette-bounded). Constructed below. */
   private director!: MarketDirector;
   private directorTimer?: ReturnType<typeof setInterval>;
@@ -318,6 +338,8 @@ export class Orchestrator {
   private lastPlayerMarketAt = 0;
   /** Wall-clock of the last market that surfaced — drives the FLOW PACING min-gap. */
   private lastOpenReleaseAt = 0;
+  /** Throttle for the cosmetic "market incoming" telegraph (~1/sec is plenty). */
+  private lastIncomingAt = 0;
   /** Heartbeat (event/count) lane cadence — seeded one interval into the match. */
   private lastEventSlotOpenAt = 0;
   private lastCountSlotOpenAt = 0;
@@ -332,6 +354,12 @@ export class Orchestrator {
   private breakStartedAt = 0;
   /** Wall-clock the last break ended — settleExpired grace so held bets clear, not reject. */
   private breakEndedAt = 0;
+  /** Human label for the active break ("Hydration break" | "Injury delay" | "Break"…). */
+  private breakLabel: string | undefined;
+  /** The break-start event's TRUE time + match-clock minute — anchors so a stale/earlier event
+   *  (ESPN re-sends the full cumulative feed each poll) can't resume an ongoing break. */
+  private breakStartedWallMs: number | undefined;
+  private breakStartedClockMin = NaN;
   /** Rotates momentum-market phrasing so a long spell doesn't repeat one line. */
   private momentumCounter = 0;
   /**
@@ -377,13 +405,10 @@ export class Orchestrator {
       }),
       getOps: () => ({
         feedKind: this.feed.kind,
-        // HONEST label: markets are ALWAYS decided by rules; AI (if active) only
-        // polishes question text. Reports the enhancer's real state, not key-presence.
-        watcher: this.enhancer.active
-          ? this.enhancer.producing
-            ? 'rules+ai-enhance'
-            : 'rules+ai-enhance(idle)'
-          : 'rules',
+        // HONEST label: markets are ALWAYS decided by rules + the validated AI director.
+        // There is no free-text AI any more (the question enhancer was removed) — every
+        // market's wording is a curated, hand-written line, so it can't drift into slop.
+        watcher: 'rules',
         // The director's HONEST state: markets it proposes are still validated + opened by
         // the deterministic engine; this reports whether the AI is actively proposing.
         director: this.director.active
@@ -401,20 +426,6 @@ export class Orchestrator {
       getOpenGlobalMarkets: () =>
         this.engine.list().filter((m) => m.status === 'open' || m.status === 'locked'),
       betDelayMs: this.config.betDelayMs,
-    });
-
-    // AI question ENHANCER — off the hot path, fail-open. OFF unless explicitly enabled
-    // (AI_ENHANCER=1) AND keyed. Only ever rewrites question TEXT; never decides/resolves.
-    this.enhancer = new QuestionEnhancer({
-      apiKey: this.config.anthropicApiKey,
-      enabled: this.config.aiEnhancerEnabled,
-      model: this.config.aiModel,
-      timeoutMs: this.config.aiTimeoutMs,
-      refreshMs: this.config.aiRefreshMs,
-      matchTokenBudget: this.config.aiMatchTokenBudget,
-      scoreWindowMins: Math.max(1, Math.round(resolveDeadlineMs('score_in_window') / 60_000)),
-      commentary: this.commentary,
-      getContext: () => ({ game: this.feed.state(), momentum: this.momentum.read() }),
     });
 
     this.director = new MarketDirector({
@@ -470,14 +481,6 @@ export class Orchestrator {
     const intervalMs = this.feed.kind === 'espn' ? this.config.espnPollMs : 500;
     this.tickTimer = setInterval(() => void this.tick(), intervalMs);
 
-    // Enhancer's SLOW background generator — its own timer, never on the open path.
-    if (this.enhancer.active) {
-      this.enhancerTimer = setInterval(
-        () => void this.enhancer.refresh(Date.now()),
-        this.config.aiRefreshMs,
-      );
-    }
-
     // Director's SLOW proposal generator — its own timer, never on the open path. The opener
     // reads pre-validated proposals synchronously (proposeNext); this just refills the pool.
     if (this.director.active) {
@@ -520,7 +523,6 @@ export class Orchestrator {
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.tickTimer) clearInterval(this.tickTimer);
-    if (this.enhancerTimer) clearInterval(this.enhancerTimer);
     if (this.directorTimer) clearInterval(this.directorTimer);
     for (const t of this.tracked.values()) {
       t.bots?.cancel();
@@ -558,8 +560,11 @@ export class Orchestrator {
       this.holdBreakDeadlines();
       if (Date.now() - this.breakStartedAt > MAX_BREAK_MS) this.endBreak();
     }
-    // Carry the break flag every tick so a (re)joining client always knows the current state.
-    this.server.broadcast({ t: 'game', game: { ...game, breakPaused: this.breakPaused } });
+    // Carry the break flag + label every tick so a (re)joining client always knows the state.
+    this.server.broadcast({
+      t: 'game',
+      game: { ...game, breakPaused: this.breakPaused, breakLabel: this.breakPaused ? this.breakLabel : undefined },
+    });
     this.server.roomManager.lockExpiredMarkets();
     await this.checkPeriodMarkets(game);
 
@@ -652,7 +657,7 @@ export class Orchestrator {
     this.metrics.playPhase = this.playPhase;
 
     this.recent.push(ev);
-    this.commentary.push(ev); // feeds the off-path enhancer's narrative context
+    this.commentary.push(ev); // feeds the off-path director's narrative context
 
     // TEAM ATTRIBUTION — the fix for "everything voids / goes NO". ESPN frequently omits
     // the team on open-play shots / dangerous attacks (only goals, cards, and canonical
@@ -682,14 +687,23 @@ export class Orchestrator {
 
     // HYDRATION/COOLING break: ESPN emits start/end "delay" as a calm event carrying
     // meta.delay. Pause openers + the NO sweep for the break (auto-resumes in tick()).
-    if (ev.meta?.delay === 'start') this.beginBreak();
-    else if (ev.meta?.delay === 'end') this.endBreak();
-    // Robust break-END: if play is clearly back (a real on-pitch event arrives) while we're
-    // still paused, ESPN's "end delay" marker was missed — resume now rather than waiting out
-    // MAX_BREAK_MS. Goals/shots/cards/corners only happen with the ball in play.
+    if (ev.meta?.delay === 'start') {
+      this.beginBreak(ev, typeof ev.meta?.breakLabel === 'string' ? ev.meta.breakLabel : 'Break');
+    } else if (ev.meta?.delay === 'end') {
+      // Only an end-marker NEWER than the break start may resume — a stale/duplicate 'end' from
+      // an EARLIER delay must not end a fresh break.
+      if (this.eventIsAfterBreakStart(ev)) this.endBreak();
+    }
+    // Robust break-END: if play is clearly back (a real on-pitch event arrives) while we're still
+    // paused, ESPN's "end delay" marker was missed — resume now rather than waiting out
+    // MAX_BREAK_MS. BUT only if THIS event genuinely happened AFTER the break started: ESPN
+    // re-sends the full cumulative feed each poll (sorted ascending by match-clock), so a
+    // re-surfaced EARLIER shot/corner must not flip the break off — that was the "break exits
+    // while still ongoing" bug.
     else if (
       this.breakPaused &&
-      ['goal', 'shot', 'miss', 'corner', 'yellow_card', 'red_card', 'penalty'].includes(ev.type)
+      ['goal', 'shot', 'miss', 'corner', 'yellow_card', 'red_card', 'penalty'].includes(ev.type) &&
+      this.eventIsAfterBreakStart(ev)
     ) {
       this.endBreak();
     }
@@ -811,6 +825,19 @@ export class Orchestrator {
     // Final safety: never open a team-bound market without a team (no "They …").
     if (!trigger.team && requiresTeam(trigger.kind)) return;
 
+    // SET-PIECE FRESHNESS: never open a goal-from-set-piece market a long beat after the kick
+    // was awarded — the phase has already played out, so it would be stale + unfair. Gate on the
+    // triggering event's TRUE time (wallclock vs the feed's own lag), else its ingest age.
+    if (isSetPieceGoalKind(trigger.kind) && this.setPieceOpenIsStale(ev)) {
+      this.metrics.marketsSkipped++;
+      this.audit.record('market_skip', {
+        reason: 'stale_set_piece_open',
+        type: ev.type,
+        text: ev.text.slice(0, 80),
+      });
+      return;
+    }
+
     const slot = trigger.slot ?? marketSlot(trigger.kind);
     if (this.hasBlockingMarket(slot)) return;
 
@@ -836,6 +863,18 @@ export class Orchestrator {
   }
 
   /** Push the agent's momentum read to clients (drives the session momentum bar). */
+  /**
+   * Telegraph that a paced market is about to open in ~etaMs — a cosmetic "get ready" signal the
+   * client turns into a countdown + a 3·2·1 buzz. Throttled to ~1/sec; the client runs a smooth
+   * local countdown between updates and clears it the instant the real market_open lands.
+   */
+  private announceIncoming(etaMs: number): void {
+    const now = Date.now();
+    if (now - this.lastIncomingAt < 900) return;
+    this.lastIncomingAt = now;
+    this.server.broadcast({ t: 'market_incoming', etaMs: Math.max(0, Math.round(etaMs)) });
+  }
+
   private broadcastMomentum(): void {
     const r = this.momentum.read();
     this.momentumLog.push({ bar: r.bar, home: r.home, away: r.away });
@@ -875,10 +914,6 @@ export class Orchestrator {
     const team = read.leader;
     if (!team) return;
     if (read.intensity < MOMENTUM_OPEN_THRESHOLD) return;
-    // FLOW PACING: drip momentum markets at a clean rhythm — never stack a second one (e.g.
-    // the other lane) onto the same beat. The keep-alive re-offers next tick, so this only
-    // staggers timing, not volume.
-    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return;
 
     const last = this.lastMomentumOpenAt.get(team) ?? 0;
     if (Date.now() - last < MOMENTUM_OPEN_COOLDOWN_MS) return;
@@ -889,6 +924,16 @@ export class Orchestrator {
     // THIS poll batch, the outcome is effectively known — don't open a market that
     // would just resolve off the same batch (mirrors the set-piece opener's guard).
     if (this.samePollResolverTeams.has(team)) return;
+
+    // FLOW PACING (last gate): a momentum market is READY — only the pacer holds it back so the
+    // board drips at a clean rhythm rather than dumping a whole poll-batch at once. Telegraph the
+    // wait ("next market in Ns" + a 3·2·1 buzz on the client) and open on a later tick once the
+    // pacer clears. The keep-alive re-offers next tick, so this staggers timing, not volume.
+    const sincePacer = Date.now() - this.lastOpenReleaseAt;
+    if (sincePacer < MIN_OPEN_SPACING_MS) {
+      this.announceIncoming(MIN_OPEN_SPACING_MS - sincePacer);
+      return;
+    }
 
     const game = this.feed.state();
     const name = team === 'home' ? game.home.name : game.away.name;
@@ -907,17 +952,12 @@ export class Orchestrator {
     const sinceGoal = Date.now() - (this.lastGoalAt.get(team) ?? 0);
     if (sinceGoal < GOAL_RESTART_MS) return;
     if (spec.kind === 'score_in_window' && sinceGoal < SCORE_COOLOFF_MS) return;
-    // ENHANCER: swap ONLY the human question for a richer AI line if one is pooled,
-    // else keep the deterministic template. Chosen BEFORE open so the on-chain
-    // question_hash matches the displayed text. Everything else stays template-decided.
-    const enhanced = this.enhancer.pick(team, spec.kind, spec.question, Date.now());
-    // WORDING GUARD: a window market settles on a TIMER, so the enhancer must never make it
-    // read like it settles at a whistle ("before full-time", "final whistle"). If the AI line
-    // drifts into period/whistle wording the kind doesn't have, fall back to the safe template.
-    const question = triggerWordingProblem(spec.kind, enhanced) ? spec.question : enhanced;
+    // Wording is the curated template for this kind — there is no free-text AI any more (the
+    // enhancer was removed). The AI director decides WHICH market to open; the human question
+    // is always a hand-written line, so it can never drift into slop or a wrong resolution model.
     const trigger: MarketTrigger = {
       gameId: game.gameId,
-      question,
+      question: spec.question,
       kind: spec.kind,
       slot: 'window',
       team,
@@ -1012,11 +1052,32 @@ export class Orchestrator {
     });
   }
 
-  /** Enter a hydration/cooling break: pause openers + the NO sweep until it ends. */
-  private beginBreak(): void {
+  /** True when an event genuinely occurred AFTER the current break started — so a stale/
+   *  re-surfaced earlier event (or a duplicate/out-of-order 'end' marker) can't resume an active
+   *  break. Compares true wallclock when both sides have it, else the monotonic match-clock minute
+   *  (stale earlier events have a LOWER minute). If neither is comparable, do NOT resume off this
+   *  event — the MAX_BREAK_MS auto-resume is the real-time safety net. */
+  private eventIsAfterBreakStart(ev: FeedEvent): boolean {
+    const wc = this.eventWallclockMs(ev);
+    if (wc !== undefined && this.breakStartedWallMs !== undefined) {
+      return wc >= this.breakStartedWallMs;
+    }
+    const evMin = clockMinutes(ev);
+    if (evMin !== undefined && Number.isFinite(evMin) && Number.isFinite(this.breakStartedClockMin)) {
+      return evMin >= this.breakStartedClockMin;
+    }
+    return false;
+  }
+
+  /** Enter a break in play: pause openers + the NO sweep until it ends. `label` is the human
+   *  break type (from ESPN); the start event anchors the stale-event guard. */
+  private beginBreak(ev: FeedEvent, label = 'Break'): void {
     if (this.breakPaused) return;
     this.breakPaused = true;
     this.breakStartedAt = Date.now();
+    this.breakLabel = label;
+    this.breakStartedWallMs = this.eventWallclockMs(ev);
+    this.breakStartedClockMin = clockMinutes(ev) ?? NaN;
     // Snapshot each market's remaining resolve time. holdBreakDeadlines() re-applies it every
     // tick so the client countdown FREEZES at this value through the break instead of draining
     // to 0 (the "market hangs at 0 during a hydration break" bug).
@@ -1026,9 +1087,12 @@ export class Orchestrator {
       if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
       t.breakFreezeMs = Math.max(0, m.resolveAt - now);
     }
-    // Tell the client immediately so it shows "Hydration break" + freezes its countdowns.
-    this.server.broadcast({ t: 'game', game: { ...this.feed.state(), breakPaused: true } });
-    console.log('[golazo/feed] break_start — markets paused (cooling/hydration)');
+    // Tell the client immediately so it shows the (accurate) break label + freezes countdowns.
+    this.server.broadcast({
+      t: 'game',
+      game: { ...this.feed.state(), breakPaused: true, breakLabel: this.breakLabel },
+    });
+    console.log(`[golazo/feed] break_start — markets paused (${this.breakLabel ?? 'Break'})`);
   }
 
   /** Hold every paused market's countdown steady (called each tick during a break). */
@@ -1052,7 +1116,10 @@ export class Orchestrator {
     // now+remaining, so the countdown held steady through the break and now resumes draining
     // with exactly the time it had when the break started. Just clear the freeze markers.
     for (const t of this.tracked.values()) t.breakFreezeMs = undefined;
-    this.server.broadcast({ t: 'game', game: { ...this.feed.state(), breakPaused: false } });
+    this.breakLabel = undefined;
+    this.breakStartedWallMs = undefined;
+    this.breakStartedClockMin = NaN;
+    this.server.broadcast({ t: 'game', game: { ...this.feed.state(), breakPaused: false, breakLabel: undefined } });
     console.log(`[golazo/feed] break_end — markets resumed (held ${Math.round(breakMs / 1000)}s)`);
   }
 
@@ -1200,7 +1267,12 @@ export class Orchestrator {
   private async maybeOpenEventSlotMarket(game: GameState): Promise<void> {
     if (this.hasBlockingMarket('event')) return;
     if (Date.now() - this.lastEventSlotOpenAt < EVENT_SLOT_INTERVAL_MS) return;
-    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
+    // A market is due (interval elapsed) — if only the flow pacer holds it, telegraph the wait.
+    const sinceEvent = Date.now() - this.lastOpenReleaseAt;
+    if (sinceEvent < MIN_OPEN_SPACING_MS) {
+      this.announceIncoming(MIN_OPEN_SPACING_MS - sinceEvent);
+      return;
+    }
 
     let trigger = buildEventSlotTrigger(game.gameId, this.eventSlotCounter);
     // POST-GOAL: don't open "a goal in the next few minutes?" right after a goal (the game
@@ -1227,7 +1299,11 @@ export class Orchestrator {
   private async maybeOpenCountSlotMarket(game: GameState): Promise<void> {
     if (this.hasBlockingMarket('count')) return;
     if (Date.now() - this.lastCountSlotOpenAt < COUNT_SLOT_INTERVAL_MS) return;
-    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
+    const sinceCount = Date.now() - this.lastOpenReleaseAt;
+    if (sinceCount < MIN_OPEN_SPACING_MS) {
+      this.announceIncoming(MIN_OPEN_SPACING_MS - sinceCount);
+      return;
+    }
 
     const trigger = buildCountSlotTrigger(game.gameId, this.countSlotCounter);
 
@@ -1251,7 +1327,15 @@ export class Orchestrator {
    */
   private async maybeOpenDirectorMarket(game: GameState): Promise<void> {
     if (!this.director.active) return;
-    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
+    // Pacer gate FIRST — but only telegraph if a proposal is actually ready (peek, don't consume,
+    // so we never count down to a market that won't open and never burn the proposal on a bail).
+    const sinceDir = Date.now() - this.lastOpenReleaseAt;
+    if (sinceDir < MIN_OPEN_SPACING_MS) {
+      if (this.director.hasReady(Date.now(), (slot) => !this.hasBlockingMarket(slot))) {
+        this.announceIncoming(MIN_OPEN_SPACING_MS - sinceDir);
+      }
+      return;
+    }
     const proposal: MarketProposal | undefined = this.director.proposeNext(
       Date.now(),
       (slot) => !this.hasBlockingMarket(slot),
@@ -1284,7 +1368,6 @@ export class Orchestrator {
   private async maybeOpenVersusMarket(game: GameState): Promise<void> {
     if (this.hasBlockingMarket('versus')) return;
     if (Date.now() - this.lastVersusOpenAt < VERSUS_SLOT_INTERVAL_MS) return;
-    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
 
     // Only open a "next shot/corner — which team?" CONTEST during genuine attacking play —
     // when there's real pressure, the next shot/corner is imminent so the contest resolves
@@ -1301,6 +1384,13 @@ export class Orchestrator {
     const team: Team = this.versusCounter % 2 === 0 ? 'home' : 'away';
     const trigger = buildVersusTrigger(game, team, Math.floor(this.versusCounter / 2));
     if (!trigger) return;
+
+    // A contest is genuinely due (pressure + a real trigger) — telegraph if the pacer holds it.
+    const sinceVs = Date.now() - this.lastOpenReleaseAt;
+    if (sinceVs < MIN_OPEN_SPACING_MS) {
+      this.announceIncoming(MIN_OPEN_SPACING_MS - sinceVs);
+      return;
+    }
 
     const beforeOpened = this.metrics.marketsOpened;
     await this.openTriggeredMarket(trigger, {
@@ -1434,6 +1524,12 @@ export class Orchestrator {
             },
           }
         : {}),
+      // SET-PIECE HARD BACKSTOP: an absolute deadline from OPEN so the market always settles in
+      // bounded time (no hang on a missing play_end) and a much-later unrelated goal can't be
+      // misattributed to this set piece (settled NO before it).
+      ...(isSetPieceGoalKind(trigger.kind)
+        ? { setPieceHardDeadline: Date.now() + SET_PIECE_HARD_TIMEOUT_MS }
+        : {}),
     });
   }
 
@@ -1552,7 +1648,29 @@ export class Orchestrator {
     for (const t of [...this.tracked.values()]) {
       if (t.isPeriod) continue; // period markets settle on their own goal / FT
       const m = this.engine.get(t.marketId);
-      if (!m || m.status !== 'locked') continue;
+      if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
+
+      // SET-PIECE HARD BACKSTOP — enforced even while still OPEN (so an unlocked set-piece market
+      // can't slip the sweep). A clean goal already settled YES on its event; past the hard
+      // deadline with no such goal, force-lock if needed and settle NO. This is what stops the
+      // "set piece takes ages / never resolves" hang AND prevents a much-later unrelated goal
+      // from being counted as the set-piece goal (the market is closed before it).
+      if (
+        isSetPieceGoalKind(m.kind) &&
+        t.setPieceHardDeadline !== undefined &&
+        now >= t.setPieceHardDeadline
+      ) {
+        if (m.status === 'open') this.lockMarket(t.marketId); // routes pendingOutcome + chain lock
+        const after = this.engine.get(t.marketId);
+        if (after && (after.status === 'open' || after.status === 'locked')) {
+          console.log(`[golazo/feed] set_piece_hard_timeout id=${m.id} kind=${m.kind}`);
+          this.finalizeMarket(t, 'NO');
+        }
+        continue;
+      }
+
+      // The rest of the sweep acts only on LOCKED markets at/after their resolve deadline.
+      if (m.status !== 'locked') continue;
       if (now < m.resolveAt) continue;
 
       // LAG-AWARE NO HOLD: when the feed is lagging MORE than the deadlines assume, a real
@@ -1605,11 +1723,13 @@ export class Orchestrator {
         continue;
       }
 
-      // WHICH-SIDE-NEXT with no decisive event by the deadline → VOID/refund (the contest
-      // never happened), never NO — fair and arb-clean.
+      // WHICH-SIDE-NEXT ("who wins the next corner/booking/shot?") must NOT void on a content
+      // timer — the contest simply hasn't happened yet. Keep the race live: push the deadline
+      // out and wait for the deciding event (resolveWhichSideMarkets settles YES/NO) or for
+      // full-time, where finalizeMatch voids + refunds it. This is what the card promises with
+      // "until the next corner" — no premature refund mid-match.
       if (isWhichSideNextKind(m.kind)) {
-        console.log(`[golazo/feed] which_side_next_deadline void id=${m.id} kind=${m.kind}`);
-        this.finalizeMarket(t, 'VOID', { voidCause: 'which_side_next_deadline' });
+        this.extendMarketResolve(t, now + WHICH_SIDE_REARM_MS);
         continue;
       }
 
@@ -1625,7 +1745,13 @@ export class Orchestrator {
   }
 
   private extendMarketResolve(target: TrackedMarket, resolveAt: number): void {
-    const m = this.engine.extendResolve(target.marketId, resolveAt);
+    // A set-piece market's resolve can NEVER be pushed past its absolute hard deadline — this is
+    // what makes the unbounded-extend hang impossible (and keeps the misattribution window tight).
+    const capped =
+      target.setPieceHardDeadline !== undefined
+        ? Math.min(resolveAt, target.setPieceHardDeadline)
+        : resolveAt;
+    const m = this.engine.extendResolve(target.marketId, capped);
     console.log(
       `[golazo/feed] market_deadline_extend id=${m.id} kind=${m.kind} to=${Math.round(resolveAt - Date.now())}ms`,
     );
@@ -1647,6 +1773,23 @@ export class Orchestrator {
       if (Number.isFinite(t)) return t;
     }
     return undefined;
+  }
+
+  /**
+   * True when a set-piece market would open too late to be fair — the kick has already played
+   * out. We judge the triggering event's TRUE time against "now": the feed always trails real
+   * time by its measured lag, so "stale" = trailing by MORE than that lag plus a small grace.
+   * With no exact wallclock (a commentary-sourced set piece) we fall back to how long ago the
+   * feed ingested the event. This is what kills "Goal from the corner?" opening 60s after the
+   * corner — without it, a set piece sitting in the recent buffer can open an already-dead phase.
+   */
+  private setPieceOpenIsStale(ev: FeedEvent): boolean {
+    const wc = this.eventWallclockMs(ev);
+    if (wc !== undefined) {
+      const lagMs = (this.lagMeter.wallclockLagSec() ?? EXPECTED_FEED_LAG_MS / 1000) * 1000;
+      return Date.now() - wc > lagMs + SET_PIECE_FRESHNESS_MS;
+    }
+    return Date.now() - ev.ts > SET_PIECE_FRESHNESS_MS;
   }
 
   /**
@@ -1974,6 +2117,12 @@ export class Orchestrator {
     opts: { voidCause?: string; voidReason?: string } = {},
   ): void {
     const seed = target.marketSeed;
+    if (outcome === 'VOID') {
+      // Stamp a human reason onto the market BEFORE resolve emits, so the market_resolve frame
+      // carries it to the client (the void tooltip / refund line).
+      const vm = this.engine.get(target.marketId);
+      if (vm) vm.voidReason = voidReasonText(opts.voidCause ?? opts.voidReason);
+    }
     this.engine.resolve(target.marketId, outcome);
     if (outcome === 'VOID') this.metrics.marketsVoided++;
     else this.metrics.marketsResolved++;
@@ -2011,6 +2160,8 @@ export class Orchestrator {
    */
   private voidMarket(target: TrackedMarket, cause = 'match_switch', commentary?: string): void {
     const seed = target.marketSeed;
+    const vm = this.engine.get(target.marketId);
+    if (vm) vm.voidReason = voidReasonText(cause);
     this.engine.resolve(target.marketId, 'VOID');
     this.metrics.marketsVoided++;
     this.audit.record('market_void', { cause, reason: commentary?.slice(0, 80) ?? cause }, target.marketId);
@@ -2102,12 +2253,14 @@ export class Orchestrator {
     this.versusCounter = 0;
     this.heartbeatSeeded = false;
     this.commentary.clear();
-    this.enhancer.resetForMatch(); // drop a prior fixture's pooled lines
     this.director.resetForMatch(); // drop a prior fixture's pooled proposals
     this.matchFinalized = false;
     this.breakPaused = false;
     this.breakStartedAt = 0;
     this.breakEndedAt = 0;
+    this.breakLabel = undefined;
+    this.breakStartedWallMs = undefined;
+    this.breakStartedClockMin = NaN;
     this.extraTimeEntered = false;
     this.periodMarketPending = false;
     this.recent.length = 0;
@@ -2464,6 +2617,25 @@ function isWindowOrPlayKind(kind: string): boolean {
     kind === 'shot_or_corner_in_window' ||
     kind === 'score_in_window'
   );
+}
+
+/** Map a structured void CAUSE to a short, human, user-facing line for the card / tooltip. */
+function voidReasonText(cause?: string): string {
+  switch (cause) {
+    case 'full_time':
+      return 'Match ended before this could settle';
+    case 'which_side_next_deadline':
+      return 'No result before full time';
+    case 'set_piece_invalidated':
+    case 'stale_set_piece':
+      return 'The set piece never came';
+    case 'ambiguous_attribution':
+      return 'Goal source was unclear';
+    case 'match_switch':
+      return 'The match ended';
+    default:
+      return 'Refunded, no clean result';
+  }
 }
 
 function isSetPieceGoalKind(kind: string | undefined): boolean {

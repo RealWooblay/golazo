@@ -343,7 +343,7 @@ export function isWhichSideNextKind(kind: string): boolean {
 export function triggerWordingProblem(kind: string, question: string, isPeriod = false): string | null {
   const q = question.toLowerCase();
   const periodWorded =
-    /final whistle|before (?:the )?full[- ]?time|before (?:the )?half[- ]?time|before the whistle|in stoppage|added time|in extra[- ]?time|\bin et\b|equali[sz]er in et/.test(
+    /final whistle|to the whistle|beat the whistle|before (?:the )?full[- ]?time|before (?:the )?half[- ]?time|before the whistle|before the break|final sprint|final dash|dying (?:minutes|seconds|embers)|last kick|in stoppage|added time|in extra[- ]?time|\bin et\b|equali[sz]er in et/.test(
       q,
     );
   const isPeriodKind = isPeriod || kind === 'goal_in_stoppage' || kind === 'goal_in_extra_time';

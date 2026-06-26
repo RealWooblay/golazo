@@ -17,10 +17,10 @@ const game = (): GameState => ({
 
 const NOW = 1_000_000;
 
-describe('MarketDirector.validateProposal — the palette validation wall', () => {
-  it('accepts a well-formed team-bound proposal and derives the slot', () => {
+describe('MarketDirector.validateProposal — the palette + selection wall', () => {
+  it('accepts a team-bound proposal, builds the question from the bank, derives the slot', () => {
     const p = validateProposal(
-      { kind: 'next_shot', team: 'home', question: 'Who threatens next — Brazil or Argentina?', trueProb: 0.5, windowMs: 10_000, relevance: 0.8 },
+      { kind: 'next_shot', team: 'home', line: 0, trueProb: 0.5, windowMs: 10_000, relevance: 0.8 },
       game(),
       NOW,
     );
@@ -28,68 +28,79 @@ describe('MarketDirector.validateProposal — the palette validation wall', () =
     expect(p!.kind).toBe('next_shot');
     expect(p!.slot).toBe('versus');
     expect(p!.team).toBe('home');
+    // Built from the curated bank with {team}/{opp} substituted (home = Brazil = YES side first).
+    expect(p!.question).toBe('Who threatens next: Brazil or Argentina?');
     expect(p!.bornAt).toBe(NOW);
   });
 
-  it('accepts a teamless either-team proposal', () => {
+  it('accepts a teamless either-team proposal and builds its question', () => {
     const p = validateProposal(
-      { kind: 'goal_in_window', question: 'A goal by either side in the next few minutes?', trueProb: 0.3, windowMs: 9_000, relevance: 0.6 },
+      { kind: 'goal_in_window', line: 1, trueProb: 0.3, windowMs: 9_000, relevance: 0.6 },
       game(),
       NOW,
     );
     expect(p).not.toBeNull();
     expect(p!.team).toBeUndefined();
+    expect(p!.question.endsWith('?')).toBe(true);
+  });
+
+  it('IGNORES any free-text question — the AI can never WRITE wording, only SELECT it', () => {
+    const p = validateProposal(
+      {
+        kind: 'shot_in_window',
+        team: 'away',
+        line: 0,
+        question: 'totally made up free text 123',
+        trueProb: 0.4,
+        windowMs: 10_000,
+      },
+      game(),
+      NOW,
+    );
+    expect(p).not.toBeNull();
+    // The free text is discarded; the question comes from the bank and names the away side.
+    expect(p!.question).toContain('Argentina');
+    expect(p!.question).not.toContain('made up');
+    expect(/\d/.test(p!.question)).toBe(false);
+  });
+
+  it('CLAMPS an out-of-range line index into the bank (never rejects for it)', () => {
+    const p = validateProposal(
+      { kind: 'card_in_window', line: 999, trueProb: 0.3, windowMs: 9_000, relevance: 0.5 },
+      game(),
+      NOW,
+    );
+    expect(p).not.toBeNull();
+    expect(p!.question.endsWith('?')).toBe(true);
   });
 
   it('REJECTS an off-palette kind (the AI can never invent a kind)', () => {
     expect(DIRECTOR_PALETTE.has('penalty_scored')).toBe(false);
     expect(
       validateProposal(
-        { kind: 'penalty_scored', team: 'home', question: 'Brazil to score the penalty?', trueProb: 0.8, windowMs: 10_000, relevance: 1 },
+        { kind: 'penalty_scored', team: 'home', line: 0, trueProb: 0.8, windowMs: 10_000, relevance: 1 },
         game(),
         NOW,
       ),
     ).toBeNull();
-    expect(validateProposal({ kind: 'made_up_kind', question: 'Anything?', trueProb: 0.5, windowMs: 10_000 }, game(), NOW)).toBeNull();
+    expect(validateProposal({ kind: 'made_up_kind', line: 0, trueProb: 0.5, windowMs: 10_000 }, game(), NOW)).toBeNull();
   });
 
   it('REJECTS a team-bound kind with no/invalid team, and a teamless kind that carries a team', () => {
-    // shot_in_window needs a team.
-    expect(validateProposal({ kind: 'shot_in_window', question: 'Brazil to get a shot away this spell?', trueProb: 0.4, windowMs: 10_000 }, game(), NOW)).toBeNull();
-    expect(validateProposal({ kind: 'shot_in_window', team: 'nobody', question: 'Brazil to get a shot away?', trueProb: 0.4, windowMs: 10_000 }, game(), NOW)).toBeNull();
+    // shot_in_window needs a real team.
+    expect(validateProposal({ kind: 'shot_in_window', line: 0, trueProb: 0.4, windowMs: 10_000 }, game(), NOW)).toBeNull();
+    expect(
+      validateProposal({ kind: 'shot_in_window', team: 'nobody', line: 0, trueProb: 0.4, windowMs: 10_000 }, game(), NOW),
+    ).toBeNull();
     // over_corners must NOT carry a team.
-    expect(validateProposal({ kind: 'over_corners', team: 'home', question: 'More corners than the line soon?', trueProb: 0.5, windowMs: 10_000 }, game(), NOW)).toBeNull();
-  });
-
-  it('REJECTS a question with ANY digit (blocks fabricated scores/clocks)', () => {
     expect(
-      validateProposal(
-        { kind: 'shot_in_window', team: 'home', question: 'Brazil 2 Argentina 0 — a shot this spell?', trueProb: 0.4, windowMs: 10_000 },
-        game(),
-        NOW,
-      ),
+      validateProposal({ kind: 'over_corners', team: 'home', line: 0, trueProb: 0.5, windowMs: 10_000 }, game(), NOW),
     ).toBeNull();
-  });
-
-  it('REJECTS a team-bound question that does not name the team', () => {
-    expect(
-      validateProposal(
-        { kind: 'shot_in_window', team: 'home', question: 'A shot away this spell?', trueProb: 0.4, windowMs: 10_000 },
-        game(),
-        NOW,
-      ),
-    ).toBeNull();
-  });
-
-  it('REJECTS a question that is too long or has no question mark', () => {
-    const long = 'Brazil ' + 'pressing '.repeat(20) + 'this spell?';
-    expect(validateProposal({ kind: 'shot_in_window', team: 'home', question: long, trueProb: 0.4, windowMs: 10_000 }, game(), NOW)).toBeNull();
-    expect(validateProposal({ kind: 'shot_in_window', team: 'home', question: 'Brazil to get a shot away.', trueProb: 0.4, windowMs: 10_000 }, game(), NOW)).toBeNull();
   });
 
   it('CLAMPS trueProb, windowMs and relevance into safe bounds', () => {
     const p = validateProposal(
-      { kind: 'goal_in_window', question: 'A goal by either side soon?', trueProb: 5, windowMs: 999_999, relevance: 50 },
+      { kind: 'goal_in_window', line: 0, trueProb: 5, windowMs: 999_999, relevance: 50 },
       game(),
       NOW,
     )!;

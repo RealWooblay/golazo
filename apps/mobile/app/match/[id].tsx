@@ -14,13 +14,13 @@ import { colors, spacing, type } from "@/theme";
 import { AnimatedNumber, Banner, Button, Chip, Confetti, MonoStat, Overline, Screen, Text, Toast } from "@/ui";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useStore } from "@/state/store";
+import type { ClosedMarketVM } from "@/state/types";
 import { bettingClosesAt, bettingSafetyBufferMs, RAKE } from "@/lib/config";
 import { multiple } from "@/lib/format";
 import { useTick } from "@/hooks";
 import { useGameFeed } from "@/features/match/useGameFeed";
 import { useChain } from "@/features/chain/useChain";
-import { useRoomChainBets } from "@/features/friends/useRoomChainBets";
-import { FriendsChainPanel } from "@/features/friends/components";
+import { useChainBets } from "@/features/match/useChainBets";
 import {
   useDisplayBalance,
   makeStakeFormatter,
@@ -29,10 +29,12 @@ import {
 import { resolveTeams } from "@/features/match/teams";
 import { sideDisplayLabel } from "@/features/match/marketMeta";
 import {
+  ChainBetPanel,
   ClosedMarketsList,
   MarketCard,
+  MarketIncoming,
   RevealCard,
-  WaitingCard,
+  WaitingFidget,
 } from "@/features/match/components";
 import { PitchHero } from "@/features/match/components/PitchHero";
 import { StakeBar } from "@/features/match/components/StakeBar";
@@ -53,6 +55,7 @@ export default function MatchScreen() {
     commentaryLog,
     momentum,
     momentumLean,
+    incomingEtaMs,
     markets,
     market,
     pendingByMarket,
@@ -136,7 +139,7 @@ export default function MatchScreen() {
   const chain = useChain();
   const chainMode =
     chain.ready && store.mode === "live" && store.session.moneyMode === "real";
-  const chainBets = useRoomChainBets(chain, store.stake, chainMode, markets);
+  const chainBets = useChainBets(chain, store.stake, chainMode, markets);
   // Money is real SOL in chain mode, play $ in sandbox — for the header balance
   // AND the stake chips / over-balance check (so nothing reads "$" while you bet SOL).
   const bal = useDisplayBalance();
@@ -154,6 +157,43 @@ export default function MatchScreen() {
   useEffect(() => {
     if (chainMode) chainBets.markResolved(resolvedMarketOutcomes);
   }, [chainMode, chainBets.markResolved, resolvedMarketOutcomes]);
+
+  // Persisted bets for THIS game (survive leaving + returning to the match — they
+  // live in the store, not the ephemeral feed state that resets on remount).
+  const gameBets = useMemo(
+    () => (game ? store.bets.filter((b) => b.gameId === game.gameId) : []),
+    [store.bets, game],
+  );
+
+  // The settled-markets list = live session rows MERGED with persisted bets, so a bet
+  // placed/settled on a previous visit reappears on return. Live rows win on conflict
+  // (richer pool/odds/kind/voidReason); a persistence-only row still renders a clean
+  // YES/NO/VOID badge + your side + net via the question.
+  const sessionMarkets = useMemo<ClosedMarketVM[]>(() => {
+    const byId = new Map<string, ClosedMarketVM>();
+    for (const b of gameBets) {
+      byId.set(b.marketId, {
+        marketId: b.marketId,
+        question: b.question ?? b.label,
+        outcome: b.outcome,
+        oddsYes: 1,
+        oddsNo: 1,
+        poolYes: 0,
+        poolNo: 0,
+        poolTotal: 0,
+        yesShare: 50,
+        settledAt: b.at,
+        userSide: b.side,
+        userStake: b.stake,
+        userDelta: b.delta,
+        revealedAt: b.at,
+      });
+    }
+    for (const m of historicMarkets) byId.set(m.marketId, { ...byId.get(m.marketId), ...m });
+    return Array.from(byId.values()).sort(
+      (a, b) => (b.revealedAt ?? b.settledAt) - (a.revealedAt ?? a.settledAt),
+    );
+  }, [gameBets, historicMarkets]);
 
   // ── Win confetti: fire when a reveal is acknowledged as a win ───────────────
   const [confettiTrigger, setConfettiTrigger] = useState(0);
@@ -246,7 +286,7 @@ export default function MatchScreen() {
         {/* On-chain wallet + real-bet receipt (only when chain mode is live). */}
         {chain.configured ? (
           <View style={styles.gutter}>
-            <FriendsChainPanel
+            <ChainBetPanel
               bets={chainBets.bets}
               error={chainBets.error}
               onClaim={chainBets.claim}
@@ -275,10 +315,7 @@ export default function MatchScreen() {
               />
             </View>
             <View style={styles.gutter}>
-              <WaitingCard
-                title="Half time"
-                body="Grab a breather — second-half markets are moments away."
-              />
+              <WaitingFidget hapticsEnabled={hapticsOn} />
             </View>
           </>
         ) : (
@@ -294,6 +331,15 @@ export default function MatchScreen() {
                 hapticsEnabled={hapticsOn}
               />
             </View>
+
+            {/* "Next market in Ns · GET READY" — pinned above the board so it's
+                visible while other markets are live (the pacer holds the new one
+                back precisely WHILE the board is busy). Clears on market_open. */}
+            {incomingEtaMs != null ? (
+              <View style={styles.gutter}>
+                <MarketIncoming etaMs={incomingEtaMs} hapticsEnabled={hapticsOn} />
+              </View>
+            ) : null}
 
             {openMarkets.map((m) => {
               const liveOdds = chainBets.getLiveOdds(m.id);
@@ -369,7 +415,13 @@ export default function MatchScreen() {
               }
               return (
                 <View key={m.id} style={styles.gutter}>
-                  <LockedStrip market={m} now={now} betLabel={betLabel} breakActive={!!game?.breakPaused} />
+                  <LockedStrip
+                    market={m}
+                    now={now}
+                    betLabel={betLabel}
+                    breakActive={!!game?.breakPaused}
+                    breakLabel={game?.breakLabel}
+                  />
                 </View>
               );
             })}
@@ -378,14 +430,7 @@ export default function MatchScreen() {
             lockedMarkets.length === 0 &&
             reveals.length === 0 ? (
               <View style={styles.gutter}>
-                <WaitingCard
-                  clock={game?.clock}
-                  commentaryLog={commentaryLog}
-                  momentumLean={momentumLean}
-                  momentum={momentumTeam}
-                  homeName={game?.home?.name}
-                  awayName={game?.away?.name}
-                />
+                <WaitingFidget hapticsEnabled={hapticsOn} />
               </View>
             ) : null}
           </>
@@ -402,7 +447,7 @@ export default function MatchScreen() {
         ))}
 
         {(() => {
-          const sb = game ? store.bets.filter((b) => b.gameId === game.gameId) : [];
+          const sb = gameBets;
           if (sb.length === 0) return null;
           const net = sb.reduce((s, b) => s + (b.delta ?? 0), 0);
           const w = sb.filter((b) => b.won).length;
@@ -421,10 +466,8 @@ export default function MatchScreen() {
 
         <View style={styles.gutter}>
           <ClosedMarketsList
-            markets={historicMarkets}
-            userBets={
-              game ? store.bets.filter((b) => b.gameId === game.gameId) : []
-            }
+            markets={sessionMarkets}
+            userBets={gameBets}
             catchingUp={catchingUp}
           />
         </View>

@@ -193,6 +193,40 @@ export function HowItWorksNudge({
   );
 }
 
+/**
+ * PracticeCard — "practice while you wait". Shown in the lobby ONLY when nothing is
+ * live, so the screen is never a dead wait: tap to run the offline demo match (play
+ * money) and learn the bet-the-next-moment loop. Hidden the moment a real game is on.
+ */
+export function PracticeCard({
+  onPractice,
+  hapticsEnabled,
+}: {
+  onPractice: () => void;
+  hapticsEnabled?: boolean;
+}) {
+  return (
+    <PressableScale
+      depth="subtle"
+      haptic="tap"
+      hapticsEnabled={hapticsEnabled}
+      onPress={onPractice}
+      style={styles.practice}
+    >
+      <View style={styles.practiceText}>
+        <Text style={styles.practiceEyebrow}>PRACTICE WHILE YOU WAIT</Text>
+        <Text preset="bodyStrong">Run a demo match</Text>
+        <Text preset="caption" muted>
+          An offline sim on play money — learn the loop while the slate is quiet.
+        </Text>
+      </View>
+      <Text preset="bodyStrong" color={colors.yes} style={styles.practiceCta}>
+        Play ›
+      </Text>
+    </PressableScale>
+  );
+}
+
 const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
@@ -220,6 +254,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     alignSelf: "center",
   },
+  // — PracticeCard ("practice while you wait") —
+  practice: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.surface1,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+  },
+  practiceText: { flex: 1, gap: 3 },
+  practiceEyebrow: {
+    ...type.overline,
+    fontSize: 10,
+    color: colors.yes,
+    letterSpacing: 1.4,
+  },
+  practiceCta: { marginLeft: spacing.sm },
   // — NextMatch ("up next") card —
   next: {
     borderRadius: radius.lg,

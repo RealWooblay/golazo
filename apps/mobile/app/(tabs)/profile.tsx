@@ -1,13 +1,14 @@
 // OWNED BY: profile agent.
 //
-// The Profile tab: identity (editable display name), lifetime stats derived from
-// the ledger, the unified history (bets + transactions, filterable), and settings
-// (sound, haptics, offline/live mode + live feed URL, reset balance, how-it-works).
-// All state flows through the store (@/state). Web-safe — reuses @/ui + the
-// profile feature components, no new deps.
+// The Profile HUB — the app's only secondary page, reached via the profile icon in
+// the lobby header and dismissed with the back arrow. It MERGES what used to be the
+// separate Wallet + Rank tabs (the app has no tab bar): identity + lifetime stats,
+// a wallet section (on-chain wallet in real mode, add/cash-out in play mode), your
+// rank + the global leaderboard, the unified history, and settings. All state flows
+// through the store (@/state). Web-safe — reuses @/ui + feature components.
 import React, { useCallback, useMemo, useState } from "react";
 import { StyleSheet, TextInput, View } from "react-native";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { useStore } from "@/state/store";
 import { colors, radius, spacing, type } from "@/theme";
 import { Button, Chip, EmptyState, Screen, Sheet, Text } from "@/ui";
@@ -27,6 +28,13 @@ import {
 import { Entrance } from "@/features/_shared/primitives";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
+import { useChain } from "@/features/chain/useChain";
+import { ChainWalletHero } from "@/features/wallet";
+import { useWalletFund } from "@/features/wallet/useWalletFund";
+import { PointsLeaderboard } from "@/features/points/PointsLeaderboard";
+import { usePointsLeaderboardSync } from "@/features/points/usePointsLeaderboardSync";
+import { usePointsIdentity } from "@/features/points/usePointsIdentity";
+import { pts } from "@/lib/format";
 import { AccountCard } from "@/features/auth/AccountCard";
 import { useAccount } from "@/features/auth/useAccount";
 
@@ -36,7 +44,7 @@ const FILTERS: { value: LedgerFilter; label: string }[] = [
   { value: "cash", label: "Cash" },
 ];
 
-export default function ProfileTab() {
+export default function ProfileHub() {
   const router = useRouter();
   const account = useAccount();
   const store = useStore();
@@ -45,18 +53,34 @@ export default function ProfileTab() {
   const bal = useDisplayBalance(); // real SOL in chain mode, play $ otherwise
   const stats = useMemo(() => lifetimeStats(store.bets), [store.bets]);
 
+  // Wallet (real-mode on-chain wallet + faucet/withdraw flow).
+  const chain = useChain();
+  const {
+    realWallet,
+    fund,
+    funding,
+    faucetEnabled,
+    faucetWaitSec,
+    canFund,
+  } = useWalletFund();
+  const { ready: chainReady, refreshBalance } = chain;
+  useFocusEffect(
+    React.useCallback(() => {
+      if (chainReady) void refreshBalance();
+    }, [chainReady, refreshBalance]),
+  );
+
+  // Rank (the one global points leaderboard).
+  const { userId: meId } = usePointsIdentity();
+  usePointsLeaderboardSync(true);
+
   const [filter, setFilter] = useState<LedgerFilter>("all");
   const ledger = useMemo(
     () => filterLedger(store.history, filter),
     [store.history, filter],
   );
-  // History is a glance, not an archive — cap the ledger to the 5 most recent
-  // rows. (filterLedger returns newest-first.)
   const HISTORY_CAP = 5;
-  const visibleLedger = useMemo(
-    () => ledger.slice(0, HISTORY_CAP),
-    [ledger],
-  );
+  const visibleLedger = useMemo(() => ledger.slice(0, HISTORY_CAP), [ledger]);
 
   // Name editor sheet
   const [editing, setEditing] = useState(false);
@@ -79,29 +103,32 @@ export default function ProfileTab() {
     setConfirmReset(false);
   }, [store, hx]);
 
-  // Profile is mode-independent: the page reads identically in every money/live
-  // mode. The one exception is the live-feed status line at the very bottom,
-  // which only has anything to report while the live feed is connected.
   const goLive = store.session.mode === "live";
   const feedOps = useFeedOps(goLive);
 
-  // Load a fresh DEMO game: flip to the offline simulator (play money) and open
-  // the demo match. The sim starts 0-0 and auto-resets, so it's always fresh.
   const loadDemo = useCallback(() => {
     store.setMode("offline");
     if (hx) haptics.tap();
     router.push("/match/sim-arg-fra");
   }, [store, hx, router]);
 
-  // Signed-out (web, Privy on): show ONLY the sign-in card. This gate lives
-  // AFTER every hook above — an early return before any hook would change the
-  // hook count between renders when auth state flips, crashing the screen.
-  const needsSignIn =
-    account.enabled && account.ready && !account.authenticated;
+  const openDeposit = useCallback(() => router.push("/(modals)/deposit"), [router]);
+  const openWithdraw = useCallback(() => router.push("/(modals)/withdraw"), [router]);
+
+  // Back to the lobby (the one primary page). Falls back to a hard replace if the
+  // stack can't pop (e.g. deep-linked straight into Profile).
+  const goBack = useCallback(() => {
+    if (hx) haptics.tap();
+    if (router.canGoBack()) router.back();
+    else router.replace("/(tabs)");
+  }, [router, hx]);
+
+  // Signed-out (web, Privy on): show ONLY the sign-in card. AFTER every hook above.
+  const needsSignIn = account.enabled && account.ready && !account.authenticated;
   if (needsSignIn) {
     return (
       <Screen vignette="gold">
-        <UnifiedHeader variant="screen" title="Profile" />
+        <UnifiedHeader variant="slim" title="Profile" onBack={goBack} />
         <AccountCard noTopMargin />
       </Screen>
     );
@@ -109,7 +136,7 @@ export default function ProfileTab() {
 
   return (
     <Screen vignette="gold">
-      <UnifiedHeader variant="screen" title="Profile" />
+      <UnifiedHeader variant="slim" title="Profile" onBack={goBack} />
 
       <ProfileHero
         name={store.session.displayName ?? ""}
@@ -121,6 +148,70 @@ export default function ProfileTab() {
 
       {/* Account — Privy sign-in (recoverable, cross-device wallet) */}
       <AccountCard />
+
+      {/* Wallet — on-chain wallet in real mode; add / cash-out in play mode. */}
+      <View style={styles.section}>
+        <Text preset="subtitle" style={styles.sectionTitle}>
+          Wallet
+        </Text>
+        {realWallet ? (
+          <ChainWalletHero
+            address={chain.address}
+            balanceSol={chain.balanceSol}
+            airdropEnabled={faucetEnabled}
+            onFund={fund}
+            onWithdraw={openWithdraw}
+            funding={funding}
+            fundDisabled={!canFund}
+            fundWaitSec={faucetWaitSec}
+          />
+        ) : (
+          <View style={styles.walletActions}>
+            <Button
+              label="Add cash"
+              onPress={openDeposit}
+              variant="secondary"
+              fullWidth
+              style={styles.walletBtn}
+            />
+            <Button
+              label="Cash out"
+              onPress={openWithdraw}
+              variant="ghost"
+              fullWidth
+              style={styles.walletBtn}
+              disabled={bal.amount <= 0}
+            />
+          </View>
+        )}
+      </View>
+
+      {/* Rank — your standing + the one global leaderboard. */}
+      <View style={styles.section}>
+        <Text preset="subtitle" style={styles.sectionTitle}>
+          Rank
+        </Text>
+        <View style={styles.standing}>
+          <View style={styles.statCell}>
+            <Text style={styles.statLabel}>RANK</Text>
+            <Text style={styles.statValue}>#{store.pointsRank || "—"}</Text>
+          </View>
+          <View style={styles.statCell}>
+            <Text style={styles.statLabel}>POINTS</Text>
+            <Text style={styles.statValue}>{pts(store.pointsBalance)}</Text>
+          </View>
+          {store.pointsRank === 1 ? (
+            <View style={styles.laneChip}>
+              <Text style={styles.laneChipText}>LEADING</Text>
+            </View>
+          ) : null}
+        </View>
+        <PointsLeaderboard
+          players={store.pointsLeaderboard}
+          meId={meId}
+          compact
+        />
+      </View>
 
       {/* History ledger */}
       <View style={styles.section}>
@@ -138,10 +229,6 @@ export default function ProfileTab() {
               <Chip
                 key={f.value}
                 label={f.label}
-                // Neutral tone keeps the filter legible: the accent tones rendered
-                // same-hue text over a 12% tint of that same hue (lime-on-lime /
-                // cyan-on-cyan), so the active chip read as invisible. Neutral gives
-                // muted text on a distinct fill — the active chip stays obvious.
                 tone="neutral"
                 selected={filter === f.value}
                 onPress={() => setFilter(f.value)}
@@ -178,8 +265,6 @@ export default function ProfileTab() {
       {/* Settings */}
       <View style={styles.section}>
         <SettingsGroup title="PREFERENCES">
-          {/* Sound toggle removed — no audio is implemented, so it was a dead
-              switch (and this is a betting tool, not a hype feed). */}
           <ToggleRow
             glyph=""
             title="Haptics"
@@ -205,13 +290,6 @@ export default function ProfileTab() {
             title="How GOLAZO works"
             sub="The mechanic in 30 seconds"
             onPress={() => router.push("/how-it-works")}
-            hapticsEnabled={hx}
-          />
-          <LinkRow
-            glyph=""
-            title="Add cash"
-            sub="Top up your play-money balance"
-            onPress={() => router.push("/(modals)/deposit")}
             hapticsEnabled={hx}
           />
           <LinkRow
@@ -255,13 +333,7 @@ export default function ProfileTab() {
             onSubmitEditing={saveName}
             returnKeyType="done"
           />
-          <Button
-            label="Save"
-            onPress={saveName}
-            variant="primary"
-            fullWidth
-            glow
-          />
+          <Button label="Save" onPress={saveName} variant="primary" fullWidth glow />
         </View>
       </Sheet>
 
@@ -298,6 +370,7 @@ export default function ProfileTab() {
 
 const styles = StyleSheet.create({
   section: { marginTop: spacing.xxl },
+  sectionTitle: { marginBottom: spacing.md },
   sectionHead: {
     flexDirection: "row",
     alignItems: "center",
@@ -305,17 +378,50 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
     gap: spacing.sm,
   },
-  historyTitle: {
-    flexDirection: "row",
-    alignItems: "baseline",
-    gap: spacing.sm,
-  },
+  historyTitle: { flexDirection: "row", alignItems: "baseline", gap: spacing.sm },
   filters: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "flex-end",
     flexShrink: 1,
     gap: spacing.xs,
+  },
+  // Wallet (play mode) — a clean two-button action row.
+  walletActions: { flexDirection: "row", gap: spacing.md },
+  walletBtn: { flex: 1 },
+  // Rank — flat "your standing" card: stat cells + an optional LEADING lane chip.
+  standing: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xl,
+    marginBottom: spacing.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    backgroundColor: colors.surface1,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+  },
+  statCell: { gap: 2 },
+  statLabel: {
+    ...type.overline,
+    fontSize: 8,
+    color: colors.textFaint,
+    letterSpacing: 1.4,
+  },
+  statValue: { ...type.display, fontSize: 22, color: colors.textPrimary },
+  laneChip: {
+    marginLeft: "auto",
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    backgroundColor: colors.alpha.yes,
+  },
+  laneChipText: {
+    ...type.overline,
+    fontSize: 10,
+    color: colors.yes,
+    letterSpacing: 1.2,
   },
   ledger: {
     backgroundColor: colors.surface1,

@@ -11,7 +11,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useStore } from "@/state/store";
 import { colors, MAX_WIDTH, radius, spacing, type } from "@/theme";
-import { Pressable, Surface, Text, Button, Toast } from "@/ui";
+import { Pressable, Surface, Text, Button, Toast, IconButton } from "@/ui";
+import { IconProfile } from "@/ui/icons";
 import { haptics } from "@/ui/haptics";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { CountUp, PressableScale } from "@/features/_shared/primitives";
@@ -35,6 +36,7 @@ import {
   EmptyLobby,
   HowItWorksNudge,
   NextMatch,
+  PracticeCard,
   SectionHeader,
 } from "@/features/lobby/parts";
 
@@ -116,6 +118,14 @@ export default function PlayTab() {
     router.push("/(modals)/deposit");
   };
 
+  // Practice while you wait: only offered when nothing's live. Flips to the offline
+  // sim (play money) and opens the demo match; returning to the lobby resets to live.
+  const openDemo = () => {
+    if (hx) haptics.tap();
+    store.setMode("offline");
+    router.push("/match/sim-arg-fra");
+  };
+
   return (
     <View style={styles.root}>
       {/* Top bar pinned above the scroll, under the status bar. */}
@@ -130,15 +140,26 @@ export default function PlayTab() {
           <UnifiedHeader
             variant="tab"
             right={
-              <BalancePill
-                balance={bal.amount}
-                format={bal.format}
-                balanceLabel={playMode ? "points" : "balance"}
-                showAddCash={!playMode}
-                hapticsEnabled={hx}
-                onAddCash={addCash}
-                onOpenProfile={() => router.push("/(tabs)/profile")}
-              />
+              <View style={styles.headerRight}>
+                <BalancePill
+                  balance={bal.amount}
+                  format={bal.format}
+                  balanceLabel={playMode ? "points" : "balance"}
+                  showAddCash={!playMode}
+                  hapticsEnabled={hx}
+                  onAddCash={addCash}
+                  onOpenProfile={() => router.push("/(tabs)/profile")}
+                />
+                {/* The ONLY way to Profile now there's no tab bar — a standard
+                    person icon top-right. Profile holds wallet + rank + history. */}
+                <IconButton
+                  accessibilityLabel="Profile"
+                  onPress={() => router.push("/(tabs)/profile")}
+                  haptic="tap"
+                >
+                  <IconProfile size={22} color={colors.textPrimary} />
+                </IconButton>
+              </View>
             }
           />
         </View>
@@ -204,6 +225,15 @@ export default function PlayTab() {
                     onHowItWorks={() => router.push("/how-it-works")}
                   />
                 )}
+
+                {/* Practice while you wait — only when no real game is live. */}
+                {!hero ? (
+                  <View style={styles.section}>
+                    <Entrance delay={120}>
+                      <PracticeCard onPractice={openDemo} hapticsEnabled={hx} />
+                    </Entrance>
+                  </View>
+                ) : null}
 
                 {restLive.length > 0 ? (
                   <View style={styles.section}>
@@ -346,6 +376,7 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.hairlineSoft,
   },
   column: { width: "100%", maxWidth: MAX_WIDTH, alignSelf: "center" },
+  headerRight: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   // Breathing room for the Real/Paper mode switch: it sits clearly between the
   // header and the content rather than hugging either edge.
   modePickerWrap: {
