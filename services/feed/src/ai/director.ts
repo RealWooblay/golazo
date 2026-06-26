@@ -240,16 +240,6 @@ export class MarketDirector {
     return pick;
   }
 
-  /**
-   * PEEK — is a servable proposal ready for a currently-free slot? Does NOT consume one (unlike
-   * proposeNext). Used by the "market incoming" telegraph so the client only counts down when a
-   * director market will actually open, without burning the proposal on a paced bail.
-   */
-  hasReady(now: number, slotIsFree: (slot: MarketSlot) => boolean): boolean {
-    if (!this.active) return false;
-    return this.pool.some((p) => now - p.bornAt < STALE_MS && slotIsFree(p.slot));
-  }
-
   /** Clear all state on a match switch so a prior fixture's proposals never leak across. */
   resetForMatch(): void {
     this.pool = [];

@@ -338,8 +338,6 @@ export class Orchestrator {
   private lastPlayerMarketAt = 0;
   /** Wall-clock of the last market that surfaced — drives the FLOW PACING min-gap. */
   private lastOpenReleaseAt = 0;
-  /** Throttle for the cosmetic "market incoming" telegraph (~1/sec is plenty). */
-  private lastIncomingAt = 0;
   /** Heartbeat (event/count) lane cadence — seeded one interval into the match. */
   private lastEventSlotOpenAt = 0;
   private lastCountSlotOpenAt = 0;
@@ -863,17 +861,6 @@ export class Orchestrator {
   }
 
   /** Push the agent's momentum read to clients (drives the session momentum bar). */
-  /**
-   * Telegraph that a paced market is about to open in ~etaMs — a cosmetic "get ready" signal the
-   * client turns into a countdown + a 3·2·1 buzz. Throttled to ~1/sec; the client runs a smooth
-   * local countdown between updates and clears it the instant the real market_open lands.
-   */
-  private announceIncoming(etaMs: number): void {
-    const now = Date.now();
-    if (now - this.lastIncomingAt < 900) return;
-    this.lastIncomingAt = now;
-    this.server.broadcast({ t: 'market_incoming', etaMs: Math.max(0, Math.round(etaMs)) });
-  }
 
   private broadcastMomentum(): void {
     const r = this.momentum.read();
@@ -925,15 +912,9 @@ export class Orchestrator {
     // would just resolve off the same batch (mirrors the set-piece opener's guard).
     if (this.samePollResolverTeams.has(team)) return;
 
-    // FLOW PACING (last gate): a momentum market is READY — only the pacer holds it back so the
-    // board drips at a clean rhythm rather than dumping a whole poll-batch at once. Telegraph the
-    // wait ("next market in Ns" + a 3·2·1 buzz on the client) and open on a later tick once the
-    // pacer clears. The keep-alive re-offers next tick, so this staggers timing, not volume.
-    const sincePacer = Date.now() - this.lastOpenReleaseAt;
-    if (sincePacer < MIN_OPEN_SPACING_MS) {
-      this.announceIncoming(MIN_OPEN_SPACING_MS - sincePacer);
-      return;
-    }
+    // FLOW PACING (last gate): drip momentum markets at a clean rhythm — never dump a whole
+    // poll-batch at once. The keep-alive re-offers next tick, so this staggers timing, not volume.
+    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return;
 
     const game = this.feed.state();
     const name = team === 'home' ? game.home.name : game.away.name;
@@ -1267,12 +1248,7 @@ export class Orchestrator {
   private async maybeOpenEventSlotMarket(game: GameState): Promise<void> {
     if (this.hasBlockingMarket('event')) return;
     if (Date.now() - this.lastEventSlotOpenAt < EVENT_SLOT_INTERVAL_MS) return;
-    // A market is due (interval elapsed) — if only the flow pacer holds it, telegraph the wait.
-    const sinceEvent = Date.now() - this.lastOpenReleaseAt;
-    if (sinceEvent < MIN_OPEN_SPACING_MS) {
-      this.announceIncoming(MIN_OPEN_SPACING_MS - sinceEvent);
-      return;
-    }
+    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
 
     let trigger = buildEventSlotTrigger(game.gameId, this.eventSlotCounter);
     // POST-GOAL: don't open "a goal in the next few minutes?" right after a goal (the game
@@ -1299,11 +1275,7 @@ export class Orchestrator {
   private async maybeOpenCountSlotMarket(game: GameState): Promise<void> {
     if (this.hasBlockingMarket('count')) return;
     if (Date.now() - this.lastCountSlotOpenAt < COUNT_SLOT_INTERVAL_MS) return;
-    const sinceCount = Date.now() - this.lastOpenReleaseAt;
-    if (sinceCount < MIN_OPEN_SPACING_MS) {
-      this.announceIncoming(MIN_OPEN_SPACING_MS - sinceCount);
-      return;
-    }
+    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
 
     const trigger = buildCountSlotTrigger(game.gameId, this.countSlotCounter);
 
@@ -1327,15 +1299,7 @@ export class Orchestrator {
    */
   private async maybeOpenDirectorMarket(game: GameState): Promise<void> {
     if (!this.director.active) return;
-    // Pacer gate FIRST — but only telegraph if a proposal is actually ready (peek, don't consume,
-    // so we never count down to a market that won't open and never burn the proposal on a bail).
-    const sinceDir = Date.now() - this.lastOpenReleaseAt;
-    if (sinceDir < MIN_OPEN_SPACING_MS) {
-      if (this.director.hasReady(Date.now(), (slot) => !this.hasBlockingMarket(slot))) {
-        this.announceIncoming(MIN_OPEN_SPACING_MS - sinceDir);
-      }
-      return;
-    }
+    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
     const proposal: MarketProposal | undefined = this.director.proposeNext(
       Date.now(),
       (slot) => !this.hasBlockingMarket(slot),
@@ -1385,12 +1349,7 @@ export class Orchestrator {
     const trigger = buildVersusTrigger(game, team, Math.floor(this.versusCounter / 2));
     if (!trigger) return;
 
-    // A contest is genuinely due (pressure + a real trigger) — telegraph if the pacer holds it.
-    const sinceVs = Date.now() - this.lastOpenReleaseAt;
-    if (sinceVs < MIN_OPEN_SPACING_MS) {
-      this.announceIncoming(MIN_OPEN_SPACING_MS - sinceVs);
-      return;
-    }
+    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
 
     const beforeOpened = this.metrics.marketsOpened;
     await this.openTriggeredMarket(trigger, {
@@ -1768,7 +1727,10 @@ export class Orchestrator {
    */
   private eventWallclockMs(ev: FeedEvent): number | undefined {
     const wc = ev.meta?.wallclock;
-    if (typeof wc === 'string') {
+    // REQUIRE an explicit timezone (Z or ±HH:MM). A tz-less ISO string is parsed as HOST-LOCAL
+    // time, which on a non-UTC box is hours off the true instant and would silently flip taint.
+    // No explicit offset → undefined (fail to the match-clock / fail-open path), never a misparse.
+    if (typeof wc === 'string' && /(?:Z|[+-]\d\d:?\d\d)$/.test(wc)) {
       const t = Date.parse(wc);
       if (Number.isFinite(t)) return t;
     }
@@ -1803,8 +1765,24 @@ export class Orchestrator {
   private resolverIsTainted(ev: FeedEvent, m: Market, t: TrackedMarket): boolean {
     const evWc = this.eventWallclockMs(ev);
     if (evWc !== undefined) {
-      // Exact ESPN wallclock — precise taint.
-      return evWc < bettingClosesAt(m.lockAt, m.windowMs) - RESOLVER_SKEW_GRACE_MS;
+      // Exact ESPN wallclock — precise taint. The skew grace is ADDED, not subtracted: a borderline
+      // event up to the grace AFTER betting closed is still treated as TAINTED, absorbing clock
+      // skew on the SAFE side. (Subtracting it — the old bug — left a ~1.5s band [close-grace, close)
+      // where a goal that happened while betting was open was judged clean and paid YES → arb.)
+      return evWc < bettingClosesAt(m.lockAt, m.windowMs) + RESOLVER_SKEW_GRACE_MS;
+    }
+    // No exact wallclock. For a GOAL (the high-value resolver) fall back to the MATCH CLOCK in the
+    // one direction that is unambiguously safe: a goal whose game-minute is BEFORE the minute this
+    // market opened happened before the market existed (so before betting closed) → taint. This
+    // catches a re-surfaced stale goal AND can never over-NO a legit goal (a goal from before open
+    // is never a clean YES for this market). Same-minute/later goals + all commentary still fail
+    // OPEN — a whole-minute taint there would wrongly NO legit in-window goals (the documented residual).
+    if (ev.type === 'goal') {
+      const goalMin = clockMinutes(ev);
+      const openMin = t.openClockMin;
+      if (goalMin !== undefined && openMin !== undefined && goalMin < openMin) {
+        return true;
+      }
     }
     // No exact wallclock. A GOAL is the high-value decisive resolver and must still be
     // taint-checked — fall back to the MATCH CLOCK: a goal whose game-minute is at/before the
@@ -1836,7 +1814,9 @@ export class Orchestrator {
    * earlier rather than the live event. A goal with no timing signal is treated as clean.
    */
   private rescueGoalIsClean(t: TrackedMarket, m: Market): boolean {
-    const cutoff = bettingClosesAt(m.lockAt, m.windowMs) - RESOLVER_SKEW_GRACE_MS;
+    // Grace ADDED (mirrors resolverIsTainted): a goal up to the grace after betting closed is NOT
+    // clean, so the deadline late-goal rescue can't arb a known goal back in through the band.
+    const cutoff = bettingClosesAt(m.lockAt, m.windowMs) + RESOLVER_SKEW_GRACE_MS;
     if (t.team) {
       const wc = this.lastGoalWallclockByTeam.get(t.team);
       // Exact wallclock → precise. No wallclock → clean (fail open, consistent with the

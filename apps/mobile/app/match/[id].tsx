@@ -32,7 +32,6 @@ import {
   ChainBetPanel,
   ClosedMarketsList,
   MarketCard,
-  MarketIncoming,
   RevealCard,
   WaitingFidget,
 } from "@/features/match/components";
@@ -55,7 +54,6 @@ export default function MatchScreen() {
     commentaryLog,
     momentum,
     momentumLean,
-    incomingEtaMs,
     markets,
     market,
     pendingByMarket,
@@ -331,15 +329,6 @@ export default function MatchScreen() {
                 hapticsEnabled={hapticsOn}
               />
             </View>
-
-            {/* "Next market in Ns · GET READY" — pinned above the board so it's
-                visible while other markets are live (the pacer holds the new one
-                back precisely WHILE the board is busy). Clears on market_open. */}
-            {incomingEtaMs != null ? (
-              <View style={styles.gutter}>
-                <MarketIncoming etaMs={incomingEtaMs} hapticsEnabled={hapticsOn} />
-              </View>
-            ) : null}
 
             {openMarkets.map((m) => {
               const liveOdds = chainBets.getLiveOdds(m.id);

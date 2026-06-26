@@ -80,8 +80,6 @@ export interface GameFeedVM {
   /** Continuous lean toward a side in [0..1] (0 = home/left, 1 = away/right, 0.5 =
    *  even). Lets the bar move smoothly with the run of play; null = no read yet. */
   momentumLean: number | null;
-  /** Cosmetic "market incoming" countdown in ms (null = nothing pending). */
-  incomingEtaMs: number | null;
   markets: MarketVM[];
   market: MarketVM | null;
   pendingByMarket: Record<string, PendingBet | undefined>;
@@ -168,9 +166,6 @@ export function useGameFeed(): GameFeedApi {
   // rather than snapping to 3 fixed positions off the binary leader and looking
   // frozen. Null until the first momentum frame arrives.
   const [momentumLean, setMomentumLean] = useState<number | null>(null);
-  // Cosmetic "get ready, a market is incoming" telegraph (ms until it opens), or null when none
-  // is pending. Set by the server's market_incoming frame; cleared the instant a market opens.
-  const [incomingEtaMs, setIncomingEtaMs] = useState<number | null>(null);
   const [markets, setMarkets] = useState<MarketVM[]>([]);
   const [pendingByMarket, setPendingByMarket] = useState<
     Record<string, PendingBet | undefined>
@@ -783,13 +778,9 @@ export function useGameFeed(): GameFeedApi {
                 setMomentumLean(total > 0 ? msg.away / total : 0.5);
               }
               break;
-            case "market_incoming":
-              setIncomingEtaMs(msg.etaMs);
-              break;
             case "market_open":
               catchingUpRef.current = false;
               setCatchingUp(false);
-              setIncomingEtaMs(null); // the wait is over — the card is here
 
               if (pointsMode) {
                 setPointsPools((prev) => ({
@@ -1147,7 +1138,6 @@ export function useGameFeed(): GameFeedApi {
     commentaryLog,
     momentum,
     momentumLean,
-    incomingEtaMs,
     markets,
     market,
     pendingByMarket,

@@ -140,6 +140,26 @@ describe('anti-arb: a resolver that happened DURING betting is ignored', () => {
     await orch.stop();
   });
 
+  it('does NOT settle YES off a goal in the skew-grace band just before betting closed', async () => {
+    const feed = new StubFeed();
+    const orch = new Orchestrator(simConfig(), feed);
+    const m = await openAndLockGoalWindow(orch);
+
+    // A goal 1s BEFORE betting closed — inside the old [close-1.5s, close) hole where a viewer
+    // could still bet on the known outcome. The skew grace is ADDED to the cutoff, so this band
+    // is tainted, not clean. (Regression for the grace-sign bug — was settling YES = arb.)
+    const betClose = bettingClosesAt(m.lockAt, m.windowMs);
+    feed.push([goalAt('home', betClose - 1_000)]);
+    await orch.simTick();
+    // And it must not arb back in via the deadline late-goal rescue either.
+    await vi.advanceTimersByTimeAsync(400_000);
+    await orch.simTick();
+
+    const after = orch.simMarkets().find((x) => x.id === m.id)!;
+    expect(after.settlement?.outcome).not.toBe('YES');
+    await orch.stop();
+  });
+
   // A goal with NO exact wallclock FAILS OPEN (is counted). The match clock is whole-minute
   // granular while the betting window is ~10s, so any match-clock taint over-blocks legitimate
   // in-window goals far more often than it catches the rare arb — so we count it. This pins the

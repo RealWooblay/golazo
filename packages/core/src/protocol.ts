@@ -18,10 +18,6 @@ export type ServerMessage =
   | { t: 'market_update'; market: Market } // pool / odds changed
   | { t: 'market_lock'; market: Market }
   | { t: 'market_resolve'; market: Market } // includes settlement w/ per-user payouts
-  // "Get ready" telegraph — a new market is queued behind the flow pacer and about to open in
-  // ~etaMs. Purely cosmetic (drives the idle countdown + a 3·2·1 buzz); never gates a bet or a
-  // resolution. The client clears it the moment the real market_open arrives.
-  | { t: 'market_incoming'; etaMs: number }
   // A held bet was NOT accepted (the play resolved inside the bet-delay window, or
   // the market closed first). The client must refund its optimistic debit.
   | { t: 'bet_rejected'; marketId: string; userId: string; stake: number; reason: string }

@@ -13,6 +13,5 @@ export { ClosedMarketsList } from "./ClosedMarketsList";
 export { ChainBetPanel } from "./ChainBetPanel";
 export { WaitingCard } from "./WaitingCard";
 export { default as WaitingFidget } from "./WaitingFidget";
-export { MarketIncoming } from "./MarketIncoming";
 export { FullTimeCard } from "./FullTimeCard";
 export { GlowWash } from "./GlowWash";
