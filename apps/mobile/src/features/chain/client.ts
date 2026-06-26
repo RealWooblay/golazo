@@ -24,6 +24,7 @@ import {
   LAMPORTS_PER_SOL,
   PublicKey,
   SystemProgram,
+  SYSVAR_RENT_PUBKEY,
   Transaction,
   TransactionInstruction,
   type AccountMeta,
@@ -34,7 +35,13 @@ import {
   indicativePayout,
   bpsToMultiple,
 } from "./bps";
-import { deriveBetPda, deriveMarketPda, deriveVaultPda } from "./pdas";
+import {
+  TOKEN_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
+  baseUnitsFromUsd,
+  usdFromBaseUnits,
+} from "./config";
+import { deriveAta, deriveBetPda, deriveMarketPda, deriveVaultPda } from "./pdas";
 import { explorerTxUrl, type ChainContext } from "./provider";
 import type {
   BetAccount,
@@ -87,14 +94,54 @@ const meta = (
   isWritable: boolean,
 ): AccountMeta => ({ pubkey, isSigner, isWritable });
 
+// ── SPL token program ids + USX mint (the settlement asset) ─────────────────────
+const TOKEN_PROGRAM = new PublicKey(TOKEN_PROGRAM_ID);
+const ASSOCIATED_TOKEN_PROGRAM = new PublicKey(ASSOCIATED_TOKEN_PROGRAM_ID);
+/** The USX mint for this context (env-configurable; matches the program const). */
+const usxMint = (ctx: ChainContext): PublicKey => new PublicKey(ctx.config.usxMint);
+
+/**
+ * Idempotent "create associated token account" instruction. Safe to include even
+ * when the ATA already exists (no-op), so we prepend it to bet/claim/init to
+ * guarantee the owner's USX account is present before the program touches it.
+ */
+function createAtaIdempotentIx(
+  payer: PublicKey,
+  owner: PublicKey,
+  mint: PublicKey,
+): TransactionInstruction {
+  const ata = deriveAta(owner, mint);
+  return new TransactionInstruction({
+    programId: ASSOCIATED_TOKEN_PROGRAM,
+    keys: [
+      meta(payer, true, true),
+      meta(ata, false, true),
+      meta(owner, false, false),
+      meta(mint, false, false),
+      meta(SystemProgram.programId, false, false),
+      meta(TOKEN_PROGRAM, false, false),
+    ],
+    data: Buffer.from([1]), // 1 = CreateIdempotent
+  });
+}
+
 /** Build + sign + send a single-instruction tx with the embedded wallet. */
 async function send(
   ctx: ChainContext,
   keys: AccountMeta[],
   data: Buffer,
 ): Promise<TxResult> {
-  const ix = new TransactionInstruction({ programId: ctx.programId, keys, data });
-  const tx = new Transaction().add(ix);
+  return sendIxs(ctx, [
+    new TransactionInstruction({ programId: ctx.programId, keys, data }),
+  ]);
+}
+
+/** Build + sign + send a multi-instruction tx with the embedded wallet. */
+async function sendIxs(
+  ctx: ChainContext,
+  ixs: TransactionInstruction[],
+): Promise<TxResult> {
+  const tx = new Transaction().add(...ixs);
   const signature = await ctx.provider.sendAndConfirm(tx, []);
   return { signature, explorerUrl: explorerTxUrl(signature, ctx.config.cluster) };
 }
@@ -133,7 +180,7 @@ export function deriveMarketPdas(
 
 // ── reads (raw account-buffer decode) ───────────────────────────────────────────
 
-/** Embedded wallet SOL balance (lamports + SOL). */
+/** Embedded wallet SOL balance (lamports + SOL) — used only for tx fees. */
 export async function fetchBalance(
   ctx: ChainContext,
 ): Promise<{ balanceLamports: bigint; balanceSol: number }> {
@@ -145,6 +192,24 @@ export async function fetchBalance(
     balanceLamports: BigInt(lamports),
     balanceSol: lamports / LAMPORTS_PER_SOL,
   };
+}
+
+/**
+ * Embedded wallet USX balance — the bettable/displayed balance. Reads the wallet's
+ * USX associated token account; a missing/empty account reads as 0 (no throw).
+ */
+export async function fetchUsxBalance(
+  ctx: ChainContext,
+): Promise<{ balanceBaseUnits: bigint; balanceUsd: number }> {
+  const ata = deriveAta(ctx.wallet.publicKey, usxMint(ctx));
+  try {
+    const res = await ctx.connection.getTokenAccountBalance(ata, "confirmed");
+    const baseUnits = BigInt(res.value.amount);
+    return { balanceBaseUnits: baseUnits, balanceUsd: usdFromBaseUnits(baseUnits) };
+  } catch {
+    // ATA not created yet (or transient) — treat as zero balance.
+    return { balanceBaseUnits: 0n, balanceUsd: 0 };
+  }
 }
 
 /**
@@ -293,7 +358,44 @@ export async function requestAirdrop(
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Withdraw SOL from the embedded wallet to an external address (cash out). */
+/**
+ * Withdraw USX (cash out) from the embedded wallet to an external address. Sends
+ * `usd` dollars of USX to the destination's USX account, creating that account
+ * (CreateIdempotent, paid by us) if it doesn't exist yet. The SOL tx fee + any
+ * recipient-account rent come from the embedded wallet's SOL.
+ */
+export async function withdrawUsx(
+  ctx: ChainContext,
+  toAddress: string,
+  usd: number,
+): Promise<TxResult> {
+  let destination: PublicKey;
+  try {
+    destination = new PublicKey(toAddress);
+  } catch {
+    throw new Error("That doesn't look like a valid Solana address.");
+  }
+  const mint = usxMint(ctx);
+  const amount = baseUnitsFromUsd(usd);
+  const fromAta = deriveAta(ctx.wallet.publicKey, mint);
+  const toAta = deriveAta(destination, mint);
+  // SPL Token `Transfer` (instruction 3): [source(w), dest(w), authority(s)].
+  const transferIx = new TransactionInstruction({
+    programId: TOKEN_PROGRAM,
+    keys: [
+      meta(fromAta, false, true),
+      meta(toAta, false, true),
+      meta(ctx.wallet.publicKey, true, false),
+    ],
+    data: Buffer.concat([Buffer.from([3]), u64le(amount)]),
+  });
+  return sendIxs(ctx, [
+    createAtaIdempotentIx(ctx.wallet.publicKey, destination, mint),
+    transferIx,
+  ]);
+}
+
+/** Withdraw SOL from the embedded wallet to an external address (advanced). */
 export async function withdrawSol(
   ctx: ChainContext,
   toAddress: string,
@@ -325,59 +427,80 @@ export async function withdrawSol(
 // ── instructions (raw mirrors of the program's #[program] entrypoints) ──────────
 
 /**
- * `place_bet(side, stake)` — the embedded wallet backs `side` and moves the
- * stake into the vault. No fixed payout is stored.
- * Accounts (program order): bettor(s,w), market(w), vault(w), bet(w), system.
+ * `place_bet(side, stake)` — the embedded wallet backs `side`, moving `stake` USX
+ * base units into the market vault. No fixed payout is stored.
+ * Accounts (program order): bettor(s,w), market(w), vault(w), bettor_token(w),
+ * bet(w), token_program, system. A CreateIdempotent ATA ix is prepended so the
+ * bettor's USX account is guaranteed present.
  */
 export async function placeBet(
   ctx: ChainContext,
   args: PlaceBetArgs,
 ): Promise<TxResult> {
   const authorityPk = new PublicKey(args.authority);
+  const mint = usxMint(ctx);
+  const bettorPk = ctx.wallet.publicKey;
   const [marketPk] = deriveMarketPda(ctx.programId, authorityPk, args.marketSeed);
   const [vaultPk] = deriveVaultPda(ctx.programId, marketPk);
-  const [betPk] = deriveBetPda(ctx.programId, marketPk, ctx.wallet.publicKey);
+  const [betPk] = deriveBetPda(ctx.programId, marketPk, bettorPk);
+  const bettorTokenPk = deriveAta(bettorPk, mint);
   const data = Buffer.concat([
     disc("place_bet"),
     Buffer.from([sideByte(args.side)]),
     u64le(args.stakeLamports),
   ]);
-  return send(
-    ctx,
-    [
-      meta(ctx.wallet.publicKey, true, true),
+  const betIx = new TransactionInstruction({
+    programId: ctx.programId,
+    keys: [
+      meta(bettorPk, true, true),
       meta(marketPk, false, true),
       meta(vaultPk, false, true),
+      meta(bettorTokenPk, false, true),
       meta(betPk, false, true),
+      meta(TOKEN_PROGRAM, false, false),
       meta(SystemProgram.programId, false, false),
     ],
     data,
-  );
+  });
+  return sendIxs(ctx, [
+    createAtaIdempotentIx(bettorPk, bettorPk, mint),
+    betIx,
+  ]);
 }
 
 /**
- * `claim()` — settle the embedded wallet's bet on a Resolved/Void market.
- * Accounts: bettor(s,w), market(ro), vault(w), bet(w), system.
+ * `claim()` — settle the embedded wallet's bet on a Resolved/Void market; pays
+ * out in USX. Accounts: bettor(s,w), market(ro), vault(w), bettor_token(w),
+ * bet(w), token_program. The bettor's USX ATA already exists (they bet from it),
+ * but we prepend a CreateIdempotent for safety.
  */
 export async function claim(
   ctx: ChainContext,
   args: ClaimArgs,
 ): Promise<TxResult> {
   const authorityPk = new PublicKey(args.authority);
+  const mint = usxMint(ctx);
+  const bettorPk = ctx.wallet.publicKey;
   const [marketPk] = deriveMarketPda(ctx.programId, authorityPk, args.marketSeed);
   const [vaultPk] = deriveVaultPda(ctx.programId, marketPk);
-  const [betPk] = deriveBetPda(ctx.programId, marketPk, ctx.wallet.publicKey);
-  return send(
-    ctx,
-    [
-      meta(ctx.wallet.publicKey, true, true),
+  const [betPk] = deriveBetPda(ctx.programId, marketPk, bettorPk);
+  const bettorTokenPk = deriveAta(bettorPk, mint);
+  const claimIx = new TransactionInstruction({
+    programId: ctx.programId,
+    keys: [
+      meta(bettorPk, true, true),
       meta(marketPk, false, false),
       meta(vaultPk, false, true),
+      meta(bettorTokenPk, false, true),
       meta(betPk, false, true),
-      meta(SystemProgram.programId, false, false),
+      meta(TOKEN_PROGRAM, false, false),
     ],
-    disc("claim"),
-  );
+    data: disc("claim"),
+  });
+  return sendIxs(ctx, [
+    createAtaIdempotentIx(bettorPk, bettorPk, mint),
+    claimIx,
+  ]);
 }
 
 /**
@@ -399,8 +522,10 @@ export async function initializeMarket(
     throw new Error("questionHash must be exactly 32 bytes.");
   }
   const authorityPk = ctx.wallet.publicKey;
+  const mint = usxMint(ctx);
   const [marketPk] = deriveMarketPda(ctx.programId, authorityPk, params.marketSeed);
   const [vaultPk] = deriveVaultPda(ctx.programId, marketPk);
+  const authorityTokenPk = deriveAta(authorityPk, mint);
   const data = Buffer.concat([
     disc("initialize_market"),
     u64le(params.marketSeed),
@@ -409,16 +534,26 @@ export async function initializeMarket(
     u64le(params.seedYesLamports),
     u64le(params.seedNoLamports),
   ]);
-  const res = await send(
-    ctx,
-    [
+  // Accounts (program order): authority(s,w), market(w), usx_mint, vault(w),
+  // authority_token(w), token_program, system, rent.
+  const initIx = new TransactionInstruction({
+    programId: ctx.programId,
+    keys: [
       meta(authorityPk, true, true),
       meta(marketPk, false, true),
+      meta(mint, false, false),
       meta(vaultPk, false, true),
+      meta(authorityTokenPk, false, true),
+      meta(TOKEN_PROGRAM, false, false),
       meta(SystemProgram.programId, false, false),
+      meta(SYSVAR_RENT_PUBKEY, false, false),
     ],
     data,
-  );
+  });
+  const res = await sendIxs(ctx, [
+    createAtaIdempotentIx(authorityPk, authorityPk, mint),
+    initIx,
+  ]);
   return {
     ...res,
     pdas: { market: marketPk.toBase58(), vault: vaultPk.toBase58() },

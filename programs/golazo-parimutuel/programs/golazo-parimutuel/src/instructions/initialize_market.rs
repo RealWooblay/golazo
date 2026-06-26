@@ -1,37 +1,41 @@
-//! `initialize_market` — create a Market + its lamport vault.
+//! `initialize_market` — create a Market + its USX token vault.
 //!
 //! VAULT MODEL (documented choice):
-//! The vault is a dedicated, **data-less, system-owned PDA** at
-//! seeds `["vault", market]`. We deliberately do NOT store bettor lamports on
-//! the `Market` data account, because:
-//!   * A System-owned account can receive lamports via a plain System Program
-//!     `transfer` CPI (no special owner check), which is the cheapest, clearest
-//!     deposit path for bettors.
-//!   * On withdrawal we sign for the vault with its PDA seeds + bump, and move
-//!     lamports by *direct balance mutation* (allowed because the program is the
-//!     ... actually the vault is System-owned, so we use a System `transfer`
-//!     CPI signed by the vault PDA — see `claim.rs`).
-//!   * Keeping the vault separate means the Market's rent-exempt reserve is
-//!     never entangled with the prize pool, so accounting stays exact.
+//! The vault is a **PDA-owned SPL token account** at seeds `["vault", market]`,
+//! holding the USX stablecoin. Its token authority is the **Market PDA**, so:
+//!   * Bettors deposit with a plain `token::transfer` into the vault (they sign
+//!     as the source authority).
+//!   * Payouts/refunds move USX out by a `token::transfer` signed by the Market
+//!     PDA (`invoke_signed` with the market seeds) — see `claim.rs`. No private
+//!     key exists for the PDA, so the pool is spendable only via this program.
+//!
+//! Unlike the old native-SOL design, a token account's **SOL rent is fully
+//! separate from its token balance**. So `vault.amount` equals the pool exactly,
+//! and there is no rent reservation that could bite into the prize pool. The
+//! operator still pays the (one-time) SOL rent for the token account via `init`.
 
 use anchor_lang::prelude::*;
-use anchor_lang::system_program::{self, Transfer};
+use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
 use crate::errors::GolazoError;
 use crate::events::MarketInitialized;
 use crate::instructions::seeds;
 use crate::state::{Market, MarketStatus, Outcome};
+use crate::USX_MINT;
 
 #[derive(Accounts)]
 #[instruction(market_seed: u64)]
 pub struct InitializeMarket<'info> {
-    /// The operator. Pays rent for the Market account, the vault's rent-exempt
-    /// minimum (always), and any optional seed.
+    /// The operator. Pays SOL rent for the Market account and the vault token
+    /// account, and funds any optional USX seed from `authority_token`.
     #[account(mut)]
     pub authority: Signer<'info>,
 
     /// The market PDA. Seeds bind it to (authority, market_seed) so the same
     /// operator can run many markets and nobody can squat another's address.
+    // Heavy `Account` types are `Box`ed onto the heap: this context has two
+    // `init`s plus a `Mint` and two `TokenAccount`s, which together overflow the
+    // SBF stack frame in `try_accounts` if kept inline.
     #[account(
         init,
         payer = authority,
@@ -39,20 +43,39 @@ pub struct InitializeMarket<'info> {
         seeds = [seeds::MARKET, authority.key().as_ref(), &market_seed.to_le_bytes()],
         bump
     )]
-    pub market: Account<'info, Market>,
+    pub market: Box<Account<'info, Market>>,
 
-    /// CHECK: Data-less, system-owned vault PDA holding all lamports for this
-    /// market. We never deserialize it; it is validated purely by its PDA seeds
-    /// and bump. It is created implicitly the first time lamports are sent to it
-    /// (a System account needs no `init`).
+    /// The USX mint, pinned program-wide. `address = USX_MINT` makes it
+    /// impossible to stand up a market vault for any other token.
+    #[account(address = USX_MINT)]
+    pub usx_mint: Box<Account<'info, Mint>>,
+
+    /// PDA-owned USX vault for this market. Holds every stake; authority is the
+    /// Market PDA so only this program (signing with the market seeds) can move
+    /// funds out. Created here, paid by the operator.
+    #[account(
+        init,
+        payer = authority,
+        seeds = [seeds::VAULT, market.key().as_ref()],
+        bump,
+        token::mint = usx_mint,
+        token::authority = market,
+    )]
+    pub vault: Box<Account<'info, TokenAccount>>,
+
+    /// The operator's own USX account, source of any optional seed deposit. Even
+    /// when the seed is zero (the normal zero-capital path) it must be a valid
+    /// USX account owned by the authority; no USX is moved unless seed > 0.
     #[account(
         mut,
-        seeds = [seeds::VAULT, market.key().as_ref()],
-        bump
+        token::mint = usx_mint,
+        token::authority = authority,
     )]
-    pub vault: SystemAccount<'info>,
+    pub authority_token: Box<Account<'info, TokenAccount>>,
 
+    pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
 pub fn handler(
@@ -71,33 +94,25 @@ pub fn handler(
         .checked_add(seed_no)
         .ok_or_else(|| error!(GolazoError::MathOverflow))?;
 
-    // --- Fund the vault: rent-exemption (always) + optional seed ----------
-    // The vault is a data-less, system-owned PDA. We ALWAYS move the 0-byte
-    // rent-exempt minimum into it here, at init and paid by the operator, so the
-    // vault is rent-exempt BEFORE any bet or claim. This is required because
-    // `claim.rs` reserves `Rent::minimum_balance(0)` in the vault on every
-    // payout; without this pre-funding that reservation bites into the prize
-    // pool and bricks the last winner's claim (InsufficientVaultFunds).
-    //
-    // Rent funding is DELIBERATELY decoupled from `seed_yes/seed_no`: the seed
-    // (when nonzero) is added to BOTH the vault AND the pools below, so seeding
-    // the pools must never double as paying for rent — that would inject phantom
-    // liquidity and dilute real bettors' parimutuel shares. Here we add rent on
-    // top of the seed in one transfer; only the seed ever touches the pools.
-    let rent_min = Rent::get()?.minimum_balance(0);
-    let vault_funding = rent_min
-        .checked_add(total_seed)
-        .ok_or_else(|| error!(GolazoError::MathOverflow))?;
-    system_program::transfer(
-        CpiContext::new(
-            ctx.accounts.system_program.to_account_info(),
-            Transfer {
-                from: ctx.accounts.authority.to_account_info(),
-                to: ctx.accounts.vault.to_account_info(),
-            },
-        ),
-        vault_funding,
-    )?;
+    // --- Optional seed deposit: authority USX -> vault USX ----------------
+    // Zero is the normal pure-parimutuel path. When nonzero the seed lands in
+    // BOTH the vault (below transfer) AND the pools (state init below), keeping
+    // `vault.amount == pool_yes + pool_no`. There is NO separate rent funding to
+    // confuse with the seed — a token account's rent is paid in SOL by `init`
+    // and never touches the token balance.
+    if total_seed > 0 {
+        token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.key(),
+                Transfer {
+                    from: ctx.accounts.authority_token.to_account_info(),
+                    to: ctx.accounts.vault.to_account_info(),
+                    authority: ctx.accounts.authority.to_account_info(),
+                },
+            ),
+            total_seed,
+        )?;
+    }
 
     // --- Initialize Market state -----------------------------------------
     let market = &mut ctx.accounts.market;
@@ -114,6 +129,7 @@ pub fn handler(
     market.seed_no = seed_no;
     market.vault_bump = ctx.bumps.vault;
     market.bump = ctx.bumps.market;
+    market.rake_swept = false;
 
     emit!(MarketInitialized {
         market: market.key(),

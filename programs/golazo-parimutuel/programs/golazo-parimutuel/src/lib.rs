@@ -3,6 +3,12 @@
 //! A pure **parimutuel binary market**, the on-chain mirror of
 //! `packages/core/src/parimutuel.ts`.
 //!
+//! ## Settlement asset
+//! The protocol settles in the **USX stablecoin** (an SPL *classic* token), not
+//! native SOL. Every stake, payout, refund, and rake is denominated in USX base
+//! units. The single mint is pinned program-wide via [`USX_MINT`]; the per-market
+//! vault is a PDA-owned USX token account whose authority is the Market PDA.
+//!
 //! ## Mechanism (why this, not a bonding curve)
 //! All YES + NO stakes form ONE pool. The operator skims a fixed `rake` off the
 //! gross pool on non-void settlement. Winners claim their proportional share of
@@ -39,14 +45,52 @@ use state::{Outcome, Side};
 // Program id — synced to the built program keypair
 // (target/deploy/golazo_parimutuel-keypair.json) so the on-chain id, the
 // declared id, and every PDA derivation agree. Keep Anchor.toml in sync.
-declare_id!("GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu");
+declare_id!("3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM");
+
+/// The one stablecoin the whole protocol settles in: **USX** (SPL classic).
+///
+/// Pinned program-wide so a market vault, a bet deposit, or a payout can only
+/// ever move USX — every token account in every instruction is constrained to
+/// this mint (`token::mint = USX_MINT` / `address = USX_MINT`), making a
+/// wrong-mint vault unconstructable. Changing the settlement asset is a redeploy.
+///
+/// The real mainnet USX mint can't be recreated on a local validator (we don't
+/// hold its keypair), so integration tests build with `--features local-mint`,
+/// which swaps in a committed test mint (`tests/fixtures/usx-mint.json`) we can
+/// mint freely. Production builds (no feature) always use the real USX mint.
+#[cfg(not(feature = "local-mint"))]
+pub const USX_MINT: Pubkey = pubkey!("6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG");
+#[cfg(feature = "local-mint")]
+pub const USX_MINT: Pubkey = pubkey!("3kuxNXDwqUyyUeJVGxKa1judTjoe3u4Zu8Mgmbmi28S7");
+
+/// The single address allowed to sweep operator rake out of market vaults.
+///
+/// Hardcoded by design: `sweep_rake` requires this exact signer, and rake is
+/// sent to a USX account this key owns. Rotating it is a one-line change + a
+/// program redeploy (the program is upgradeable).
+///
+/// Production builds use the real treasury address. Integration tests build with
+/// `--features local-mint` and use a committed dev keypair (tests/fixtures) so
+/// the suite can sign sweeps. Rotating the production key is a one-line change
+/// here + a program upgrade.
+#[cfg(not(feature = "local-mint"))]
+pub const WITHDRAW_AUTHORITY: Pubkey = pubkey!("4AtHbn4LxGVEP4RmtEwx6cNq2peEZsgH7jUZFZMVddW9");
+#[cfg(feature = "local-mint")]
+pub const WITHDRAW_AUTHORITY: Pubkey = pubkey!("5K8KTZekMGpQ7dsjPQnMdNpjgUHzXcuPtYwJPXGw1aDs");
 
 #[program]
 pub mod golazo_parimutuel {
     use super::*;
 
-    /// Create a market + its lamport vault and open for betting.
-    /// `rake_bps` must be < 10_000; seeds may be zero.
+    /// `WITHDRAW_AUTHORITY`-only. Sweep a resolved market's operator rake
+    /// (gross - net) from the vault to a USX account that authority owns.
+    /// Single-shot per market.
+    pub fn sweep_rake(ctx: Context<SweepRake>) -> Result<()> {
+        instructions::sweep_rake::handler(ctx)
+    }
+
+    /// Create a market + its USX token vault and open for betting.
+    /// `rake_bps` must be < 10_000; seeds (USX base units) may be zero.
     pub fn initialize_market(
         ctx: Context<InitializeMarket>,
         market_seed: u64,
@@ -65,8 +109,8 @@ pub mod golazo_parimutuel {
         )
     }
 
-    /// Back `side` with `stake` lamports. Moves the stake into the vault, then
-    /// grows the side pool.
+    /// Back `side` with `stake` USX base units. Moves the stake into the vault,
+    /// then grows the side pool.
     /// One bet per (market, bettor). Requires the market to be Open.
     pub fn place_bet(ctx: Context<PlaceBet>, side: Side, stake: u64) -> Result<()> {
         instructions::place_bet::handler(ctx, side, stake)
@@ -88,8 +132,9 @@ pub mod golazo_parimutuel {
     }
 
     /// Claim a single bet against a Resolved or Void market. Winner gets their
-    /// proportional net-pool share; void refunds `stake`; loser gets 0.
-    /// Idempotent-safe via the `claimed` flag.
+    /// proportional net-pool share; void refunds `stake`; loser gets 0. In all
+    /// cases the Bet account is closed and its rent refunded to the bettor, so no
+    /// SOL stays locked per bet.
     pub fn claim(ctx: Context<Claim>) -> Result<()> {
         instructions::claim::handler(ctx)
     }

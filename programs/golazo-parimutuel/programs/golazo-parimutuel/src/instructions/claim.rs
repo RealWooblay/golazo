@@ -1,27 +1,35 @@
-//! `claim` — settle a single bet against the resolved/void market.
+//! `claim` — settle a single bet against the resolved/void market, in USX, and
+//! close the Bet account (refunding its rent to the bettor).
 //!
 //!   * VOID      -> refund exactly `stake`.
 //!   * Resolved, bettor won  -> pay `stake / final_winning_pool * net_pool`.
-//!   * Resolved, bettor lost -> pay 0 (still mark claimed so the Bet is closed).
+//!   * Resolved, bettor lost -> pay 0.
+//!
+//! In every case the Bet PDA is CLOSED and its ~rent returned to the bettor, so a
+//! settled bet leaves no SOL locked on-chain. For a loser this is the incentive to
+//! claim at all (0 payout, but rent back), which is also what lets the operator
+//! later close the market and reclaim its own rent.
 //!
 //! VAULT SIGNER SEEDS:
-//! The vault is a System-owned PDA at `["vault", market]`. To move lamports OUT
-//! of it we must invoke the System Program `transfer` with the vault PDA as the
-//! signer — which is only possible because *this program* can produce that PDA's
-//! signature via `invoke_signed` (Anchor's `with_signer`) using the seeds
-//! `["vault", market_key, [vault_bump]]`. No private key exists for a PDA, so
-//! the vault funds are spendable *only* through this program's logic.
+//! The vault is a PDA-owned USX token account whose token authority is the
+//! Market PDA. To move USX OUT we CPI the SPL Token `transfer` with the Market
+//! PDA as the signing authority — possible only because *this program* can
+//! produce that PDA's signature via `invoke_signed` (Anchor's `with_signer`)
+//! using the market seeds `["market", authority, market_seed, [bump]]`. No
+//! private key exists for a PDA, so the pool is spendable only through this
+//! program's logic.
 //!
 //! Because payouts are proportional to the final pool, total winner payouts can
-//! never exceed the net pool.
+//! never exceed the net pool, and `vault.amount` (USX) always covers them.
 
 use anchor_lang::prelude::*;
-use anchor_lang::system_program::{self, Transfer};
+use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 
 use crate::errors::GolazoError;
 use crate::events::Claimed;
 use crate::instructions::seeds;
 use crate::state::{Bet, Market, MarketStatus, Outcome, Side};
+use crate::USX_MINT;
 
 #[derive(Accounts)]
 pub struct Claim<'info> {
@@ -36,27 +44,43 @@ pub struct Claim<'info> {
     )]
     pub market: Account<'info, Market>,
 
-    /// CHECK: lamport vault, validated by seeds + the bump stored on the market.
+    /// PDA-owned USX vault, validated by seeds + the bump stored on the market
+    /// and pinned to the USX mint. Source of the payout/refund.
     #[account(
         mut,
         seeds = [seeds::VAULT, market.key().as_ref()],
         bump = market.vault_bump,
+        token::mint = USX_MINT,
     )]
-    pub vault: SystemAccount<'info>,
+    pub vault: Account<'info, TokenAccount>,
+
+    /// Destination USX account for the payout. Must be the claimer's own USX
+    /// account (mint-pinned, authority = bettor).
+    #[account(
+        mut,
+        token::mint = USX_MINT,
+        token::authority = bettor,
+    )]
+    pub bettor_token: Account<'info, TokenAccount>,
 
     /// The bet being claimed. Bound to (market, bettor) via seeds AND `has_one`,
     /// so a caller can neither claim someone else's bet nor a bet from a
-    /// different market.
+    /// different market. `close = bettor` returns this account's rent to the
+    /// bettor's wallet once the bet is settled — so no SOL is permanently locked
+    /// per bet, and (for sponsored Privy wallets) that SOL recycles for the next
+    /// bet instead of needing a re-top-up. Closing also makes a second claim
+    /// impossible (the account no longer exists), independent of the `claimed` flag.
     #[account(
         mut,
         seeds = [seeds::BET, market.key().as_ref(), bettor.key().as_ref()],
         bump = bet.bump,
         has_one = bettor @ GolazoError::Unauthorized,
         has_one = market @ GolazoError::BetMarketMismatch,
+        close = bettor,
     )]
     pub bet: Account<'info, Bet>,
 
-    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
 }
 
 pub fn handler(ctx: Context<Claim>) -> Result<()> {
@@ -94,42 +118,37 @@ pub fn handler(ctx: Context<Claim>) -> Result<()> {
 
     // --- Pay out from the vault (if anything is owed) ---------------------
     if amount > 0 {
-        // `initialize_market` funds the vault to the rent-exempt minimum and
-        // every stake lands in the vault, so post-init the vault holds exactly
-        // `rent_min + gross` and `available` below equals the gross pool. Total
-        // winner payouts can never exceed the net pool (<= gross), so this guard
-        // is a never-trip invariant in the normal flow — it only fires if the
-        // vault is *transiently* underfunded (e.g. a real-money bet still
-        // propagating when the operator settled).
-        //
-        // We deliberately keep a HARD revert rather than clamping the payout to
-        // `available` (`amount.min(available)`). Clamping would underpay whoever
-        // claims first during a transient shortfall and permanently strand the
-        // difference, because `bet.claimed` is flipped regardless of the amount
-        // paid. Reverting instead rolls the whole tx back — `bet.claimed` is NOT
-        // persisted — so the client (which already retries) simply re-claims
-        // once the operator top-up lands, and no winner is ever short-changed.
-        let rent_min = Rent::get()?.minimum_balance(0);
-        let vault_lamports = ctx.accounts.vault.to_account_info().lamports();
-        let available = vault_lamports.saturating_sub(rent_min);
-        require!(amount <= available, GolazoError::InsufficientVaultFunds);
+        // `vault.amount` is the USX pool exactly (token-account rent is separate
+        // SOL, not part of this balance). Total winner payouts are proportional
+        // to the net pool, so this guard is a never-trip invariant in the normal
+        // flow — it only fires on a transient shortfall. We HARD revert rather
+        // than clamp: clamping would underpay the first claimer and strand the
+        // rest, since `bet.claimed` flips regardless. Reverting rolls the whole
+        // tx back (claimed is NOT persisted), so the client simply re-claims.
+        require!(
+            amount <= ctx.accounts.vault.amount,
+            GolazoError::InsufficientVaultFunds
+        );
 
-        // Sign for the vault PDA. These seeds MUST match the `seeds=` on the
-        // vault account above, with the stored bump appended.
-        let market_key = market.key();
-        let vault_seeds: &[&[u8]] = &[
-            seeds::VAULT,
-            market_key.as_ref(),
-            &[market.vault_bump],
-        ];
-        let signer_seeds: &[&[&[u8]]] = &[vault_seeds];
+        // Sign for the vault as the Market PDA (the vault's token authority).
+        // These seeds MUST match the market PDA derivation, with the stored bump.
+        let market_authority = market.authority;
+        let market_seed_le = market.market_seed.to_le_bytes();
+        let market_bump = market.bump;
+        let signer_seeds: &[&[&[u8]]] = &[&[
+            seeds::MARKET,
+            market_authority.as_ref(),
+            &market_seed_le,
+            &[market_bump],
+        ]];
 
-        system_program::transfer(
+        token::transfer(
             CpiContext::new_with_signer(
-                ctx.accounts.system_program.to_account_info(),
+                ctx.accounts.token_program.key(),
                 Transfer {
                     from: ctx.accounts.vault.to_account_info(),
-                    to: ctx.accounts.bettor.to_account_info(),
+                    to: ctx.accounts.bettor_token.to_account_info(),
+                    authority: ctx.accounts.market.to_account_info(),
                 },
                 signer_seeds,
             ),

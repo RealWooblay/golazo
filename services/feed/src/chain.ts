@@ -27,6 +27,7 @@ import {
   Keypair,
   PublicKey,
   SystemProgram,
+  SYSVAR_RENT_PUBKEY,
   Transaction,
   TransactionInstruction,
   sendAndConfirmTransaction,
@@ -34,7 +35,7 @@ import {
 } from '@solana/web3.js';
 
 /** The deployed `golazo-parimutuel` program id (Anchor `declare_id!`). */
-const DEFAULT_PROGRAM_ID = 'GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu';
+const DEFAULT_PROGRAM_ID = '3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM';
 
 /** Localnet validator — the default so `CHAIN_ENABLED=1` "just works" locally. */
 const DEFAULT_RPC_URL = 'http://127.0.0.1:8899';
@@ -42,35 +43,27 @@ const DEFAULT_RPC_URL = 'http://127.0.0.1:8899';
 /** Confirmed is the demo's level: fast enough yet durable for a settlement mirror. */
 const COMMITMENT: Commitment = 'confirmed';
 
-/** System-account rent-exempt minimum (0-byte data). Claims must leave this in the vault. */
-const VAULT_RENT_MIN_LAMPORTS = 890_880;
-
 /**
- * Solvency top-up retry budget. We re-read the pool and re-top-up a few times
- * before settling so a real-money `place_bet` that confirmed on the client but
- * is still propagating to our RPC is included in the gross we fund for. Mirrors
- * the client claim loop's patience (6 × 2.5s) with headroom to spare.
+ * The protocol settles in USX (SPL classic), not SOL. The vault is a PDA-owned
+ * USX token account whose balance IS the pool exactly (token rent is separate
+ * SOL), so — unlike the old native-SOL design — there is no rent reservation to
+ * top up and the vault is solvent by construction. The operator only needs SOL
+ * to pay tx fees and a USX account to fund any (optional) house seed.
  */
-const MAX_SOLVENCY_ATTEMPTS = 4;
-const SOLVENCY_RETRY_MS = 1500;
-
-/**
- * Lamports the operator must keep above any top-up — headroom for transaction
- * fees so a top-up never drains the operator into a state where it can no longer
- * lock/resolve. ~0.01 SOL ≈ 2000 signatures at 5000 lamports each.
- */
-const OPERATOR_FEE_RESERVE_LAMPORTS = 10_000_000n;
+const DEFAULT_USX_MINT = '6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG';
+const TOKEN_PROGRAM = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const ASSOCIATED_TOKEN_PROGRAM = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 
 /**
  * Below this, a market side has NO genuine opponent — only the house seed. A real-money
  * YES/NO market that is one-sided (real stake = pool − seed ≤ this on EITHER side) is
  * VOIDED (refund all) instead of resolved, so a lone bettor never wins ~nothing (own
- * stake back, seed-diluted) nor loses everything to the house seed. 50k lamports
- * (0.00005 SOL) sits far below any real stake but above rounding noise.
+ * stake back, seed-diluted) nor loses everything to the house seed. 50k USX base units
+ * ($0.05) sits far below any real stake but above rounding noise.
  * MAINNET: pair with a program-side min-stake (none exists today) so a dust-above bet
  * can't masquerade as a real opponent to force a resolve — see the mainnet checklist.
  */
-const ONE_SIDED_DUST_LAMPORTS = 50_000n;
+const ONE_SIDED_DUST_BASE_UNITS = 50_000n;
 
 /** MarketStatus discriminant for `Locked` (state.rs enum order: Open=0, Locked=1, …). */
 const MARKET_STATUS_LOCKED = 1;
@@ -109,9 +102,9 @@ export interface InitMarketArgs {
   questionText: string;
   /** Operator rake in basis points (e.g. 600 == 6%). Must be < 10_000. */
   rakeBps: number;
-  /** House YES seed in lamports. Must be > 0. */
+  /** House YES seed in USX base units (0 in zero-capital mode — the default). */
   seedYesLamports: number | bigint;
-  /** House NO seed in lamports. Must be > 0. */
+  /** House NO seed in USX base units (0 in zero-capital mode — the default). */
   seedNoLamports: number | bigint;
 }
 
@@ -125,6 +118,8 @@ export interface FeedChainOptions {
   rpcUrl?: string;
   /** Program id. Defaults to the deployed id. */
   programId?: string;
+  /** USX mint the program settles in. Defaults to the deployed USX mint. */
+  usxMint?: string;
 }
 
 // --- borsh / discriminator helpers (mirror onchain-demo.mjs) ----------------
@@ -237,6 +232,7 @@ export function chainOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): FeedC
     operatorKeypair: env.OPERATOR_KEYPAIR?.trim() || undefined,
     rpcUrl: env.SOLANA_RPC_URL?.trim() || DEFAULT_RPC_URL,
     programId: env.GOLAZO_PROGRAM_ID?.trim() || DEFAULT_PROGRAM_ID,
+    usxMint: env.USX_MINT?.trim() || DEFAULT_USX_MINT,
   };
 }
 
@@ -253,6 +249,7 @@ export class FeedChainOperator {
 
   private readonly connection: Connection | null;
   private readonly operator: Keypair | null;
+  private readonly usxMint: PublicKey | null;
 
   constructor(opts: FeedChainOptions = {}) {
     const rpcUrl = opts.rpcUrl?.trim() || DEFAULT_RPC_URL;
@@ -264,6 +261,7 @@ export class FeedChainOperator {
       this.programId = null;
       this.connection = null;
       this.operator = null;
+      this.usxMint = null;
       return;
     }
 
@@ -272,21 +270,54 @@ export class FeedChainOperator {
     let operator: Keypair | null = null;
     let programId: PublicKey | null = null;
     let connection: Connection | null = null;
+    let usxMint: PublicKey | null = null;
     try {
       operator = loadKeypair(opts.operatorKeypair);
       programId = new PublicKey(opts.programId?.trim() || DEFAULT_PROGRAM_ID);
+      usxMint = new PublicKey(opts.usxMint?.trim() || DEFAULT_USX_MINT);
       connection = new Connection(rpcUrl, COMMITMENT);
     } catch (err) {
       this.warn('init', err);
       operator = null;
       programId = null;
       connection = null;
+      usxMint = null;
     }
 
     this.operator = operator;
     this.programId = programId;
     this.connection = connection;
-    this.active = operator !== null && programId !== null && connection !== null;
+    this.usxMint = usxMint;
+    this.active =
+      operator !== null && programId !== null && connection !== null && usxMint !== null;
+  }
+
+  /** Associated token account for (owner, USX mint). */
+  private ata(owner: PublicKey, mint: PublicKey): PublicKey {
+    return PublicKey.findProgramAddressSync(
+      [owner.toBuffer(), TOKEN_PROGRAM.toBuffer(), mint.toBuffer()],
+      ASSOCIATED_TOKEN_PROGRAM,
+    )[0];
+  }
+
+  /** Idempotent "create ATA" instruction (no-op if it already exists). */
+  private createAtaIdempotentIx(
+    payer: PublicKey,
+    owner: PublicKey,
+    mint: PublicKey,
+  ): TransactionInstruction {
+    return new TransactionInstruction({
+      programId: ASSOCIATED_TOKEN_PROGRAM,
+      keys: [
+        { pubkey: payer, isSigner: true, isWritable: true },
+        { pubkey: this.ata(owner, mint), isSigner: false, isWritable: true },
+        { pubkey: owner, isSigner: false, isWritable: false },
+        { pubkey: mint, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: TOKEN_PROGRAM, isSigner: false, isWritable: false },
+      ],
+      data: Buffer.from([1]), // 1 = CreateIdempotent
+    });
   }
 
   /** The operator's public key (used as the market authority), or null when inactive. */
@@ -304,18 +335,25 @@ export class FeedChainOperator {
   }
 
   /**
-   * Create a market on-chain (operator = authority), folding the house seed into
-   * both pools. Mirrors `initialize_market`:
-   *   accounts: [authority(signer,mut), market(mut), vault(mut), system_program]
+   * Create a USX market on-chain (operator = authority), folding any house seed
+   * into both pools. Mirrors `initialize_market`:
+   *   accounts: [authority(s,mut), market(mut), usx_mint, vault(mut),
+   *              authority_token(mut), token_program, system_program, rent]
    *   args:     market_seed u64, question_hash [u8;32], rake_bps u16,
-   *             seed_yes u64, seed_no u64
+   *             seed_yes u64, seed_no u64  (seeds in USX base units)
+   * A CreateIdempotent ATA ix is prepended so the operator's USX account (the
+   * seed source / `authority_token`) always exists, even with a zero seed.
    */
   async initMarket(args: InitMarketArgs): Promise<InitMarketResult | null> {
-    if (!this.active || !this.operator || !this.programId || !this.connection) return null;
+    if (!this.active || !this.operator || !this.programId || !this.connection || !this.usxMint) {
+      return null;
+    }
 
     try {
       const authority = this.operator.publicKey;
+      const mint = this.usxMint;
       const { marketPda, vaultPda } = this.derive(args.marketSeed, authority, this.programId);
+      const authorityToken = this.ata(authority, mint);
 
       const data = Buffer.concat([
         disc('initialize_market'),
@@ -326,18 +364,25 @@ export class FeedChainOperator {
         u64(args.seedNoLamports),
       ]);
 
-      const ix = new TransactionInstruction({
+      const initIx = new TransactionInstruction({
         programId: this.programId,
         keys: [
           { pubkey: authority, isSigner: true, isWritable: true },
           { pubkey: marketPda, isSigner: false, isWritable: true },
+          { pubkey: mint, isSigner: false, isWritable: false },
           { pubkey: vaultPda, isSigner: false, isWritable: true },
+          { pubkey: authorityToken, isSigner: false, isWritable: true },
+          { pubkey: TOKEN_PROGRAM, isSigner: false, isWritable: false },
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
         ],
         data,
       });
 
-      const signature = await this.send(ix);
+      const signature = await this.send(
+        [this.createAtaIdempotentIx(authority, authority, mint), initIx],
+        'initMarket',
+      );
       return { marketPda, vaultPda, signature };
     } catch (err) {
       this.warn('initMarket', err);
@@ -436,27 +481,15 @@ export class FeedChainOperator {
   /**
    * Settle on-chain: YES/NO via resolve_market, VOID via void_market.
    *
-   * CRITICAL ordering: we make the vault solvent FIRST and only resolve if it
-   * succeeded. Resolving an insolvent vault would brick every winner's claim
-   * (InsufficientVaultFunds) with no way back, so if the top-up can't cover the
-   * pool we leave the market Open/Locked and bail — a later settle (or operator
-   * intervention) can retry. The off-chain market is the source of truth for the
-   * UX either way, so an unresolved on-chain mirror is the safe failure mode.
+   * No solvency step is needed in the USX model: every stake (and any house seed)
+   * is held in the vault token account as it arrives, so `vault.amount` always
+   * equals the pool and covers every winner's net payout. We only guard against a
+   * one-sided book (refund instead of resolve) below.
    */
   async settleMarket(
     marketSeed: number | bigint,
     outcome: 'YES' | 'NO' | 'VOID',
   ): Promise<TxResult | null> {
-    const solvent = await this.ensureVaultSolvency(marketSeed);
-    if (!solvent) {
-      this.warn(
-        'settleMarket',
-        new Error(
-          `vault still short for seed=${marketSeed}; NOT resolving (claims would brick) — left Open/Locked for retry`,
-        ),
-      );
-      return null;
-    }
     if (outcome === 'VOID') return this.voidMarket(marketSeed);
 
     // NO-COUNTERPARTY GUARD: a real-money YES/NO market with no genuine opponent on a
@@ -492,11 +525,12 @@ export class FeedChainOperator {
     if (!pools || pools.status !== MARKET_STATUS_LOCKED) return false; // not provably frozen
     const realYes = pools.poolYes > pools.seedYes ? pools.poolYes - pools.seedYes : 0n;
     const realNo = pools.poolNo > pools.seedNo ? pools.poolNo - pools.seedNo : 0n;
-    const oneSided = realYes <= ONE_SIDED_DUST_LAMPORTS || realNo <= ONE_SIDED_DUST_LAMPORTS;
+    const oneSided =
+      realYes <= ONE_SIDED_DUST_BASE_UNITS || realNo <= ONE_SIDED_DUST_BASE_UNITS;
     if (oneSided) {
       console.log(
         `[chain] one-sided market seed=${marketSeed} realYes=${realYes} realNo=${realNo} ` +
-          `<= dust ${ONE_SIDED_DUST_LAMPORTS} — VOIDing (refund all, no genuine opponent)`,
+          `<= dust ${ONE_SIDED_DUST_BASE_UNITS} — VOIDing (refund all, no genuine opponent)`,
       );
     }
     return oneSided;
@@ -505,7 +539,7 @@ export class FeedChainOperator {
   /**
    * Read pools + seed + lifecycle status from the on-chain Market account. Offsets are
    * fixed by state.rs field order after the 8-byte Anchor discriminator: status@82,
-   * pool_yes@84, pool_no@92, seed_yes@100, seed_no@108 (Market::SIZE = 118). Returns null
+   * pool_yes@84, pool_no@92, seed_yes@100, seed_no@108 (Market::SIZE = 119). Returns null
    * on a short/absent account or transient RPC error (caller treats null as "unknown").
    */
   private async readMarketPools(marketSeed: number | bigint): Promise<{
@@ -519,7 +553,7 @@ export class FeedChainOperator {
     try {
       const { marketPda } = this.derive(marketSeed, this.operator.publicKey, this.programId);
       const info = await this.connection.getAccountInfo(marketPda, COMMITMENT);
-      if (!info?.data || info.data.length < 118) return null; // < Market::SIZE → not a market
+      if (!info?.data || info.data.length < 119) return null; // < Market::SIZE → not a market
       const d = info.data;
       return {
         status: d.readUInt8(82),
@@ -532,125 +566,6 @@ export class FeedChainOperator {
       this.warn('readMarketPools', err);
       return null;
     }
-  }
-
-  /**
-   * Ensure the market vault can cover the FULL gross pool plus the rent-exempt
-   * minimum, topping up from the operator if short. Returns `true` once the vault
-   * is provably solvent, `false` if it could not be made so (operator too poor,
-   * transfers kept failing, or RPC unreadable) — in which case the caller MUST
-   * NOT resolve.
-   *
-   * Hardening vs. the naive single-read top-up:
-   *   - retries (re-reading the pool each pass) to catch a still-propagating
-   *     real-money bet that the first read missed — closes the bet/resolve race;
-   *   - never swallows a failed transfer into apparent success — a failure just
-   *     means the loop tries again and, if it never recovers, we return `false`;
-   *   - guards on operator balance so a top-up never drains the fee reserve;
-   *   - no fixed deficit cap — the operator-balance guard is the natural bound,
-   *     and a corrupt over-large read simply exceeds it and returns `false`.
-   *
-   * No-op (`true`) when the operator is inactive or there is no on-chain market
-   * to keep solvent — there is nothing that could brick a claim.
-   */
-  async ensureVaultSolvency(marketSeed: number | bigint): Promise<boolean> {
-    if (!this.active || !this.operator || !this.programId || !this.connection) return true;
-
-    const authority = this.operator.publicKey;
-    const { marketPda, vaultPda } = this.derive(marketSeed, authority, this.programId);
-
-    for (let attempt = 0; attempt < MAX_SOLVENCY_ATTEMPTS; attempt++) {
-      const status = await this.readVaultStatus(marketPda, vaultPda);
-      if (status === 'no-market') return true; // nothing on-chain → nothing to brick
-      if (status === null) {
-        await this.sleep(SOLVENCY_RETRY_MS * (attempt + 1));
-        continue; // transient RPC error — retry
-      }
-
-      const { needed, vaultBal } = status;
-      if (vaultBal >= needed) return true; // solvent
-
-      const deficit = needed - vaultBal;
-
-      // Operator-balance guard: never attempt a transfer we can't cover while
-      // leaving a fee reserve. If the operator is too poor, the vault cannot be
-      // made solvent — fail so the caller does NOT resolve.
-      let opBal: bigint;
-      try {
-        opBal = BigInt(await this.connection.getBalance(authority, COMMITMENT));
-      } catch (err) {
-        this.warn('ensureVaultSolvency.opbal', err);
-        await this.sleep(SOLVENCY_RETRY_MS * (attempt + 1));
-        continue;
-      }
-      if (opBal < deficit + OPERATOR_FEE_RESERVE_LAMPORTS) {
-        this.warn(
-          'ensureVaultSolvency',
-          new Error(
-            `operator ${authority.toBase58().slice(0, 6)}… balance ${opBal} < deficit ${deficit} ` +
-              `+ reserve ${OPERATOR_FEE_RESERVE_LAMPORTS}; cannot fund vault seed=${marketSeed}`,
-          ),
-        );
-        return false;
-      }
-
-      try {
-        const sig = await this.send(
-          SystemProgram.transfer({
-            fromPubkey: authority,
-            toPubkey: vaultPda,
-            lamports: deficit,
-          }),
-          'vaultTopUp',
-        );
-        console.log(`[chain] vault top-up seed=${marketSeed} +${deficit} lamports sig=${sig}`);
-      } catch (err) {
-        // Do NOT swallow into success — log and let the loop re-read/retry. If we
-        // exhaust attempts the final verification below decides solvency.
-        this.warn('ensureVaultSolvency.transfer', err);
-      }
-
-      // Re-read on the next pass to confirm the top-up landed AND fold in any
-      // bet that propagated in the meantime.
-      await this.sleep(SOLVENCY_RETRY_MS);
-    }
-
-    // Attempts exhausted — verify one last time so we only return `true` when the
-    // vault genuinely covers the pool.
-    const finalStatus = await this.readVaultStatus(marketPda, vaultPda);
-    if (finalStatus === 'no-market') return true;
-    if (finalStatus === null) return false;
-    return finalStatus.vaultBal >= finalStatus.needed;
-  }
-
-  /**
-   * Read the vault's lamport balance and the lamports it must hold to be solvent
-   * (gross pool + rent-exempt minimum). Returns `'no-market'` when there is no
-   * on-chain market account, or `null` on a transient RPC error (caller retries).
-   */
-  private async readVaultStatus(
-    marketPda: PublicKey,
-    vaultPda: PublicKey,
-  ): Promise<{ needed: bigint; vaultBal: bigint } | 'no-market' | null> {
-    if (!this.connection) return null;
-    try {
-      const [marketInfo, vaultBal] = await Promise.all([
-        this.connection.getAccountInfo(marketPda, COMMITMENT),
-        this.connection.getBalance(vaultPda, COMMITMENT),
-      ]);
-      if (!marketInfo?.data || marketInfo.data.length < 100) return 'no-market';
-      const d = marketInfo.data;
-      const gross = d.readBigUInt64LE(84) + d.readBigUInt64LE(92);
-      return { needed: gross + BigInt(VAULT_RENT_MIN_LAMPORTS), vaultBal: BigInt(vaultBal) };
-    } catch (err) {
-      this.warn('ensureVaultSolvency.read', err);
-      return null;
-    }
-  }
-
-  /** Small awaitable delay used by the solvency retry loop. */
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   // --- internals ------------------------------------------------------------
@@ -668,10 +583,13 @@ export class FeedChainOperator {
     return { marketPda, vaultPda };
   }
 
-  /** Build, sign (operator) and confirm a single-instruction transaction. */
-  private async send(ix: TransactionInstruction, op = 'tx'): Promise<string> {
+  /** Build, sign (operator) and confirm a one-or-more-instruction transaction. */
+  private async send(
+    ix: TransactionInstruction | TransactionInstruction[],
+    op = 'tx',
+  ): Promise<string> {
     if (!this.connection || !this.operator) throw new Error('chain operator inactive');
-    const tx = new Transaction().add(ix);
+    const tx = new Transaction().add(...(Array.isArray(ix) ? ix : [ix]));
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {

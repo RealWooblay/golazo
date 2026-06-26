@@ -7,7 +7,8 @@ export interface ChainBetVM {
   offChainMarketId: string;
   question: string;
   side: "YES" | "NO";
-  stakeSol: number;
+  /** Stake in display dollars (USX, 1 USX == $1). */
+  stakeUsd: number;
   estimatedMultiple: number;
   betSignature: string;
   betUrl: string;
@@ -25,5 +26,6 @@ export interface ChainOdds {
   oddsYes: number;
   oddsNo: number;
   yesShare: number;
-  poolSol: number;
+  /** Total pool in display dollars (USX). */
+  poolUsd: number;
 }

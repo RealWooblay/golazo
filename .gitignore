@@ -21,9 +21,12 @@ services/feed/operator-keypair.json
 **/*-keypair.json
 **/deploy-keypair.json
 *.keypair.json
+# Local funded wallets (alice/bob/carol/etc.) — hold real funds, never commit.
+keys/
 
 # local editor / tooling
 .claude/settings.local.json
+.claude/settings.json
 .vscode/
 trailer/
 .claude/
