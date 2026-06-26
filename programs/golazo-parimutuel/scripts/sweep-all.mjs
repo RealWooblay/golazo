@@ -11,7 +11,7 @@ import { Connection, Keypair, PublicKey, Transaction, sendAndConfirmTransaction 
 import { readFileSync } from "fs";
 import { sweepRakeIx } from "./sweep-rake.mjs";
 
-const PROGRAM_ID = new PublicKey("GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu");
+const PROGRAM_ID = new PublicKey("3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM");
 const RPC = process.env.RPC_URL || "https://api.mainnet-beta.solana.com";
 const WALLET = process.env.WALLET || `${process.env.HOME}/.config/solana/id.json`;
 

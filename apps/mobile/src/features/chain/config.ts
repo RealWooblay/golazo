@@ -46,7 +46,7 @@ export const PLACEHOLDER_PROGRAM_ID =
  *   - devnet:   deploy there (`solana program deploy …`) once funded, default cluster.
  */
 export const DEPLOYED_PROGRAM_ID =
-  "GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu";
+  "3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM";
 
 /** Public RPC endpoints per cluster (devnet is the default target). */
 const CLUSTER_RPC: Record<Cluster, string> = {

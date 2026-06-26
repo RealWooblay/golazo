@@ -10,7 +10,7 @@ skip-lint = false
 [programs.localnet]
 # Program id — synced to target/deploy/golazo_parimutuel-keypair.json and the
 # declare_id! in programs/golazo-parimutuel/src/lib.rs.
-golazo_parimutuel = "GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu"
+golazo_parimutuel = "3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM"
 
 [registry]
 url = "https://api.apr.dev"

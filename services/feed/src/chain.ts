@@ -35,7 +35,7 @@ import {
 } from '@solana/web3.js';
 
 /** The deployed `golazo-parimutuel` program id (Anchor `declare_id!`). */
-const DEFAULT_PROGRAM_ID = 'GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu';
+const DEFAULT_PROGRAM_ID = '3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM';
 
 /** Localnet validator — the default so `CHAIN_ENABLED=1` "just works" locally. */
 const DEFAULT_RPC_URL = 'http://127.0.0.1:8899';
