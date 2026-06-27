@@ -65,6 +65,7 @@ import type {
   PrivySignerState,
 } from "./provider";
 import type * as ClientModule from "./client";
+import type { SwapResult } from "./swap"; // type-only — ./swap stays behind the lazy import()
 // Platform-split hook: web → the Privy embedded wallet; native → 'legacy'.
 // `import type` above stays erased; this is the only runtime import, and it
 // pulls NO web3 (the heavy code remains behind the lazy import in connect()).
@@ -111,6 +112,16 @@ export interface UseChain {
   withdrawUsx: (toAddress: string, usd: number) => Promise<TxResult>;
   /** Send SOL out of the embedded wallet to an external address (advanced). */
   withdrawSol: (toAddress: string, sol: number) => Promise<TxResult>;
+  /**
+   * Auto-swap EVERYTHING non-USX in the wallet (SOL above the fee reserve + any
+   * SPL token) into USX via Jupiter — the "send anything, get USX" deposit step.
+   * Returns a result per successful swap + per-asset failures (never throws on a
+   * single bad asset; throws only if nothing was swappable).
+   */
+  convertToUsx: () => Promise<{
+    swapped: SwapResult[];
+    failures: { label: string; reason: string }[];
+  }>;
 
   // betting
   placeBetOnChain: (args: PlaceBetArgs) => Promise<TxResult>;
@@ -457,6 +468,14 @@ export function ChainProvider({
         await refreshBalance();
         return res;
       },
+      convertToUsx: async () => {
+        const { ctx } = requireCtx();
+        // ./swap is HEAVY (web3) — only pulled in when the user actually converts.
+        const swap = await import("./swap");
+        const res = await swap.swapAllToUsx(ctx);
+        await refreshBalance();
+        return res;
+      },
 
       placeBetOnChain: async (args: PlaceBetArgs) => {
         const { ctx, client } = requireCtx();
@@ -567,6 +586,7 @@ const INERT_CHAIN: UseChain = {
   airdrop: NOT_READY,
   withdrawUsx: NOT_READY,
   withdrawSol: NOT_READY,
+  convertToUsx: NOT_READY,
   placeBetOnChain: NOT_READY,
   claim: NOT_READY,
   quoteBet: NOT_READY,
