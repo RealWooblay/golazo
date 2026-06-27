@@ -1,0 +1,178 @@
+<svg width="1242" height="2208" viewBox="0 0 1242 2208" xmlns="http://www.w3.org/2000/svg" font-family="'Helvetica Neue', Arial, sans-serif">
+  <!-- ===== marketing backdrop ===== -->
+  <rect width="1242" height="2208" fill="#0B0C0F"/>
+
+  <!-- caption band -->
+  <text x="621" y="150" text-anchor="middle" fill="#E8EDF2" font-size="78" font-weight="700" letter-spacing="1">Bet the next moment.</text>
+  <text x="621" y="214" text-anchor="middle" fill="#8A93A0" font-size="34" font-weight="400" letter-spacing="3">SETTLED IN SECONDS</text>
+
+  <!-- ===== phone frame ===== -->
+  <g>
+    <!-- device body -->
+    <rect x="171" y="290" width="900" height="1830" rx="84" fill="#14181E" stroke="#23262D" stroke-width="3"/>
+    <!-- screen -->
+    <rect x="195" y="314" width="852" height="1782" rx="62" fill="#0B0C0F"/>
+
+    <!-- clip the screen content -->
+    <defs>
+      <clipPath id="lm-screen"><rect x="195" y="314" width="852" height="1782" rx="62"/></clipPath>
+    </defs>
+
+    <g clip-path="url(#lm-screen)">
+      <!-- status bar -->
+      <text x="245" y="382" fill="#E8EDF2" font-size="30" font-weight="600">9:41</text>
+      <g fill="#E8EDF2">
+        <rect x="905" y="362" width="30" height="22" rx="4"/>
+        <rect x="945" y="357" width="34" height="27" rx="5"/>
+        <rect x="989" y="360" width="46" height="24" rx="6" fill="none" stroke="#E8EDF2" stroke-width="3"/>
+        <rect x="993" y="364" width="34" height="16" rx="3"/>
+      </g>
+
+      <!-- top app bar -->
+      <g transform="translate(245,420)">
+        <rect x="0" y="0" width="58" height="58" rx="16" fill="#14181E"/>
+        <g transform="translate(7,7) scale(0.44)" stroke="#27E08A" stroke-width="7" stroke-linecap="round">
+          <line x1="18" y1="38" x2="40" y2="38"/><line x1="13" y1="50" x2="38" y2="50"/><line x1="18" y1="62" x2="40" y2="62"/>
+        </g>
+        <circle cx="53.4" cy="36" r="8.4" fill="#27E08A"/>
+        <polygon points="53.4,32 56.5,34.6 55.2,38.2 51.6,38.2 50.3,34.6" fill="#0B0C0F"/>
+      </g>
+      <text x="318" y="460" fill="#E8EDF2" font-size="34" font-weight="700" letter-spacing="2">GOLAZO</text>
+      <!-- balance pill -->
+      <g transform="translate(745,420)">
+        <rect x="0" y="0" width="200" height="58" rx="29" fill="#14181E" stroke="#23262D" stroke-width="2"/>
+        <circle cx="34" cy="29" r="9" fill="#27E08A"/>
+        <text x="58" y="40" fill="#E8EDF2" font-size="30" font-weight="600">248.50</text>
+      </g>
+
+      <!-- ===== PITCH HERO ===== -->
+      <g transform="translate(245,510)">
+        <rect x="0" y="0" width="700" height="520" rx="32" fill="#0E2A1C"/>
+        <!-- subtle pitch stripes (flat tints, no gradient) -->
+        <rect x="0" y="0" width="700" height="520" rx="32" fill="#0E2A1C"/>
+        <rect x="88" y="0" width="88" height="520" fill="#0F2E1F"/>
+        <rect x="264" y="0" width="88" height="520" fill="#0F2E1F"/>
+        <rect x="440" y="0" width="88" height="520" fill="#0F2E1F"/>
+        <rect x="616" y="0" width="84" height="520" fill="#0F2E1F"/>
+        <!-- pitch markings -->
+        <g stroke="#1C5238" stroke-width="3" fill="none">
+          <rect x="24" y="24" width="652" height="472" rx="10"/>
+          <line x1="350" y1="24" x2="350" y2="496"/>
+          <circle cx="350" cy="260" r="70"/>
+          <rect x="24" y="150" width="86" height="220"/>
+          <rect x="590" y="150" width="86" height="220"/>
+        </g>
+        <circle cx="350" cy="260" r="6" fill="#1C5238"/>
+        <!-- re-clip rounded corners over stripes -->
+        <rect x="0" y="0" width="700" height="520" rx="32" fill="none" stroke="#0B0C0F" stroke-width="0"/>
+
+        <!-- LIVE badge -->
+        <g transform="translate(28,28)">
+          <rect x="0" y="0" width="118" height="46" rx="23" fill="#0B0C0F" fill-opacity="0.55"/>
+          <circle cx="28" cy="23" r="9" fill="#27E08A"/>
+          <text x="46" y="33" fill="#E8EDF2" font-size="26" font-weight="700" letter-spacing="2">LIVE</text>
+        </g>
+        <!-- clock -->
+        <g transform="translate(552,28)">
+          <rect x="0" y="0" width="120" height="46" rx="23" fill="#0B0C0F" fill-opacity="0.55"/>
+          <text x="60" y="33" text-anchor="middle" fill="#E8EDF2" font-size="27" font-weight="700">67'</text>
+        </g>
+
+        <!-- scoreline -->
+        <g transform="translate(0,360)">
+          <rect x="24" y="0" width="652" height="120" rx="20" fill="#0B0C0F" fill-opacity="0.62"/>
+          <!-- home -->
+          <circle cx="92" cy="60" r="26" fill="#1B6BD6"/>
+          <text x="140" y="52" fill="#E8EDF2" font-size="34" font-weight="700">Brazil</text>
+          <text x="140" y="90" fill="#8A93A0" font-size="24">BRA</text>
+          <!-- score -->
+          <text x="350" y="75" text-anchor="middle" fill="#E8EDF2" font-size="56" font-weight="700">1 – 1</text>
+          <!-- away -->
+          <text x="560" y="52" text-anchor="end" fill="#E8EDF2" font-size="34" font-weight="700">Argentina</text>
+          <text x="560" y="90" text-anchor="end" fill="#8A93A0" font-size="24">ARG</text>
+          <circle cx="608" cy="60" r="26" fill="#56A5D9"/>
+        </g>
+      </g>
+
+      <!-- ===== BETTING CARD ===== -->
+      <g transform="translate(245,1078)">
+        <rect x="0" y="0" width="700" height="640" rx="32" fill="#14181E" stroke="#23262D" stroke-width="2"/>
+
+        <!-- eyebrow -->
+        <text x="40" y="78" fill="#8A93A0" font-size="26" font-weight="600" letter-spacing="3">NEXT SHOT ON TARGET</text>
+        <!-- question -->
+        <text x="40" y="138" fill="#E8EDF2" font-size="46" font-weight="700">Brazil or Argentina?</text>
+
+        <!-- live multiplier + pool -->
+        <g transform="translate(40,176)">
+          <rect x="0" y="0" width="620" height="64" rx="14" fill="#1B1F27"/>
+          <circle cx="34" cy="32" r="8" fill="#27E08A"/>
+          <text x="56" y="42" fill="#8A93A0" font-size="27">Pool</text>
+          <text x="150" y="42" fill="#E8EDF2" font-size="29" font-weight="600">$4,820</text>
+          <text x="350" y="42" fill="#8A93A0" font-size="27">In play</text>
+          <text x="470" y="42" fill="#E8EDF2" font-size="29" font-weight="600">312 fans</text>
+        </g>
+
+        <!-- price halves -->
+        <g transform="translate(40,268)">
+          <!-- Brazil (Yes) -->
+          <rect x="0" y="0" width="300" height="200" rx="20" fill="#0E2A1C" stroke="#27E08A" stroke-width="3"/>
+          <text x="30" y="56" fill="#27E08A" font-size="30" font-weight="700">Brazil</text>
+          <text x="30" y="150" fill="#E8EDF2" font-size="72" font-weight="700">1.85×</text>
+          <text x="30" y="186" fill="#8A93A0" font-size="24">pays if Brazil shoots</text>
+
+          <!-- Argentina (No) -->
+          <rect x="320" y="0" width="300" height="200" rx="20" fill="#1B1F27" stroke="#23262D" stroke-width="2"/>
+          <text x="350" y="56" fill="#E8EDF2" font-size="30" font-weight="700">Argentina</text>
+          <text x="350" y="150" fill="#E8EDF2" font-size="72" font-weight="700">2.10×</text>
+          <text x="350" y="186" fill="#8A93A0" font-size="24">pays if Argentina shoots</text>
+        </g>
+
+        <!-- crowd lean divider -->
+        <g transform="translate(40,500)">
+          <text x="0" y="0" fill="#8A93A0" font-size="24">Crowd lean</text>
+          <text x="620" y="0" text-anchor="end" fill="#8A93A0" font-size="24">54% / 46%</text>
+          <rect x="0" y="14" width="620" height="14" rx="7" fill="#1B1F27"/>
+          <rect x="0" y="14" width="335" height="14" rx="7" fill="#27E08A"/>
+        </g>
+
+        <!-- fuse / countdown -->
+        <g transform="translate(40,556)">
+          <text x="0" y="0" fill="#8A93A0" font-size="24">Betting closes</text>
+          <text x="620" y="0" text-anchor="end" fill="#27E08A" font-size="26" font-weight="700">0:08</text>
+          <rect x="0" y="16" width="620" height="10" rx="5" fill="#1B1F27"/>
+          <rect x="0" y="16" width="180" height="10" rx="5" fill="#27E08A"/>
+        </g>
+      </g>
+
+      <!-- bottom tab bar -->
+      <g transform="translate(195,1980)">
+        <rect x="0" y="0" width="852" height="116" fill="#0B0C0F"/>
+        <line x1="0" y1="0" x2="852" y2="0" stroke="#23262D" stroke-width="2"/>
+        <!-- live (active) -->
+        <g transform="translate(120,30)">
+          <circle cx="0" cy="6" r="9" fill="#27E08A"/>
+          <text x="0" y="52" text-anchor="middle" fill="#27E08A" font-size="24" font-weight="600">Live</text>
+        </g>
+        <!-- lobby -->
+        <g transform="translate(330,30)" fill="#8A93A0">
+          <rect x="-16" y="-6" width="32" height="24" rx="4"/>
+          <text x="0" y="52" text-anchor="middle" font-size="24">Lobby</text>
+        </g>
+        <!-- bets -->
+        <g transform="translate(522,30)" fill="#8A93A0">
+          <rect x="-16" y="-6" width="32" height="24" rx="4"/>
+          <text x="0" y="52" text-anchor="middle" font-size="24">Bets</text>
+        </g>
+        <!-- profile -->
+        <g transform="translate(732,30)" fill="#8A93A0">
+          <circle cx="0" cy="6" r="13"/>
+          <text x="0" y="52" text-anchor="middle" font-size="24">You</text>
+        </g>
+      </g>
+    </g>
+
+    <!-- notch -->
+    <rect x="531" y="314" width="180" height="40" rx="20" fill="#0B0C0F"/>
+  </g>
+</svg>

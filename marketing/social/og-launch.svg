@@ -1,0 +1,37 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="630" fill="#0B0C0F"/>
+
+  <!-- top eyebrow row: logo tile + wordmark -->
+  <g transform="translate(80,72)">
+    <rect x="0" y="0" width="64" height="64" rx="16" fill="#14181E" stroke="#23262D" stroke-width="1"/>
+    <g transform="translate(8,8) scale(0.48)">
+      <g stroke="#27E08A" stroke-width="7" stroke-linecap="round">
+        <line x1="18" y1="38" x2="40" y2="38"/>
+        <line x1="13" y1="50" x2="38" y2="50"/>
+        <line x1="18" y1="62" x2="40" y2="62"/>
+      </g>
+      <circle cx="64" cy="50" r="19" fill="#27E08A"/>
+      <polygon points="64,41 71,47 68,55 60,55 57,47" fill="#0B0C0F"/>
+    </g>
+    <text x="84" y="44" font-family="Helvetica, Arial, sans-serif" font-size="34" font-weight="700" letter-spacing="3" fill="#E8EDF2">GOLAZO</text>
+  </g>
+
+  <!-- eyebrow label -->
+  <text x="80" y="312" font-family="Helvetica, Arial, sans-serif" font-size="20" font-weight="700" letter-spacing="5" fill="#27E08A">NOW LIVE</text>
+
+  <!-- headline -->
+  <text x="78" y="404" font-family="Helvetica, Arial, sans-serif" font-size="118" font-weight="700" letter-spacing="-2" fill="#E8EDF2">We're live.</text>
+
+  <!-- subhead -->
+  <text x="80" y="468" font-family="Helvetica, Arial, sans-serif" font-size="34" font-weight="400" fill="#8A93A0">Bet the next moment of a live match. Settled in seconds.</text>
+
+  <!-- url chip -->
+  <g transform="translate(80,520)">
+    <rect x="0" y="0" width="318" height="56" rx="28" fill="#14181E" stroke="#23262D" stroke-width="1"/>
+    <circle cx="32" cy="28" r="6" fill="#27E08A"/>
+    <text x="54" y="37" font-family="Helvetica, Arial, sans-serif" font-size="26" font-weight="700" fill="#E8EDF2">golazo.wooblay.com</text>
+  </g>
+
+  <!-- hairline divider -->
+  <line x1="80" y1="276" x2="1120" y2="276" stroke="#23262D" stroke-width="1"/>
+</svg>

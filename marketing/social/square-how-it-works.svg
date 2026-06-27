@@ -1,0 +1,49 @@
+<svg width="1080" height="1080" viewBox="0 0 1080 1080" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1080" height="1080" fill="#0B0C0F"/>
+
+  <!-- logo tile + wordmark -->
+  <g transform="translate(88,88)">
+    <rect x="0" y="0" width="72" height="72" rx="18" fill="#14181E" stroke="#23262D" stroke-width="1"/>
+    <g transform="translate(9,9) scale(0.54)">
+      <g stroke="#27E08A" stroke-width="7" stroke-linecap="round">
+        <line x1="18" y1="38" x2="40" y2="38"/>
+        <line x1="13" y1="50" x2="38" y2="50"/>
+        <line x1="18" y1="62" x2="40" y2="62"/>
+      </g>
+      <circle cx="64" cy="50" r="19" fill="#27E08A"/>
+      <polygon points="64,41 71,47 68,55 60,55 57,47" fill="#0B0C0F"/>
+    </g>
+    <text x="92" y="48" font-family="Helvetica, Arial, sans-serif" font-size="38" font-weight="700" letter-spacing="3" fill="#E8EDF2">GOLAZO</text>
+  </g>
+
+  <!-- eyebrow + title -->
+  <text x="90" y="232" font-family="Helvetica, Arial, sans-serif" font-size="24" font-weight="700" letter-spacing="6" fill="#27E08A">HOW IT WORKS</text>
+  <text x="86" y="318" font-family="Helvetica, Arial, sans-serif" font-size="76" font-weight="700" letter-spacing="-2" fill="#E8EDF2">Three taps.</text>
+
+  <!-- step 1 -->
+  <g transform="translate(90,400)">
+    <rect x="0" y="0" width="900" height="168" rx="20" fill="#14181E" stroke="#23262D" stroke-width="1"/>
+    <text x="44" y="106" font-family="Helvetica, Arial, sans-serif" font-size="84" font-weight="700" fill="#27E08A">1</text>
+    <text x="150" y="78" font-family="Helvetica, Arial, sans-serif" font-size="44" font-weight="700" fill="#E8EDF2">Pick a moment</text>
+    <text x="150" y="126" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="400" fill="#8A93A0">Next shot, corner, goal or booking.</text>
+  </g>
+
+  <!-- step 2 -->
+  <g transform="translate(90,592)">
+    <rect x="0" y="0" width="900" height="168" rx="20" fill="#14181E" stroke="#23262D" stroke-width="1"/>
+    <text x="44" y="106" font-family="Helvetica, Arial, sans-serif" font-size="84" font-weight="700" fill="#27E08A">2</text>
+    <text x="150" y="78" font-family="Helvetica, Arial, sans-serif" font-size="44" font-weight="700" fill="#E8EDF2">Back a side</text>
+    <text x="150" y="126" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="400" fill="#8A93A0">Join the pool. Odds shift as it fills.</text>
+  </g>
+
+  <!-- step 3 -->
+  <g transform="translate(90,784)">
+    <rect x="0" y="0" width="900" height="168" rx="20" fill="#14181E" stroke="#23262D" stroke-width="1"/>
+    <text x="44" y="106" font-family="Helvetica, Arial, sans-serif" font-size="84" font-weight="700" fill="#27E08A">3</text>
+    <text x="150" y="78" font-family="Helvetica, Arial, sans-serif" font-size="44" font-weight="700" fill="#E8EDF2">Get paid</text>
+    <text x="150" y="126" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="400" fill="#8A93A0">Winners split the pot in seconds.</text>
+  </g>
+
+  <!-- url -->
+  <text x="90" y="1024" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="700" fill="#E8EDF2">golazo.wooblay.com</text>
+</svg>

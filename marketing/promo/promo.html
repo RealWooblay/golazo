@@ -1,0 +1,284 @@
+<!--
+  GOLAZO animated promo — HTML/CSS backup of the same 8s sequence.
+  Self-contained, no external assets. Plays once then holds the end card.
+  Screen-capturable at 1080x1080. Flat, dark, brand-accurate.
+
+  Sequence:
+    (a) 0.0-2.0s  logo strike-mark draws in + GOLAZO wordmark
+    (b) 2.0-3.4s  "Bet the next moment."
+    (c) 3.4-5.2s  Next shot? / Next corner? / Next goal?
+    (d) 5.2-6.7s  multiplier ticks up + "Paid in seconds."
+    (e) 6.7-8.0s  end card: mark + wordmark + golazo.wooblay.com  (holds)
+-->
+<meta charset="utf-8" />
+<title>GOLAZO promo</title>
+<style>
+  :root {
+    --bg: #0B0C0F;
+    --surface: #14181E;
+    --surface2: #1B1F27;
+    --hairline: #23262D;
+    --accent: #27E08A;
+    --text: #E8EDF2;
+    --muted: #8A93A0;
+    --sans: "Helvetica Neue", Arial, "Segoe UI", system-ui, sans-serif;
+  }
+
+  html, body { margin: 0; background: #000; }
+
+  /* The square stage. Capture this element at 1080x1080. */
+  .stage {
+    position: relative;
+    width: 1080px;
+    height: 1080px;
+    margin: 0 auto;
+    background: var(--bg);
+    overflow: hidden;
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+    color: var(--text);
+  }
+
+  /* Every scene is absolutely stacked and centered; opacity drives the cut. */
+  .scene {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+  }
+
+  /* ---------- (a) INTRO ---------- */
+  #intro { animation: introShow 0s linear 0s forwards, introHide 0.3s ease 2.0s forwards; }
+  @keyframes introShow { to { opacity: 1; } }
+  @keyframes introHide { to { opacity: 0; } }
+
+  /* ---------- (b) TAG ---------- */
+  #tag { animation: segIn 0.32s ease-out 2.0s forwards, segOut 0.3s ease 3.1s forwards; }
+
+  /* ---------- (c) BEATS ---------- */
+  #beats { animation: segIn 0.3s ease-out 3.4s forwards, segOut 0.3s ease 4.95s forwards; }
+
+  /* ---------- (d) MULT ---------- */
+  #mult { animation: segIn 0.3s ease-out 5.2s forwards, segOut 0.3s ease 6.45s forwards; }
+
+  /* ---------- (e) END (holds) ---------- */
+  #end { animation: segIn 0.4s ease-out 6.7s forwards; }
+
+  @keyframes segIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes segOut { from { opacity: 1; } to { opacity: 0; } }
+
+  /* ---------------- Logo strike-mark ---------------- */
+  .mark { display: block; }
+  .mark .line { stroke: var(--accent); stroke-width: 7; stroke-linecap: round; }
+  .mark .disc { fill: var(--accent); }
+  .mark .strike { fill: var(--bg); }
+
+  /* intro: draw the lines, grow the disc, punch the strike */
+  #intro .line {
+    stroke-dasharray: 30;
+    stroke-dashoffset: 30;
+    animation: drawLine 0.5s ease-out forwards;
+  }
+  #intro .l1 { animation-delay: 0.25s; }
+  #intro .l2 { animation-delay: 0.38s; }
+  #intro .l3 { animation-delay: 0.51s; }
+  @keyframes drawLine { to { stroke-dashoffset: 0; } }
+
+  #intro .disc {
+    transform-box: fill-box;
+    transform-origin: center;
+    transform: scale(0);
+    animation: growDisc 0.45s cubic-bezier(.2,.8,.2,1) 0.7s forwards;
+  }
+  @keyframes growDisc { to { transform: scale(1); } }
+
+  #intro .strike { opacity: 0; animation: showStrike 0.01s linear 1.05s forwards; }
+  @keyframes showStrike { to { opacity: 1; } }
+
+  /* intro wordmark fades up after the mark */
+  #intro .wordmark {
+    opacity: 0;
+    transform: translateY(20px);
+    animation: riseIn 0.5s ease-out 1.05s forwards;
+  }
+  @keyframes riseIn { to { opacity: 1; transform: translateY(0); } }
+
+  /* ---------------- Wordmark ---------------- */
+  .wordmark {
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    color: var(--text);
+    line-height: 1;
+  }
+
+  /* ---------------- TAG ---------------- */
+  .eyebrow {
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: 0.34em;
+    color: var(--muted);
+    margin-bottom: 26px;
+  }
+  .tagline {
+    font-size: 96px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: -0.01em;
+  }
+  .rule {
+    width: 150px;
+    height: 5px;
+    background: var(--accent);
+    margin-top: 22px;
+  }
+
+  /* ---------------- BEATS (betting-card rows) ---------------- */
+  .rows { display: flex; flex-direction: column; gap: 36px; }
+  .row {
+    display: flex;
+    align-items: center;
+    width: 670px;
+    height: 132px;
+    background: var(--surface2);
+    border: 2px solid var(--hairline);
+    border-radius: 38px;
+    padding: 0 66px;
+    box-sizing: border-box;
+    opacity: 0;
+    transform: translateY(26px);
+  }
+  #beats.run .row { animation: rowIn 0.42s cubic-bezier(.2,.8,.2,1) forwards; }
+  #beats .row:nth-child(1) { animation-delay: 0.00s; }
+  #beats .row:nth-child(2) { animation-delay: 0.22s; }
+  #beats .row:nth-child(3) { animation-delay: 0.44s; }
+  @keyframes rowIn { to { opacity: 1; transform: translateY(0); } }
+
+  .dot {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: var(--accent);
+    margin-right: 28px;
+    flex: 0 0 auto;
+  }
+  .row .label { font-size: 56px; font-weight: 700; color: var(--text); }
+
+  /* ---------------- MULT ---------------- */
+  .mult-num {
+    font-size: 220px;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .paid {
+    font-size: 80px;
+    font-weight: 700;
+    color: var(--text);
+    margin-top: 40px;
+  }
+  .submeta {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: 0.22em;
+    color: var(--muted);
+    margin-top: 22px;
+  }
+
+  /* ---------------- END ---------------- */
+  #end .wordmark { font-size: 110px; margin-top: 34px; }
+  .url {
+    font-size: 46px;
+    font-weight: 400;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    margin-top: 24px;
+    opacity: 0;
+    animation: fadeUrl 0.4s ease-out 7.0s forwards;
+  }
+  @keyframes fadeUrl { to { opacity: 1; } }
+
+  /* Optional: scale the stage down to fit smaller viewports while keeping
+     the 1080 capture target intact. Comment out for exact-size capture. */
+  @media (max-width: 1120px) {
+    .stage { transform: scale(calc(100vw / 1120)); transform-origin: top center; }
+  }
+</style>
+
+<div class="stage">
+
+  <!-- (a) INTRO -->
+  <section class="scene" id="intro">
+    <svg class="mark" width="300" height="300" viewBox="0 0 100 100">
+      <g>
+        <line class="line l1" x1="18" y1="38" x2="40" y2="38" />
+        <line class="line l2" x1="13" y1="50" x2="38" y2="50" />
+        <line class="line l3" x1="18" y1="62" x2="40" y2="62" />
+      </g>
+      <circle class="disc" cx="64" cy="50" r="19" />
+      <polygon class="strike" points="64,41 71,47 68,55 60,55 57,47" />
+    </svg>
+    <div class="wordmark" style="font-size:120px; margin-top:30px;">GOLAZO</div>
+  </section>
+
+  <!-- (b) TAG -->
+  <section class="scene" id="tag">
+    <div class="eyebrow">LIVE FOOTBALL</div>
+    <div class="tagline">Bet the next moment.</div>
+    <div class="rule"></div>
+  </section>
+
+  <!-- (c) BEATS -->
+  <section class="scene" id="beats">
+    <div class="rows">
+      <div class="row"><span class="dot"></span><span class="label">Next shot?</span></div>
+      <div class="row"><span class="dot"></span><span class="label">Next corner?</span></div>
+      <div class="row"><span class="dot"></span><span class="label">Next goal?</span></div>
+    </div>
+  </section>
+
+  <!-- (d) MULT -->
+  <section class="scene" id="mult">
+    <div class="mult-num" id="multNum">1.00x</div>
+    <div class="paid">Paid in seconds.</div>
+    <div class="submeta">PARIMUTUEL&nbsp;&nbsp;/&nbsp;&nbsp;WINNERS SPLIT THE POT</div>
+  </section>
+
+  <!-- (e) END -->
+  <section class="scene" id="end">
+    <svg class="mark" width="240" height="240" viewBox="0 0 100 100">
+      <g>
+        <line class="line" x1="18" y1="38" x2="40" y2="38" />
+        <line class="line" x1="13" y1="50" x2="38" y2="50" />
+        <line class="line" x1="18" y1="62" x2="40" y2="62" />
+      </g>
+      <circle class="disc" cx="64" cy="50" r="19" />
+      <polygon class="strike" points="64,41 71,47 68,55 60,55 57,47" />
+    </svg>
+    <div class="wordmark">GOLAZO</div>
+    <div class="url">golazo.wooblay.com</div>
+  </section>
+
+</div>
+
+<script>
+  // Kick the beats row animation when its scene becomes active.
+  setTimeout(function () {
+    document.getElementById('beats').classList.add('run');
+  }, 3400);
+
+  // Tick the multiplier from 1.00x to 3.75x during the mult scene.
+  setTimeout(function () {
+    var el = document.getElementById('multNum');
+    var start = 1.00, end = 3.75, dur = 1080; // ms
+    var t0 = performance.now();
+    function step(now) {
+      var p = Math.min(1, (now - t0) / dur);
+      var e = 1 - Math.pow(1 - p, 3); // ease-out cubic
+      el.textContent = (start + (end - start) * e).toFixed(2) + 'x';
+      if (p < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  }, 5200);
+</script>

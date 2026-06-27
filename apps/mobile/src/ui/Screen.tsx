@@ -1,5 +1,5 @@
 import React from "react";
-import { ScrollView, StyleSheet, View, type ViewStyle } from "react-native";
+import { ScrollView, StyleSheet, useWindowDimensions, View, type ViewStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, MAX_WIDTH, spacing } from "@/theme";
 
@@ -35,13 +35,16 @@ export function Screen({
   contentStyle?: ViewStyle;
 }) {
   const insets = useSafeAreaInsets();
+  // Desktop/laptop gets a roomier column; phones keep the tight app width.
+  const { width } = useWindowDimensions();
+  const maxW = width >= 900 ? 600 : MAX_WIDTH;
   const pad: ViewStyle = {
     paddingTop: topInset ? insets.top + spacing.sm : spacing.sm,
     paddingHorizontal: padded ? spacing.lg : 0,
   };
 
   const inner = (
-    <View style={styles.column}>
+    <View style={[styles.column, { maxWidth: maxW }]}>
       <View style={[pad, contentStyle]}>{children}</View>
     </View>
   );

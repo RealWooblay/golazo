@@ -1,0 +1,119 @@
+<svg width="1242" height="2208" viewBox="0 0 1242 2208" xmlns="http://www.w3.org/2000/svg" font-family="'Helvetica Neue', Arial, sans-serif">
+  <rect width="1242" height="2208" fill="#0B0C0F"/>
+
+  <!-- caption band -->
+  <text x="621" y="150" text-anchor="middle" fill="#E8EDF2" font-size="78" font-weight="700" letter-spacing="1">Odds move with the crowd.</text>
+  <text x="621" y="214" text-anchor="middle" fill="#8A93A0" font-size="34" font-weight="400" letter-spacing="3">PARIMUTUEL &#183; PRICE SHIFTS LIVE</text>
+
+  <!-- phone frame -->
+  <rect x="171" y="290" width="900" height="1830" rx="84" fill="#14181E" stroke="#23262D" stroke-width="3"/>
+  <rect x="195" y="314" width="852" height="1782" rx="62" fill="#0B0C0F"/>
+
+  <defs>
+    <clipPath id="cc-screen"><rect x="195" y="314" width="852" height="1782" rx="62"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#cc-screen)">
+    <!-- status bar -->
+    <text x="245" y="382" fill="#E8EDF2" font-size="30" font-weight="600">9:41</text>
+    <g fill="#E8EDF2">
+      <rect x="905" y="362" width="30" height="22" rx="4"/>
+      <rect x="945" y="357" width="34" height="27" rx="5"/>
+      <rect x="989" y="360" width="46" height="24" rx="6" fill="none" stroke="#E8EDF2" stroke-width="3"/>
+      <rect x="993" y="364" width="34" height="16" rx="3"/>
+    </g>
+
+    <!-- back + context -->
+    <g transform="translate(245,432)">
+      <path d="M30 8 L8 30 L30 52" fill="none" stroke="#E8EDF2" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="70" y="42" fill="#E8EDF2" font-size="32" font-weight="600">Brazil v Argentina</text>
+      <g transform="translate(560,8)">
+        <rect x="0" y="0" width="140" height="44" rx="22" fill="#14181E"/>
+        <circle cx="28" cy="22" r="8" fill="#27E08A"/>
+        <text x="46" y="31" fill="#E8EDF2" font-size="24" font-weight="600">67'</text>
+      </g>
+    </g>
+
+    <!-- ===== THE CARD ===== -->
+    <g transform="translate(245,540)">
+      <rect x="0" y="0" width="752" height="1180" rx="36" fill="#14181E" stroke="#23262D" stroke-width="2"/>
+
+      <!-- eyebrow + question -->
+      <text x="48" y="100" fill="#8A93A0" font-size="28" font-weight="600" letter-spacing="3">NEXT CORNER</text>
+      <text x="48" y="170" fill="#E8EDF2" font-size="56" font-weight="700">Who wins it?</text>
+
+      <!-- pool meta -->
+      <g transform="translate(48,210)">
+        <rect x="0" y="0" width="656" height="76" rx="16" fill="#1B1F27"/>
+        <circle cx="40" cy="38" r="9" fill="#27E08A"/>
+        <text x="66" y="48" fill="#8A93A0" font-size="28">Pool</text>
+        <text x="170" y="48" fill="#E8EDF2" font-size="32" font-weight="700">$3,140</text>
+        <line x1="400" y1="20" x2="400" y2="56" stroke="#23262D" stroke-width="2"/>
+        <text x="430" y="48" fill="#8A93A0" font-size="28">266 in</text>
+      </g>
+
+      <!-- ===== PRICE BOARD ===== -->
+      <g transform="translate(48,330)">
+        <!-- Brazil -->
+        <rect x="0" y="0" width="656" height="170" rx="22" fill="#0E2A1C" stroke="#27E08A" stroke-width="3"/>
+        <circle cx="56" cy="85" r="30" fill="#1B6BD6"/>
+        <text x="106" y="76" fill="#E8EDF2" font-size="42" font-weight="700">Brazil</text>
+        <text x="106" y="124" fill="#27E08A" font-size="26" font-weight="600">price up</text>
+        <!-- up arrow -->
+        <path d="M210 118 L222 104 L234 118" fill="none" stroke="#27E08A" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="630" y="105" text-anchor="end" fill="#E8EDF2" font-size="78" font-weight="700">1.72×</text>
+
+        <!-- Argentina -->
+        <rect x="0" y="194" width="656" height="170" rx="22" fill="#1B1F27" stroke="#23262D" stroke-width="2"/>
+        <circle cx="56" cy="279" r="30" fill="#56A5D9"/>
+        <text x="106" y="270" fill="#E8EDF2" font-size="42" font-weight="700">Argentina</text>
+        <text x="106" y="318" fill="#8A93A0" font-size="26" font-weight="600">price down</text>
+        <path d="M250 306 L262 320 L274 306" fill="none" stroke="#8A93A0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="630" y="299" text-anchor="end" fill="#E8EDF2" font-size="78" font-weight="700">2.30×</text>
+      </g>
+
+      <!-- ===== CROWD-LEAN DIVIDER ===== -->
+      <g transform="translate(48,750)">
+        <text x="0" y="0" fill="#8A93A0" font-size="28" font-weight="600">Crowd lean</text>
+        <text x="0" y="44" fill="#27E08A" font-size="30" font-weight="700">Brazil 61%</text>
+        <text x="656" y="44" text-anchor="end" fill="#8A93A0" font-size="30" font-weight="600">39% Argentina</text>
+        <rect x="0" y="64" width="656" height="22" rx="11" fill="#1B1F27"/>
+        <rect x="0" y="64" width="400" height="22" rx="11" fill="#27E08A"/>
+        <!-- center marker -->
+        <rect x="398" y="56" width="4" height="38" rx="2" fill="#0B0C0F"/>
+      </g>
+
+      <!-- ===== FUSE TIMER ===== -->
+      <g transform="translate(48,890)">
+        <text x="0" y="0" fill="#8A93A0" font-size="28" font-weight="600">Betting closes in</text>
+        <text x="656" y="0" text-anchor="end" fill="#27E08A" font-size="40" font-weight="700">0:06</text>
+        <rect x="0" y="22" width="656" height="14" rx="7" fill="#1B1F27"/>
+        <rect x="0" y="22" width="158" height="14" rx="7" fill="#27E08A"/>
+      </g>
+
+      <!-- ===== STAKE STEPPER ===== -->
+      <g transform="translate(48,968)">
+        <rect x="0" y="0" width="656" height="92" rx="18" fill="#1B1F27"/>
+        <circle cx="50" cy="46" r="30" fill="#23262D"/>
+        <rect x="36" y="42" width="28" height="8" rx="4" fill="#E8EDF2"/>
+        <text x="328" y="42" text-anchor="middle" fill="#8A93A0" font-size="24">Stake</text>
+        <text x="328" y="74" text-anchor="middle" fill="#E8EDF2" font-size="40" font-weight="700">$25</text>
+        <circle cx="606" cy="46" r="30" fill="#23262D"/>
+        <rect x="592" y="42" width="28" height="8" rx="4" fill="#E8EDF2"/>
+        <rect x="602" y="32" width="8" height="28" rx="4" fill="#E8EDF2"/>
+      </g>
+
+      <!-- CTA -->
+      <g transform="translate(48,1080)">
+        <rect x="0" y="0" width="656" height="80" rx="20" fill="#27E08A"/>
+        <text x="328" y="53" text-anchor="middle" fill="#0B0C0F" font-size="34" font-weight="700">Back Brazil &#183; to win $43</text>
+      </g>
+    </g>
+
+    <!-- helper line -->
+    <text x="621" y="1770" text-anchor="middle" fill="#8A93A0" font-size="28">Your price locks the second you bet</text>
+  </g>
+
+  <!-- notch -->
+  <rect x="531" y="314" width="180" height="40" rx="20" fill="#0B0C0F"/>
+</svg>

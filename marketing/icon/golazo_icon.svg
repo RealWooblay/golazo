@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="512" height="512" role="img" aria-label="GOLAZO">
+  <rect x="0" y="0" width="100" height="100" rx="22" fill="#0E1116"/>
+  <g stroke="#27E08A" stroke-width="7" stroke-linecap="round">
+    <line x1="18" y1="38" x2="40" y2="38"/>
+    <line x1="13" y1="50" x2="38" y2="50"/>
+    <line x1="18" y1="62" x2="40" y2="62"/>
+  </g>
+  <circle cx="64" cy="50" r="19" fill="#27E08A"/>
+  <polygon points="64,41 71,47 68,55 60,55 57,47" fill="#0B0C0F"/>
+</svg>

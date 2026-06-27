@@ -1,0 +1,40 @@
+<svg width="1080" height="1080" viewBox="0 0 1080 1080" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1080" height="1080" fill="#0B0C0F"/>
+
+  <!-- logo tile + wordmark -->
+  <g transform="translate(88,96)">
+    <rect x="0" y="0" width="72" height="72" rx="18" fill="#14181E" stroke="#23262D" stroke-width="1"/>
+    <g transform="translate(9,9) scale(0.54)">
+      <g stroke="#27E08A" stroke-width="7" stroke-linecap="round">
+        <line x1="18" y1="38" x2="40" y2="38"/>
+        <line x1="13" y1="50" x2="38" y2="50"/>
+        <line x1="18" y1="62" x2="40" y2="62"/>
+      </g>
+      <circle cx="64" cy="50" r="19" fill="#27E08A"/>
+      <polygon points="64,41 71,47 68,55 60,55 57,47" fill="#0B0C0F"/>
+    </g>
+    <text x="92" y="48" font-family="Helvetica, Arial, sans-serif" font-size="38" font-weight="700" letter-spacing="3" fill="#E8EDF2">GOLAZO</text>
+  </g>
+
+  <!-- big numeral motif: seconds -->
+  <g transform="translate(90,300)">
+    <text x="0" y="0" font-family="Helvetica, Arial, sans-serif" font-size="150" font-weight="700" letter-spacing="-4" fill="#1B1F27">00:03</text>
+  </g>
+
+  <!-- eyebrow -->
+  <text x="90" y="600" font-family="Helvetica, Arial, sans-serif" font-size="24" font-weight="700" letter-spacing="6" fill="#27E08A">PARIMUTUEL POOLS</text>
+
+  <!-- headline -->
+  <text x="86" y="704" font-family="Helvetica, Arial, sans-serif" font-size="124" font-weight="700" letter-spacing="-3" fill="#E8EDF2">Cash out in</text>
+  <text x="86" y="828" font-family="Helvetica, Arial, sans-serif" font-size="124" font-weight="700" letter-spacing="-3" fill="#27E08A">seconds.</text>
+
+  <!-- subhead -->
+  <text x="90" y="916" font-family="Helvetica, Arial, sans-serif" font-size="36" font-weight="400" fill="#8A93A0">The moment lands, the pool splits,</text>
+  <text x="90" y="966" font-family="Helvetica, Arial, sans-serif" font-size="36" font-weight="400" fill="#8A93A0">winners get paid. No waiting around.</text>
+
+  <!-- url -->
+  <text x="90" y="1030" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="700" fill="#E8EDF2">golazo.wooblay.com</text>
+
+  <!-- hairline -->
+  <line x1="90" y1="560" x2="990" y2="560" stroke="#23262D" stroke-width="1"/>
+</svg>

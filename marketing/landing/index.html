@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GOLAZO · Bet the next moment.</title>
+<meta name="description" content="Bet on the next moment of a live match. The next shot, corner, goal or booking, settled in seconds. Parimutuel pools, odds shift live, winners split the pot." />
+<meta name="theme-color" content="#0B0C0F" />
+
+<!-- Open Graph -->
+<meta property="og:type" content="website" />
+<meta property="og:title" content="GOLAZO · Bet the next moment." />
+<meta property="og:description" content="Bet on the next moment of a live match. Settled in seconds. Parimutuel pools, winners split the pot." />
+<meta property="og:url" content="https://golazo.wooblay.com" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet" />
+
+<style>
+  :root{
+    --canvas:#0B0C0F;
+    --surface:#14181E;
+    --surface-2:#1B1F27;
+    --hair:#23262D;
+    --accent:#27E08A;
+    --text:#E8EDF2;
+    --muted:#8A93A0;
+    --maxw:1120px;
+    --radius:14px;
+    font-synthesis:none;
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0}
+
+  html{scroll-behavior:smooth;-webkit-text-size-adjust:100%}
+
+  body{
+    background:var(--canvas);
+    color:var(--text);
+    font-family:'Space Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    font-weight:400;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+    overflow-x:hidden;
+  }
+
+  a{color:inherit;text-decoration:none}
+
+  .wrap{
+    width:100%;
+    max-width:var(--maxw);
+    margin:0 auto;
+    padding:0 24px;
+  }
+
+  .eyebrow{
+    font-size:11px;
+    font-weight:500;
+    letter-spacing:.16em;
+    text-transform:uppercase;
+    color:var(--muted);
+  }
+  .eyebrow.accent{color:var(--accent)}
+
+  /* ---------- header ---------- */
+  header{
+    position:sticky;
+    top:0;
+    z-index:50;
+    background:rgba(11,12,15,.82);
+    backdrop-filter:blur(10px);
+    -webkit-backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--hair);
+  }
+  .nav{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    height:64px;
+  }
+  .brand{
+    display:flex;
+    align-items:center;
+    gap:12px;
+  }
+  .brand .tile{
+    width:38px;
+    height:38px;
+    background:var(--surface);
+    border:1px solid var(--hair);
+    border-radius:10px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .brand .tile svg{width:24px;height:24px;display:block}
+  .wordmark{
+    font-weight:700;
+    font-size:20px;
+    letter-spacing:.06em;
+    color:#fff;
+  }
+  .nav-links{
+    display:flex;
+    align-items:center;
+    gap:28px;
+  }
+  .nav-links a{
+    font-size:14px;
+    color:var(--muted);
+    transition:color .15s ease;
+  }
+  .nav-links a:hover{color:var(--text)}
+  .nav-cta{
+    font-size:14px;
+    font-weight:500;
+    color:var(--canvas);
+    background:var(--accent);
+    padding:9px 16px;
+    border-radius:9px;
+    transition:opacity .15s ease;
+  }
+  .nav-cta:hover{opacity:.88}
+  @media(max-width:720px){
+    .nav-links .link-hide{display:none}
+  }
+
+  /* ---------- hero ---------- */
+  .hero{
+    position:relative;
+    padding:84px 0 72px;
+    border-bottom:1px solid var(--hair);
+  }
+  .hero-grid{
+    display:grid;
+    grid-template-columns:1.15fr .85fr;
+    gap:56px;
+    align-items:center;
+  }
+  .hero-mark{
+    display:flex;
+    align-items:center;
+    gap:18px;
+    margin-bottom:26px;
+  }
+  .hero-mark .tile{
+    width:64px;
+    height:64px;
+    background:var(--surface);
+    border:1px solid var(--hair);
+    border-radius:16px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .hero-mark .tile svg{width:42px;height:42px;display:block}
+  .hero-mark .wm{
+    font-weight:700;
+    font-size:34px;
+    letter-spacing:.08em;
+    color:#fff;
+  }
+  h1{
+    font-weight:700;
+    font-size:clamp(40px,6.4vw,68px);
+    line-height:1.02;
+    letter-spacing:-.02em;
+    color:#fff;
+    margin-bottom:20px;
+  }
+  h1 .gl{color:var(--accent)}
+  .subhead{
+    font-size:clamp(16px,2.1vw,19px);
+    color:var(--muted);
+    max-width:34ch;
+    margin-bottom:32px;
+  }
+  .cta-row{
+    display:flex;
+    align-items:center;
+    gap:18px;
+    flex-wrap:wrap;
+  }
+  .btn-primary{
+    display:inline-flex;
+    align-items:center;
+    gap:9px;
+    background:var(--accent);
+    color:var(--canvas);
+    font-weight:700;
+    font-size:16px;
+    padding:15px 26px;
+    border-radius:11px;
+    transition:opacity .15s ease,transform .15s ease;
+  }
+  .btn-primary:hover{opacity:.9;transform:translateY(-1px)}
+  .btn-primary svg{width:17px;height:17px}
+  .cta-note{
+    font-size:13px;
+    color:var(--muted);
+  }
+
+  /* live card mock */
+  .live-card{
+    background:var(--surface);
+    border:1px solid var(--hair);
+    border-radius:18px;
+    padding:20px;
+  }
+  .lc-top{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    margin-bottom:18px;
+  }
+  .live-pill{
+    display:inline-flex;
+    align-items:center;
+    gap:7px;
+    font-size:11px;
+    font-weight:500;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--accent);
+  }
+  .dot{
+    width:7px;height:7px;border-radius:50%;
+    background:var(--accent);
+    animation:pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+  .lc-clock{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .lc-match{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:14px 0;
+    border-top:1px solid var(--hair);
+    border-bottom:1px solid var(--hair);
+    margin-bottom:18px;
+  }
+  .team{display:flex;align-items:center;gap:10px;font-weight:500;font-size:15px}
+  .crest{width:22px;height:22px;border-radius:6px;background:var(--surface-2);border:1px solid var(--hair)}
+  .score{font-weight:700;font-size:20px;font-variant-numeric:tabular-nums}
+  .lc-q{font-size:13px;color:var(--muted);margin-bottom:12px}
+  .lc-bets{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+  .bet{
+    background:var(--surface-2);
+    border:1px solid var(--hair);
+    border-radius:11px;
+    padding:12px 14px;
+    transition:border-color .15s ease;
+  }
+  .bet.live{border-color:var(--accent)}
+  .bet-label{font-size:13px;color:var(--text);margin-bottom:6px}
+  .bet-pool{font-size:11px;color:var(--muted)}
+  .bet .mult{font-weight:700;font-size:16px}
+  .bet.live .mult{color:var(--accent)}
+  .lc-foot{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    font-size:12px;
+    color:var(--muted);
+  }
+  .lc-foot b{color:var(--text);font-weight:500;font-variant-numeric:tabular-nums}
+
+  @media(max-width:880px){
+    .hero-grid{grid-template-columns:1fr;gap:40px}
+    .hero{padding:56px 0 56px}
+    .hero-visual{max-width:440px}
+  }
+
+  /* ---------- section frame ---------- */
+  section{padding:80px 0}
+  .sec-head{margin-bottom:44px;max-width:640px}
+  .sec-head h2{
+    font-weight:700;
+    font-size:clamp(26px,3.6vw,36px);
+    letter-spacing:-.01em;
+    color:#fff;
+    margin:12px 0 14px;
+  }
+  .sec-head p{color:var(--muted);font-size:16px;max-width:52ch}
+
+  /* ---------- how it works ---------- */
+  #how{border-bottom:1px solid var(--hair)}
+  .steps{
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    gap:18px;
+  }
+  .step{
+    background:var(--surface);
+    border:1px solid var(--hair);
+    border-radius:var(--radius);
+    padding:26px 24px;
+  }
+  .step-num{
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    width:34px;height:34px;
+    border-radius:9px;
+    border:1px solid var(--hair);
+    color:var(--accent);
+    font-weight:700;
+    font-size:15px;
+    margin-bottom:18px;
+    font-variant-numeric:tabular-nums;
+  }
+  .step h3{font-weight:500;font-size:18px;color:#fff;margin-bottom:9px}
+  .step p{color:var(--muted);font-size:14px;line-height:1.55}
+  @media(max-width:760px){
+    .steps{grid-template-columns:1fr}
+  }
+
+  /* ---------- features ---------- */
+  .features{
+    display:grid;
+    grid-template-columns:repeat(4,1fr);
+    gap:18px;
+  }
+  .feat{
+    background:var(--surface);
+    border:1px solid var(--hair);
+    border-radius:var(--radius);
+    padding:24px 22px;
+  }
+  .feat-ic{
+    width:38px;height:38px;
+    display:flex;align-items:center;justify-content:center;
+    border:1px solid var(--hair);
+    border-radius:10px;
+    margin-bottom:16px;
+  }
+  .feat-ic svg{width:20px;height:20px;stroke:var(--accent);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .feat h3{font-weight:500;font-size:16px;color:#fff;margin-bottom:8px}
+  .feat p{color:var(--muted);font-size:13.5px;line-height:1.55}
+  @media(max-width:880px){
+    .features{grid-template-columns:repeat(2,1fr)}
+  }
+  @media(max-width:480px){
+    .features{grid-template-columns:1fr}
+  }
+
+  /* ---------- faq ---------- */
+  #faq{border-top:1px solid var(--hair);border-bottom:1px solid var(--hair)}
+  .faq-list{max-width:760px;margin:0 auto}
+  .faq-item{
+    border-bottom:1px solid var(--hair);
+    padding:22px 0;
+  }
+  .faq-item:first-child{border-top:1px solid var(--hair)}
+  .faq-q{
+    font-weight:500;
+    font-size:17px;
+    color:#fff;
+    margin-bottom:10px;
+    display:flex;
+    gap:12px;
+    align-items:baseline;
+  }
+  .faq-q .mk{color:var(--accent);font-weight:700;flex:none}
+  .faq-a{color:var(--muted);font-size:15px;line-height:1.6;padding-left:24px}
+
+  /* ---------- cta band ---------- */
+  .cta-band{
+    text-align:center;
+    padding:88px 0;
+  }
+  .cta-band h2{
+    font-weight:700;
+    font-size:clamp(28px,4.4vw,46px);
+    letter-spacing:-.02em;
+    color:#fff;
+    margin-bottom:14px;
+  }
+  .cta-band h2 .gl{color:var(--accent)}
+  .cta-band p{color:var(--muted);font-size:17px;margin-bottom:30px}
+
+  /* ---------- footer ---------- */
+  footer{
+    border-top:1px solid var(--hair);
+    padding:40px 0 56px;
+  }
+  .foot{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:24px;
+    flex-wrap:wrap;
+  }
+  .foot .brand .tile{width:32px;height:32px}
+  .foot .brand .tile svg{width:20px;height:20px}
+  .foot .wordmark{font-size:17px}
+  .foot-links{display:flex;gap:24px}
+  .foot-links a{font-size:13px;color:var(--muted);transition:color .15s ease}
+  .foot-links a:hover{color:var(--text)}
+  .foot-legal{
+    margin-top:26px;
+    padding-top:24px;
+    border-top:1px solid var(--hair);
+    display:flex;
+    justify-content:space-between;
+    gap:16px;
+    flex-wrap:wrap;
+    font-size:12px;
+    color:var(--muted);
+  }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="wrap nav">
+    <a href="#top" class="brand" aria-label="GOLAZO home">
+      <span class="tile">
+        <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><g stroke="#27E08A" stroke-width="7" stroke-linecap="round"><line x1="18" y1="38" x2="40" y2="38"/><line x1="13" y1="50" x2="38" y2="50"/><line x1="18" y1="62" x2="40" y2="62"/></g><circle cx="64" cy="50" r="19" fill="#27E08A"/><polygon points="64,41 71,47 68,55 60,55 57,47" fill="#0B0C0F"/></svg>
+      </span>
+      <span class="wordmark">GOLAZO</span>
+    </a>
+    <nav class="nav-links">
+      <a href="#how" class="link-hide">How it works</a>
+      <a href="#features" class="link-hide">Features</a>
+      <a href="#faq" class="link-hide">FAQ</a>
+      <a href="https://golazo.wooblay.com" class="nav-cta">Open app</a>
+    </nav>
+  </div>
+</header>
+
+<!-- HERO -->
+<main id="top">
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <div class="hero-mark">
+        <span class="tile">
+          <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><g stroke="#27E08A" stroke-width="7" stroke-linecap="round"><line x1="18" y1="38" x2="40" y2="38"/><line x1="13" y1="50" x2="38" y2="50"/><line x1="18" y1="62" x2="40" y2="62"/></g><circle cx="64" cy="50" r="19" fill="#27E08A"/><polygon points="64,41 71,47 68,55 60,55 57,47" fill="#0B0C0F"/></svg>
+        </span>
+        <span class="wm">GOLAZO</span>
+      </div>
+      <h1>Bet the next <span class="gl">moment.</span></h1>
+      <p class="subhead">Back the next shot, corner, goal or booking while the match is live. Pools settle in seconds and winners split the pot.</p>
+      <div class="cta-row">
+        <a href="https://golazo.wooblay.com" class="btn-primary">
+          Start playing
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </a>
+        <span class="cta-note">Free to join. No app store needed.</span>
+      </div>
+    </div>
+
+    <div class="hero-visual">
+      <div class="live-card" role="img" aria-label="A live match card showing two open bets on the next moment.">
+        <div class="lc-top">
+          <span class="live-pill"><span class="dot"></span>Live now</span>
+          <span class="lc-clock">67:42</span>
+        </div>
+        <div class="lc-match">
+          <span class="team"><span class="crest"></span>Arsenal</span>
+          <span class="score">1&nbsp;–&nbsp;1</span>
+          <span class="team">Spurs<span class="crest"></span></span>
+        </div>
+        <p class="lc-q">Next moment. Who threatens first?</p>
+        <div class="lc-bets">
+          <div class="bet live">
+            <div class="bet-label">Shot on goal</div>
+            <span class="mult">2.4×</span>
+            <div class="bet-pool">in pool · 318 backers</div>
+          </div>
+          <div class="bet">
+            <div class="bet-label">Corner</div>
+            <span class="mult">1.8×</span>
+            <div class="bet-pool">in pool · 470 backers</div>
+          </div>
+        </div>
+        <div class="lc-foot">
+          <span>Closes in <b>0:08</b></span>
+          <span>Pot <b>14,820</b></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="how">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow accent">How it works</span>
+      <h2>Three taps, in the time it takes to score.</h2>
+      <p>No accumulators, no waiting for full time. Just the next moment of the match in front of you.</p>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <span class="step-num">1</span>
+        <h3>Pick a live moment</h3>
+        <p>Open a match in play and choose what happens next. Next shot, next corner, next goal, next booking.</p>
+      </div>
+      <div class="step">
+        <span class="step-num">2</span>
+        <h3>Back a side</h3>
+        <p>Drop into the pool with everyone else. Odds shift live as backers pile in, so timing is everything.</p>
+      </div>
+      <div class="step">
+        <span class="step-num">3</span>
+        <h3>Get paid in seconds</h3>
+        <p>The moment resolves on the pitch and the pot is split between the winners. No tickets to chase.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <span class="eyebrow accent">Why GOLAZO</span>
+      <h2>Built for the 90 minutes, not the next morning.</h2>
+    </div>
+    <div class="features">
+      <div class="feat">
+        <span class="feat-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2 6 4-14 2 8h6"/></svg></span>
+        <h3>Live in-play markets</h3>
+        <p>Markets open and close with the run of play. Bet the moment that is unfolding right now.</p>
+      </div>
+      <div class="feat">
+        <span class="feat-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="9" r="3"/><circle cx="16" cy="15" r="3"/><path d="M2 20c0-2.5 2.7-4 6-4M22 20c0-2.5-2.7-4-6-4"/></svg></span>
+        <h3>Parimutuel pools</h3>
+        <p>Everyone backs into one pot. No house line to beat. Winners split what the losers put in.</p>
+      </div>
+      <div class="feat">
+        <span class="feat-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg></span>
+        <h3>Instant settle</h3>
+        <p>The whistle blows on a moment and you are paid in seconds. No pending bets sitting overnight.</p>
+      </div>
+      <div class="feat">
+        <span class="feat-ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7l1.6 3.3 3.6.5-2.6 2.5.6 3.6-3.2-1.7-3.2 1.7.6-3.6-2.6-2.5 3.6-.5z"/></svg></span>
+        <h3>Every match</h3>
+        <p>From the big leagues to the late kickoff, if it is live you can play it.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section id="faq">
+  <div class="wrap">
+    <div class="sec-head" style="text-align:center;margin-left:auto;margin-right:auto">
+      <span class="eyebrow accent">FAQ</span>
+      <h2>Quick answers.</h2>
+    </div>
+    <div class="faq-list">
+      <div class="faq-item">
+        <div class="faq-q"><span class="mk">Q</span>What does parimutuel actually mean?</div>
+        <p class="faq-a">Everyone who backs a moment pays into one shared pot. When the moment resolves, the pot is split between the people who got it right. There is no fixed bookmaker price, the odds you see come from how the crowd is betting.</p>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q"><span class="mk">Q</span>How fast do bets settle?</div>
+        <p class="faq-a">In seconds. A market is tied to a single live moment, so the instant it happens on the pitch the pool resolves and winnings land. No waiting for full time.</p>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q"><span class="mk">Q</span>Do I need to download an app?</div>
+        <p class="faq-a">No. GOLAZO runs in your browser. Open golazo.wooblay.com, find a live match and you are in.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA BAND -->
+<section class="cta-band">
+  <div class="wrap">
+    <h2>The next moment is <span class="gl">already kicking off.</span></h2>
+    <p>Find a live match and back your read.</p>
+    <a href="https://golazo.wooblay.com" class="btn-primary">
+      Open GOLAZO
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+    </a>
+  </div>
+</section>
+</main>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="foot">
+      <a href="#top" class="brand" aria-label="GOLAZO home">
+        <span class="tile">
+          <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><g stroke="#27E08A" stroke-width="7" stroke-linecap="round"><line x1="18" y1="38" x2="40" y2="38"/><line x1="13" y1="50" x2="38" y2="50"/><line x1="18" y1="62" x2="40" y2="62"/></g><circle cx="64" cy="50" r="19" fill="#27E08A"/><polygon points="64,41 71,47 68,55 60,55 57,47" fill="#0B0C0F"/></svg>
+        </span>
+        <span class="wordmark">GOLAZO</span>
+      </a>
+      <nav class="foot-links">
+        <a href="#how">How it works</a>
+        <a href="#features">Features</a>
+        <a href="#faq">FAQ</a>
+        <a href="https://golazo.wooblay.com">Open app</a>
+      </nav>
+    </div>
+    <div class="foot-legal">
+      <span>© 2026 GOLAZO. Bet the next moment.</span>
+      <span>18+. Please play responsibly.</span>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

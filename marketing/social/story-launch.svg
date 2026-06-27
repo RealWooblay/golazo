@@ -1,0 +1,39 @@
+<svg width="1080" height="1920" viewBox="0 0 1080 1920" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1080" height="1920" fill="#0B0C0F"/>
+
+  <!-- wordmark top -->
+  <text x="540" y="220" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="44" font-weight="700" letter-spacing="5" fill="#E8EDF2">GOLAZO</text>
+
+  <!-- big logo mark centered -->
+  <g transform="translate(330,470)">
+    <rect x="0" y="0" width="420" height="420" rx="96" fill="#14181E" stroke="#23262D" stroke-width="1.5"/>
+    <g transform="translate(48,48) scale(3.24)">
+      <g stroke="#27E08A" stroke-width="7" stroke-linecap="round">
+        <line x1="18" y1="38" x2="40" y2="38"/>
+        <line x1="13" y1="50" x2="38" y2="50"/>
+        <line x1="18" y1="62" x2="40" y2="62"/>
+      </g>
+      <circle cx="64" cy="50" r="19" fill="#27E08A"/>
+      <polygon points="64,41 71,47 68,55 60,55 57,47" fill="#0B0C0F"/>
+    </g>
+  </g>
+
+  <!-- eyebrow -->
+  <text x="540" y="1090" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="26" font-weight="700" letter-spacing="7" fill="#27E08A">NOW LIVE</text>
+
+  <!-- headline -->
+  <text x="540" y="1230" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="128" font-weight="700" letter-spacing="-3" fill="#E8EDF2">We're live.</text>
+
+  <!-- subhead -->
+  <text x="540" y="1320" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="40" font-weight="400" fill="#8A93A0">Bet the next moment of a live match.</text>
+  <text x="540" y="1378" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="40" font-weight="400" fill="#8A93A0">Settled in seconds.</text>
+
+  <!-- CTA button -->
+  <g transform="translate(270,1560)">
+    <rect x="0" y="0" width="540" height="108" rx="54" fill="#27E08A"/>
+    <text x="270" y="70" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="38" font-weight="700" fill="#0B0C0F">golazo.wooblay.com</text>
+  </g>
+
+  <!-- footer hint -->
+  <text x="540" y="1760" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-size="28" font-weight="400" letter-spacing="2" fill="#8A93A0">Tap the link. Watch a match. Play.</text>
+</svg>

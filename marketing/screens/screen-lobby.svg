@@ -1,0 +1,158 @@
+<svg width="1242" height="2208" viewBox="0 0 1242 2208" xmlns="http://www.w3.org/2000/svg" font-family="'Helvetica Neue', Arial, sans-serif">
+  <rect width="1242" height="2208" fill="#0B0C0F"/>
+
+  <!-- caption band -->
+  <text x="621" y="150" text-anchor="middle" fill="#E8EDF2" font-size="78" font-weight="700" letter-spacing="1">Every match, live.</text>
+  <text x="621" y="214" text-anchor="middle" fill="#8A93A0" font-size="34" font-weight="400" letter-spacing="3">PICK A GAME, JUMP IN</text>
+
+  <!-- phone frame -->
+  <rect x="171" y="290" width="900" height="1830" rx="84" fill="#14181E" stroke="#23262D" stroke-width="3"/>
+  <rect x="195" y="314" width="852" height="1782" rx="62" fill="#0B0C0F"/>
+
+  <defs>
+    <clipPath id="lo-screen"><rect x="195" y="314" width="852" height="1782" rx="62"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#lo-screen)">
+    <!-- status bar -->
+    <text x="245" y="382" fill="#E8EDF2" font-size="30" font-weight="600">9:41</text>
+    <g fill="#E8EDF2">
+      <rect x="905" y="362" width="30" height="22" rx="4"/>
+      <rect x="945" y="357" width="34" height="27" rx="5"/>
+      <rect x="989" y="360" width="46" height="24" rx="6" fill="none" stroke="#E8EDF2" stroke-width="3"/>
+      <rect x="993" y="364" width="34" height="16" rx="3"/>
+    </g>
+
+    <!-- header -->
+    <g transform="translate(245,420)">
+      <rect x="0" y="0" width="58" height="58" rx="16" fill="#14181E"/>
+      <g transform="translate(7,7) scale(0.44)" stroke="#27E08A" stroke-width="7" stroke-linecap="round">
+        <line x1="18" y1="38" x2="40" y2="38"/><line x1="13" y1="50" x2="38" y2="50"/><line x1="18" y1="62" x2="40" y2="62"/>
+      </g>
+      <circle cx="53.4" cy="36" r="8.4" fill="#27E08A"/>
+      <polygon points="53.4,32 56.5,34.6 55.2,38.2 51.6,38.2 50.3,34.6" fill="#0B0C0F"/>
+    </g>
+    <text x="318" y="460" fill="#E8EDF2" font-size="34" font-weight="700" letter-spacing="2">GOLAZO</text>
+    <g transform="translate(745,420)">
+      <rect x="0" y="0" width="200" height="58" rx="29" fill="#14181E" stroke="#23262D" stroke-width="2"/>
+      <circle cx="34" cy="29" r="9" fill="#27E08A"/>
+      <text x="58" y="40" fill="#E8EDF2" font-size="30" font-weight="600">248.50</text>
+    </g>
+
+    <!-- section: Live now -->
+    <g transform="translate(245,540)">
+      <circle cx="10" cy="10" r="9" fill="#27E08A"/>
+      <text x="34" y="20" fill="#E8EDF2" font-size="32" font-weight="700">Live now</text>
+      <text x="700" y="20" text-anchor="end" fill="#8A93A0" font-size="26">3 matches</text>
+    </g>
+
+    <!-- LIVE HERO match card -->
+    <g transform="translate(245,588)">
+      <rect x="0" y="0" width="700" height="330" rx="28" fill="#0E2A1C"/>
+      <rect x="0" y="0" width="700" height="330" rx="28" fill="none" stroke="#27E08A" stroke-width="3"/>
+
+      <!-- live + comp -->
+      <g transform="translate(28,28)">
+        <rect x="0" y="0" width="110" height="44" rx="22" fill="#0B0C0F" fill-opacity="0.5"/>
+        <circle cx="26" cy="22" r="8" fill="#27E08A"/>
+        <text x="44" y="31" fill="#E8EDF2" font-size="24" font-weight="700" letter-spacing="2">LIVE</text>
+      </g>
+      <text x="672" y="60" text-anchor="end" fill="#8A93A0" font-size="26">Copa &#183; 67'</text>
+
+      <!-- teams -->
+      <g transform="translate(40,128)">
+        <circle cx="28" cy="0" r="28" fill="#1B6BD6"/>
+        <text x="76" y="12" fill="#E8EDF2" font-size="40" font-weight="700">Brazil</text>
+        <text x="660" y="12" text-anchor="end" fill="#E8EDF2" font-size="60" font-weight="700">1</text>
+      </g>
+      <g transform="translate(40,206)">
+        <circle cx="28" cy="0" r="28" fill="#56A5D9"/>
+        <text x="76" y="12" fill="#E8EDF2" font-size="40" font-weight="700">Argentina</text>
+        <text x="660" y="12" text-anchor="end" fill="#E8EDF2" font-size="60" font-weight="700">1</text>
+      </g>
+
+      <!-- open markets strip -->
+      <g transform="translate(28,268)">
+        <rect x="0" y="0" width="644" height="44" rx="12" fill="#0B0C0F" fill-opacity="0.5"/>
+        <circle cx="28" cy="22" r="8" fill="#27E08A"/>
+        <text x="48" y="31" fill="#E8EDF2" font-size="26" font-weight="600">5 markets open</text>
+        <text x="624" y="31" text-anchor="end" fill="#27E08A" font-size="26" font-weight="700">Tap to play</text>
+      </g>
+    </g>
+
+    <!-- section: Upcoming -->
+    <g transform="translate(245,968)">
+      <text x="0" y="20" fill="#E8EDF2" font-size="32" font-weight="700">Up next</text>
+      <text x="700" y="20" text-anchor="end" fill="#8A93A0" font-size="26">Today</text>
+    </g>
+
+    <!-- fixture rows -->
+    <!-- row template -->
+    <g transform="translate(245,1016)">
+      <!-- 1 -->
+      <g transform="translate(0,0)">
+        <rect x="0" y="0" width="700" height="150" rx="22" fill="#14181E" stroke="#23262D" stroke-width="2"/>
+        <circle cx="56" cy="52" r="22" fill="#C0392B"/>
+        <circle cx="56" cy="100" r="22" fill="#2C3E50"/>
+        <text x="100" y="62" fill="#E8EDF2" font-size="32" font-weight="600">Man City</text>
+        <text x="100" y="112" fill="#E8EDF2" font-size="32" font-weight="600">Liverpool</text>
+        <g transform="translate(560,40)">
+          <rect x="0" y="0" width="116" height="70" rx="14" fill="#1B1F27"/>
+          <text x="58" y="30" text-anchor="middle" fill="#8A93A0" font-size="22">Kickoff</text>
+          <text x="58" y="58" text-anchor="middle" fill="#E8EDF2" font-size="30" font-weight="700">20:00</text>
+        </g>
+      </g>
+      <!-- 2 -->
+      <g transform="translate(0,174)">
+        <rect x="0" y="0" width="700" height="150" rx="22" fill="#14181E" stroke="#23262D" stroke-width="2"/>
+        <circle cx="56" cy="52" r="22" fill="#7D3C98"/>
+        <circle cx="56" cy="100" r="22" fill="#E67E22"/>
+        <text x="100" y="62" fill="#E8EDF2" font-size="32" font-weight="600">Real Madrid</text>
+        <text x="100" y="112" fill="#E8EDF2" font-size="32" font-weight="600">Sevilla</text>
+        <g transform="translate(560,40)">
+          <rect x="0" y="0" width="116" height="70" rx="14" fill="#1B1F27"/>
+          <text x="58" y="30" text-anchor="middle" fill="#8A93A0" font-size="22">Kickoff</text>
+          <text x="58" y="58" text-anchor="middle" fill="#E8EDF2" font-size="30" font-weight="700">21:30</text>
+        </g>
+      </g>
+      <!-- 3 -->
+      <g transform="translate(0,348)">
+        <rect x="0" y="0" width="700" height="150" rx="22" fill="#14181E" stroke="#23262D" stroke-width="2"/>
+        <circle cx="56" cy="52" r="22" fill="#16A085"/>
+        <circle cx="56" cy="100" r="22" fill="#34495E"/>
+        <text x="100" y="62" fill="#E8EDF2" font-size="32" font-weight="600">Inter</text>
+        <text x="100" y="112" fill="#E8EDF2" font-size="32" font-weight="600">Napoli</text>
+        <g transform="translate(560,40)">
+          <rect x="0" y="0" width="116" height="70" rx="14" fill="#1B1F27"/>
+          <text x="58" y="30" text-anchor="middle" fill="#8A93A0" font-size="22">Kickoff</text>
+          <text x="58" y="58" text-anchor="middle" fill="#E8EDF2" font-size="30" font-weight="700">22:00</text>
+        </g>
+      </g>
+    </g>
+
+    <!-- bottom tab bar -->
+    <g transform="translate(195,1980)">
+      <rect x="0" y="0" width="852" height="116" fill="#0B0C0F"/>
+      <line x1="0" y1="0" x2="852" y2="0" stroke="#23262D" stroke-width="2"/>
+      <g transform="translate(120,30)" fill="#8A93A0">
+        <circle cx="0" cy="6" r="9"/>
+        <text x="0" y="52" text-anchor="middle" font-size="24">Live</text>
+      </g>
+      <g transform="translate(330,30)">
+        <rect x="-16" y="0" width="32" height="24" rx="4" fill="#27E08A"/>
+        <text x="0" y="52" text-anchor="middle" fill="#27E08A" font-size="24" font-weight="600">Lobby</text>
+      </g>
+      <g transform="translate(522,30)" fill="#8A93A0">
+        <rect x="-16" y="-6" width="32" height="24" rx="4"/>
+        <text x="0" y="52" text-anchor="middle" font-size="24">Bets</text>
+      </g>
+      <g transform="translate(732,30)" fill="#8A93A0">
+        <circle cx="0" cy="6" r="13"/>
+        <text x="0" y="52" text-anchor="middle" font-size="24">You</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- notch -->
+  <rect x="531" y="314" width="180" height="40" rx="20" fill="#0B0C0F"/>
+</svg>

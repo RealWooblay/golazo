@@ -1,0 +1,149 @@
+<svg width="1242" height="2208" viewBox="0 0 1242 2208" xmlns="http://www.w3.org/2000/svg" font-family="'Helvetica Neue', Arial, sans-serif">
+  <rect width="1242" height="2208" fill="#0B0C0F"/>
+
+  <!-- caption band -->
+  <text x="621" y="150" text-anchor="middle" fill="#E8EDF2" font-size="78" font-weight="700" letter-spacing="1">Your run, your rank.</text>
+  <text x="621" y="214" text-anchor="middle" fill="#8A93A0" font-size="34" font-weight="400" letter-spacing="3">TRACK EVERY CALL</text>
+
+  <!-- phone frame -->
+  <rect x="171" y="290" width="900" height="1830" rx="84" fill="#14181E" stroke="#23262D" stroke-width="3"/>
+  <rect x="195" y="314" width="852" height="1782" rx="62" fill="#0B0C0F"/>
+
+  <defs>
+    <clipPath id="pr-screen"><rect x="195" y="314" width="852" height="1782" rx="62"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#pr-screen)">
+    <!-- status bar -->
+    <text x="245" y="382" fill="#E8EDF2" font-size="30" font-weight="600">9:41</text>
+    <g fill="#E8EDF2">
+      <rect x="905" y="362" width="30" height="22" rx="4"/>
+      <rect x="945" y="357" width="34" height="27" rx="5"/>
+      <rect x="989" y="360" width="46" height="24" rx="6" fill="none" stroke="#E8EDF2" stroke-width="3"/>
+      <rect x="993" y="364" width="34" height="16" rx="3"/>
+    </g>
+
+    <!-- header -->
+    <text x="245" y="468" fill="#E8EDF2" font-size="40" font-weight="700">Profile</text>
+    <g transform="translate(885,432)">
+      <circle cx="0" cy="0" r="6" fill="#8A93A0"/>
+      <circle cx="0" cy="22" r="6" fill="#8A93A0"/>
+      <circle cx="0" cy="44" r="6" fill="#8A93A0"/>
+    </g>
+
+    <!-- identity row -->
+    <g transform="translate(245,520)">
+      <circle cx="60" cy="60" r="60" fill="#1B1F27"/>
+      <text x="60" y="78" text-anchor="middle" fill="#27E08A" font-size="52" font-weight="700">JC</text>
+      <text x="148" y="52" fill="#E8EDF2" font-size="42" font-weight="700">jack.c</text>
+      <g transform="translate(148,72)">
+        <circle cx="10" cy="10" r="10" fill="#27E08A"/>
+        <text x="32" y="20" fill="#8A93A0" font-size="28">Gold tier &#183; member since '25</text>
+      </g>
+    </g>
+
+    <!-- balance card -->
+    <g transform="translate(245,680)">
+      <rect x="0" y="0" width="752" height="180" rx="28" fill="#0E2A1C" stroke="#27E08A" stroke-width="3"/>
+      <text x="40" y="64" fill="#8A93A0" font-size="28" letter-spacing="2">BALANCE</text>
+      <text x="40" y="138" fill="#E8EDF2" font-size="74" font-weight="700">$248.50</text>
+      <g transform="translate(560,52)">
+        <rect x="0" y="0" width="152" height="76" rx="18" fill="#27E08A"/>
+        <text x="76" y="50" text-anchor="middle" fill="#0B0C0F" font-size="32" font-weight="700">Add</text>
+      </g>
+    </g>
+
+    <!-- stat tiles -->
+    <g transform="translate(245,900)">
+      <!-- rank -->
+      <g transform="translate(0,0)">
+        <rect x="0" y="0" width="240" height="180" rx="24" fill="#14181E" stroke="#23262D" stroke-width="2"/>
+        <text x="28" y="56" fill="#8A93A0" font-size="26">Global rank</text>
+        <text x="28" y="128" fill="#27E08A" font-size="64" font-weight="700">#1,842</text>
+      </g>
+      <!-- win rate -->
+      <g transform="translate(256,0)">
+        <rect x="0" y="0" width="240" height="180" rx="24" fill="#14181E" stroke="#23262D" stroke-width="2"/>
+        <text x="28" y="56" fill="#8A93A0" font-size="26">Win rate</text>
+        <text x="28" y="128" fill="#E8EDF2" font-size="64" font-weight="700">58%</text>
+      </g>
+      <!-- streak -->
+      <g transform="translate(512,0)">
+        <rect x="0" y="0" width="240" height="180" rx="24" fill="#14181E" stroke="#23262D" stroke-width="2"/>
+        <text x="28" y="56" fill="#8A93A0" font-size="26">Streak</text>
+        <text x="28" y="128" fill="#E8EDF2" font-size="64" font-weight="700">4 W</text>
+      </g>
+    </g>
+
+    <!-- history header -->
+    <g transform="translate(245,1140)">
+      <text x="0" y="20" fill="#E8EDF2" font-size="32" font-weight="700">Recent bets</text>
+      <text x="752" y="20" text-anchor="end" fill="#8A93A0" font-size="26">See all</text>
+    </g>
+
+    <!-- history rows -->
+    <g transform="translate(245,1190)">
+      <!-- win -->
+      <g transform="translate(0,0)">
+        <rect x="0" y="0" width="752" height="118" rx="20" fill="#14181E" stroke="#23262D" stroke-width="2"/>
+        <rect x="0" y="0" width="8" height="118" rx="4" fill="#27E08A"/>
+        <text x="36" y="48" fill="#E8EDF2" font-size="30" font-weight="600">Next shot &#183; Brazil</text>
+        <text x="36" y="86" fill="#8A93A0" font-size="24">BRA v ARG &#183; 68'</text>
+        <text x="716" y="48" text-anchor="end" fill="#27E08A" font-size="32" font-weight="700">+$46.25</text>
+        <text x="716" y="86" text-anchor="end" fill="#8A93A0" font-size="24">1.85&#215; &#183; won</text>
+      </g>
+      <!-- loss -->
+      <g transform="translate(0,138)">
+        <rect x="0" y="0" width="752" height="118" rx="20" fill="#14181E" stroke="#23262D" stroke-width="2"/>
+        <rect x="0" y="0" width="8" height="118" rx="4" fill="#23262D"/>
+        <text x="36" y="48" fill="#E8EDF2" font-size="30" font-weight="600">Next corner &#183; City</text>
+        <text x="36" y="86" fill="#8A93A0" font-size="24">MCI v LIV &#183; 54'</text>
+        <text x="716" y="48" text-anchor="end" fill="#8A93A0" font-size="32" font-weight="700">-$20.00</text>
+        <text x="716" y="86" text-anchor="end" fill="#8A93A0" font-size="24">2.05&#215; &#183; lost</text>
+      </g>
+      <!-- win -->
+      <g transform="translate(0,276)">
+        <rect x="0" y="0" width="752" height="118" rx="20" fill="#14181E" stroke="#23262D" stroke-width="2"/>
+        <rect x="0" y="0" width="8" height="118" rx="4" fill="#27E08A"/>
+        <text x="36" y="48" fill="#E8EDF2" font-size="30" font-weight="600">Goal in 5 min &#183; Yes</text>
+        <text x="36" y="86" fill="#8A93A0" font-size="24">RMA v SEV &#183; 71'</text>
+        <text x="716" y="48" text-anchor="end" fill="#27E08A" font-size="32" font-weight="700">+$62.40</text>
+        <text x="716" y="86" text-anchor="end" fill="#8A93A0" font-size="24">3.12&#215; &#183; won</text>
+      </g>
+      <!-- win -->
+      <g transform="translate(0,414)">
+        <rect x="0" y="0" width="752" height="118" rx="20" fill="#14181E" stroke="#23262D" stroke-width="2"/>
+        <rect x="0" y="0" width="8" height="118" rx="4" fill="#27E08A"/>
+        <text x="36" y="48" fill="#E8EDF2" font-size="30" font-weight="600">Next booking &#183; Argentina</text>
+        <text x="36" y="86" fill="#8A93A0" font-size="24">BRA v ARG &#183; 63'</text>
+        <text x="716" y="48" text-anchor="end" fill="#27E08A" font-size="32" font-weight="700">+$18.90</text>
+        <text x="716" y="86" text-anchor="end" fill="#8A93A0" font-size="24">1.63&#215; &#183; won</text>
+      </g>
+    </g>
+
+    <!-- bottom tab bar -->
+    <g transform="translate(195,1980)">
+      <rect x="0" y="0" width="852" height="116" fill="#0B0C0F"/>
+      <line x1="0" y1="0" x2="852" y2="0" stroke="#23262D" stroke-width="2"/>
+      <g transform="translate(120,30)" fill="#8A93A0">
+        <circle cx="0" cy="6" r="9"/>
+        <text x="0" y="52" text-anchor="middle" font-size="24">Live</text>
+      </g>
+      <g transform="translate(330,30)" fill="#8A93A0">
+        <rect x="-16" y="-6" width="32" height="24" rx="4"/>
+        <text x="0" y="52" text-anchor="middle" font-size="24">Lobby</text>
+      </g>
+      <g transform="translate(522,30)" fill="#8A93A0">
+        <rect x="-16" y="-6" width="32" height="24" rx="4"/>
+        <text x="0" y="52" text-anchor="middle" font-size="24">Bets</text>
+      </g>
+      <g transform="translate(732,30)">
+        <circle cx="0" cy="6" r="13" fill="#27E08A"/>
+        <text x="0" y="52" text-anchor="middle" fill="#27E08A" font-size="24" font-weight="600">You</text>
+      </g>
+    </g>
+  </g>
+
+  <!-- notch -->
+  <rect x="531" y="314" width="180" height="40" rx="20" fill="#0B0C0F"/>
+</svg>

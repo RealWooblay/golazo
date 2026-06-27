@@ -6,7 +6,7 @@
 // first paint + pull-to-refresh, a thoughtful empty state if nothing's live.
 // Everything is play-data (src/features/lobby/fixtures) and web-safe.
 import React, { useCallback, useEffect, useState } from "react";
-import { RefreshControl, ScrollView, StyleSheet, View } from "react-native";
+import { RefreshControl, ScrollView, StyleSheet, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useStore } from "@/state/store";
@@ -45,6 +45,10 @@ export default function PlayTab() {
   const store = useStore();
   const insets = useSafeAreaInsets();
   const hx = store.session.hapticsOn;
+  // Desktop/laptop: use the extra width — a roomier column + a 2-up fixture slate.
+  // Phones stay a single centered column. (The match screen stays focused/capped.)
+  const { width: winW } = useWindowDimensions();
+  const wide = winW >= 900;
 
   // The lobby shows REAL games only (ESPN) — never the sim/demo. Empty when
   // nothing's live; the demo is loaded explicitly from Profile → Demo match.
@@ -132,7 +136,7 @@ export default function PlayTab() {
       <View
         style={[styles.topBarWrap, { paddingTop: insets.top + spacing.xs }]}
       >
-        <View style={styles.column}>
+        <View style={[styles.column, wide && styles.columnWide]}>
           {/* Brand row routed through UnifiedHeader for a consistent family with
               the match / wallet / profile screens. The balance + Add-cash pill
               live in the right slot — same behaviour as the old LobbyTopBar:
@@ -178,7 +182,7 @@ export default function PlayTab() {
           />
         }
       >
-        <View style={styles.column}>
+        <View style={[styles.column, wide && styles.columnWide]}>
           {/* Give the Real/Paper switch room to breathe: vertical padding so it
               doesn't crowd the header above or the content below, and horizontal
               gutter so it doesn't hug the screen edges. (Its own colours are
@@ -242,15 +246,17 @@ export default function PlayTab() {
                       caption={`${restLive.length} more in play`}
                       tone="live"
                     />
-                    <View style={styles.list}>
+                    <View style={wide ? styles.grid : styles.list}>
                       {restLive.map((f, i) => (
-                        <Entrance key={f.id} delay={60 + i * 50}>
-                          <FixtureRow
-                            fixture={f}
-                            hapticsEnabled={hx}
-                            onPress={() => openMatch(f)}
-                          />
-                        </Entrance>
+                        <View key={f.id} style={wide ? styles.gridItem : undefined}>
+                          <Entrance delay={60 + i * 50}>
+                            <FixtureRow
+                              fixture={f}
+                              hapticsEnabled={hx}
+                              onPress={() => openMatch(f)}
+                            />
+                          </Entrance>
+                        </View>
                       ))}
                     </View>
                   </View>
@@ -265,13 +271,15 @@ export default function PlayTab() {
                       }`}
                       tone="info"
                     />
-                    <View style={styles.list}>
+                    <View style={wide ? styles.grid : styles.list}>
                       {/* Upcoming rows are NOT tappable (no onPress) — they show
                           a countdown to kickoff, not a way into a match. */}
                       {restUpcoming.map((f, i) => (
-                        <Entrance key={f.id} delay={80 + i * 50}>
-                          <FixtureRow fixture={f} hapticsEnabled={hx} />
-                        </Entrance>
+                        <View key={f.id} style={wide ? styles.gridItem : undefined}>
+                          <Entrance delay={80 + i * 50}>
+                            <FixtureRow fixture={f} hapticsEnabled={hx} />
+                          </Entrance>
+                        </View>
                       ))}
                     </View>
                   </View>
@@ -336,17 +344,16 @@ function BalancePill({
           <Text style={balStyles.label}>{balanceLabel}</Text>
         </View>
       </PressableScale>
-      {showAddCash ? (
-        <PressableScale
-          haptic="select"
-          hapticsEnabled={hapticsEnabled}
-          onPress={onAddCash}
-        >
-          <View style={balStyles.addBtn}>
-            <Text style={balStyles.addText}>+ Add cash</Text>
-          </View>
-        </PressableScale>
-      ) : null}
+      {/* Deposit is always one tap from the home header — the clear on-ramp CTA. */}
+      <PressableScale
+        haptic="select"
+        hapticsEnabled={hapticsEnabled}
+        onPress={onAddCash}
+      >
+        <View style={balStyles.addBtn}>
+          <Text style={balStyles.addText}>Deposit</Text>
+        </View>
+      </PressableScale>
     </>
   );
 }
@@ -356,14 +363,14 @@ const balStyles = StyleSheet.create({
   value: { ...type.mono, color: colors.textPrimary, fontSize: 20 },
   label: { ...type.overline, color: colors.textMuted, fontSize: 9 },
   addBtn: {
-    backgroundColor: colors.alpha.cyan,
+    backgroundColor: colors.alpha.yes,
     borderWidth: 1,
-    borderColor: "rgba(22,198,255,0.45)",
+    borderColor: "rgba(39,224,138,0.45)",
     borderRadius: radius.pill,
     paddingHorizontal: spacing.md,
     paddingVertical: 8,
   },
-  addText: { ...type.bodyStrong, color: colors.cyan, fontSize: 13 },
+  addText: { ...type.bodyStrong, color: colors.yes, fontSize: 13 },
 });
 
 const styles = StyleSheet.create({
@@ -376,6 +383,8 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.hairlineSoft,
   },
   column: { width: "100%", maxWidth: MAX_WIDTH, alignSelf: "center" },
+  // Desktop/laptop: a roomier column so the slate has space to breathe.
+  columnWide: { maxWidth: 760 },
   headerRight: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   // Breathing room for the Real/Paper mode switch: it sits clearly between the
   // header and the content rather than hugging either edge.
@@ -389,4 +398,7 @@ const styles = StyleSheet.create({
   refillWrap: { paddingHorizontal: spacing.lg, marginBottom: spacing.sm },
   section: { marginTop: spacing.lg },
   list: { gap: spacing.sm },
+  // 2-up fixture slate on wide screens.
+  grid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  gridItem: { width: "48%" },
 });
