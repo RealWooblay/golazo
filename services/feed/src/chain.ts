@@ -65,6 +65,18 @@ const ASSOCIATED_TOKEN_PROGRAM = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25
  */
 const ONE_SIDED_DUST_BASE_UNITS = 50_000n;
 
+/**
+ * Operator SOL floor. Below this we STOP opening NEW on-chain markets (existing
+ * locks/resolves still run — those are cheap + critical). Rationale: if the
+ * operator runs dry mid-match it can't lock/resolve, and any USX staked in an
+ * unresolvable market is TRAPPED until it's refunded. Refusing to open new
+ * markets when gas is low caps that blast radius to markets already in flight.
+ * ~0.05 SOL covers many lock+settle tx fees; top up well before this.
+ */
+const MIN_OPERATOR_LAMPORTS = 50_000_000;
+/** Re-check the operator balance at most this often (avoid an RPC per market). */
+const GAS_CHECK_THROTTLE_MS = 30_000;
+
 /** MarketStatus discriminant for `Locked` (state.rs enum order: Open=0, Locked=1, …). */
 const MARKET_STATUS_LOCKED = 1;
 
@@ -251,6 +263,10 @@ export class FeedChainOperator {
   private readonly operator: Keypair | null;
   private readonly usxMint: PublicKey | null;
 
+  /** Throttled operator-SOL gate: don't open NEW markets when gas is low. */
+  private gasOk = true;
+  private lastGasCheckMs = 0;
+
   constructor(opts: FeedChainOptions = {}) {
     const rpcUrl = opts.rpcUrl?.trim() || DEFAULT_RPC_URL;
     this.rpcUrl = rpcUrl;
@@ -335,6 +351,33 @@ export class FeedChainOperator {
   }
 
   /**
+   * True if the operator holds enough SOL to safely OPEN + later resolve a new
+   * market. Throttled to one RPC per {@link GAS_CHECK_THROTTLE_MS}. Only NEW-market
+   * creation is gated on this — lock/settle of EXISTING markets are never gated
+   * (they must run to free already-staked USX, even on a near-empty operator).
+   */
+  private async hasGasForNewMarket(): Promise<boolean> {
+    if (!this.connection || !this.operator) return false;
+    const now = Date.now();
+    if (now - this.lastGasCheckMs < GAS_CHECK_THROTTLE_MS) return this.gasOk;
+    this.lastGasCheckMs = now;
+    try {
+      const lamports = await this.connection.getBalance(this.operator.publicKey, COMMITMENT);
+      const ok = lamports >= MIN_OPERATOR_LAMPORTS;
+      if (ok !== this.gasOk) {
+        console.log(
+          `[golazo/feed] operator_gas ${ok ? 'ok' : 'LOW'} balance=${(lamports / 1e9).toFixed(4)}SOL` +
+            (ok ? ' — resuming on-chain markets' : ' — NOT opening new on-chain markets; TOP UP operator SOL'),
+        );
+      }
+      this.gasOk = ok;
+    } catch {
+      // Transient RPC read failure — keep the last known state rather than flip the gate.
+    }
+    return this.gasOk;
+  }
+
+  /**
    * Create a USX market on-chain (operator = authority), folding any house seed
    * into both pools. Mirrors `initialize_market`:
    *   accounts: [authority(s,mut), market(mut), usx_mint, vault(mut),
@@ -348,6 +391,9 @@ export class FeedChainOperator {
     if (!this.active || !this.operator || !this.programId || !this.connection || !this.usxMint) {
       return null;
     }
+    // OPERATOR-GAS GUARD: never open a market we might not be able to lock/resolve.
+    // A market opened with no twin stays points-only; staked USX is never trapped.
+    if (!(await this.hasGasForNewMarket())) return null;
 
     try {
       const authority = this.operator.publicKey;
