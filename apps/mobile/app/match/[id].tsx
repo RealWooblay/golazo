@@ -24,7 +24,6 @@ import { useChainBets } from "@/features/match/useChainBets";
 import {
   useDisplayBalance,
   makeStakeFormatter,
-  SOL_PER_UNIT,
 } from "@/features/chain/useDisplayBalance";
 import { resolveTeams } from "@/features/match/teams";
 import { sideDisplayLabel } from "@/features/match/marketMeta";
@@ -345,7 +344,7 @@ export default function MatchScreen() {
                       ...m,
                       oddsYes: liveOdds.oddsYes,
                       oddsNo: liveOdds.oddsNo,
-                      pool: liveOdds.poolSol / SOL_PER_UNIT,
+                      pool: liveOdds.poolUsd,
                       yesShare: liveOdds.yesShare,
                     }
                   : m;
@@ -395,7 +394,7 @@ export default function MatchScreen() {
               const pendingBet = pendingByMarket[m.id];
               const betSide = chainBet?.side ?? pendingBet?.side;
               const betStakeStr = chainBet
-                ? stakeFormat(chainBet.stakeSol / SOL_PER_UNIT)
+                ? stakeFormat(chainBet.stakeUsd)
                 : pendingBet
                   ? stakeFormat(pendingBet.stake)
                   : undefined;

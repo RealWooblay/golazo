@@ -11,7 +11,7 @@ import { Pressable, Text } from "@/ui";
 import type { MoneyMode } from "@/state/types";
 
 const SEGMENTS: { key: MoneyMode; label: string; sub: string; tint: string }[] = [
-  { key: "real", label: "Real", sub: "Devnet SOL", tint: colors.cyan },
+  { key: "real", label: "Real", sub: "USX", tint: colors.cyan },
   { key: "points", label: "Paper", sub: "Fake points", tint: colors.yes },
 ];
 
@@ -20,7 +20,7 @@ const TRACK_PAD = 4;
 /**
  * MoneyModePicker — Real vs Paper as a single segmented control with a sliding
  * thumb whose accent morphs cyan→gold as it travels. Both modes feed the ONE
- * global points leaderboard; real mode also stakes devnet SOL against the book.
+ * global points leaderboard; real mode also stakes USX (mainnet) against the book.
  */
 export function MoneyModePicker({
   value,

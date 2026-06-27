@@ -33,10 +33,12 @@
       "tsconfigPaths": true
     },
     "extra": {
-      "_comment": "Real on-chain DEVNET by default — out of demo. Override per-build with EXPO_PUBLIC_* env vars. The demo/play-money loop is still reachable from Profile → Demo match.",
+      "_comment": "Real on-chain MAINNET-BETA, USX settlement (6dp). Override per-build with EXPO_PUBLIC_* env vars. The demo/play-money loop is still reachable from Profile → Demo match.",
       "CHAIN_ENABLED": "1",
-      "SOLANA_CLUSTER": "devnet",
-      "GOLAZO_PROGRAM_ID": "GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu",
+      "SOLANA_CLUSTER": "mainnet-beta",
+      "SOLANA_RPC_URL": "https://mainnet.helius-rpc.com/?api-key=faccc8c2-7e65-4c16-bfc8-c493c721285e",
+      "GOLAZO_PROGRAM_ID": "3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM",
+      "USX_MINT": "6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG",
       "FEE_RECIPIENT": "5kBBKSV2EUyLsa2sXoK9E1VVzmDXCaHnQiMfz8B8yJtP",
       "PRIVY_APP_ID": "cmqm1002200120dl7cben6kwb",
       "_FEED_URL": "wss://YOUR-FEED-HOST  — set this (or EXPO_PUBLIC_FEED_URL) for a hosted web deploy; in local dev it auto-derives from the Metro host."

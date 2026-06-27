@@ -1,17 +1,12 @@
 // Mode-aware wallet balance for the app chrome (lobby/match/profile headers).
 //
 // The app speaks DOLLARS everywhere. When the embedded on-chain wallet is
-// connected (Live/chain mode), the number shown is the REAL on-chain balance
-// converted to $ (via SOL_PER_UNIT). Otherwise it's the play-money store balance,
-// also in $. One hook so no header can drift between units or show raw SOL.
+// connected (Live/chain mode), the number shown is the REAL on-chain USX balance
+// (USX is the settlement asset; 1 USX == $1, shown directly). Otherwise it's the
+// play-money store balance, also in $. One hook so no header can drift between units.
 import { useChain } from "./useChain";
 import { useStore } from "@/state/store";
 import { money, pts, signedMoney, signedPts } from "@/lib/format";
-
-/** Display conversion: one $ "unit" of stake/balance = this much SOL on-chain.
- *  $1 = 0.01 SOL. Used both to turn the real SOL balance into the $ figure we
- *  show and to size on-chain stakes from the $ chips. */
-export const SOL_PER_UNIT = 0.01;
 
 export interface DisplayBalance {
   /** True when the figure is backed by the real on-chain balance (vs play money). */

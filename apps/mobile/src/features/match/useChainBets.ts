@@ -18,7 +18,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const errMsg = (e: unknown) => {
   const raw = e instanceof Error ? e.message : String(e);
   if (/0x177[c-d]|InsufficientVaultFunds|601[23]/i.test(raw)) {
-    return "Vault short on devnet — retry claim in a few seconds.";
+    return "Vault still settling — retry claim in a few seconds.";
   }
   if (/0x1770|MarketNotOpen|\b6000\b/i.test(raw)) {
     return "That market just closed — the next one's seconds away.";
@@ -284,7 +284,7 @@ export function useChainBets(
       try {
         const market = await chain.fetchMarket(bet.authority, bet.marketSeed);
         if (!market || (market.status !== "Resolved" && market.status !== "Void")) {
-          setError("Settlement still finalizing on devnet — claim unlocks in a moment.");
+          setError("Settlement still finalizing on-chain — claim unlocks in a moment.");
           setBetFor(marketId, { claiming: false });
           return;
         }

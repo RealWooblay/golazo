@@ -157,6 +157,7 @@ export default function ProfileHub() {
         {realWallet ? (
           <ChainWalletHero
             address={chain.address}
+            balanceUsd={chain.balanceUsd}
             balanceSol={chain.balanceSol}
             airdropEnabled={faucetEnabled}
             onFund={fund}
