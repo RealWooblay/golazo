@@ -11,13 +11,14 @@
 //
 // Web-safe: no chain/native lib at module load (address comes via the store
 // contract; ramp/browser/clipboard shims lazy-require behind fallbacks).
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useStore } from "@/state/store";
 import type { DepositMethod } from "@/state/types";
 import { Screen, Text, Button, Toast } from "@/ui";
 import { colors, spacing, type } from "@/theme";
+import { money } from "@/lib/format";
 import {
   AmountInput,
   DepositAddressCard,
@@ -27,6 +28,8 @@ import {
   useDepositAddress,
   useWallet,
 } from "@/features/wallet";
+import { usePrivyOnramp } from "@/features/wallet/usePrivyOnramp";
+import { useChain } from "@/features/chain/useChain";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 
 type Tab = "cash" | "crypto";
@@ -36,6 +39,15 @@ export default function DepositModal() {
   const { session } = useStore();
   const wallet = useWallet();
   const address = useDepositAddress();
+  const chain = useChain();
+  const onramp = usePrivyOnramp();
+
+  // REAL on-chain mode (web + signed in): the genuine USX deposit flow — card
+  // on-ramp + one-tap auto-swap to USX. Takes over the whole modal; the
+  // play-money paths below are for sandbox/demo only.
+  if (chain.ready) {
+    return <RealChainDeposit chain={chain} onramp={onramp} onClose={() => router.back()} />;
+  }
 
   // Card / Apple Pay on-ramp is only a real, completable option when a fiat
   // provider key is configured (ramp.isLive). With no provider (sandbox), the
@@ -160,6 +172,118 @@ export default function DepositModal() {
   );
 }
 
+// ── REAL on-chain USX deposit: card on-ramp + one-tap auto-swap to USX ─────────
+type RealStatus = "idle" | "buying" | "waiting" | "converting" | "done" | "error";
+
+function RealChainDeposit({
+  chain,
+  onramp,
+  onClose,
+}: {
+  chain: ReturnType<typeof useChain>;
+  onramp: ReturnType<typeof usePrivyOnramp>;
+  onClose: () => void;
+}) {
+  const [status, setStatus] = useState<RealStatus>("idle");
+  const [msg, setMsg] = useState<string | null>(null);
+  const busy = status === "buying" || status === "waiting" || status === "converting";
+
+  const convert = useCallback(async () => {
+    setStatus("converting");
+    setMsg(null);
+    try {
+      const { swapped, failures } = await chain.convertToUsx();
+      if (swapped.length === 0) {
+        setStatus("error");
+        setMsg(failures[0]?.reason ?? "Nothing to convert yet — fund the wallet first.");
+        return;
+      }
+      const usd = swapped.reduce((s, r) => s + r.outUsd, 0);
+      const skipped = failures.length
+        ? ` (${failures.length} asset${failures.length > 1 ? "s" : ""} skipped)`
+        : "";
+      setStatus("done");
+      setMsg(`Converted to ${money(usd)} USX${skipped}.`);
+    } catch (e) {
+      setStatus("error");
+      setMsg(e instanceof Error ? e.message : "Couldn't convert to USX.");
+    }
+  }, [chain]);
+
+  const buy = useCallback(async () => {
+    if (!onramp.supported || !chain.address) return;
+    setStatus("buying");
+    setMsg(null);
+    try {
+      await onramp.open({
+        address: chain.address,
+        onExit: () => {
+          // The card payout settles seconds-to-minutes AFTER the widget closes —
+          // wait, then auto-swap whatever landed into USX.
+          setStatus("waiting");
+          setMsg("Waiting for your deposit to arrive, then converting to USX…");
+          setTimeout(() => {
+            void convert();
+          }, 8000);
+        },
+      });
+    } catch (e) {
+      setStatus("error");
+      setMsg(e instanceof Error ? e.message : "Couldn't open card funding.");
+    }
+  }, [onramp, chain.address, convert]);
+
+  return (
+    <Screen topInset footerSpace={spacing.xl}>
+      <UnifiedHeader
+        variant="modal"
+        chip={{ label: "Add USX", tone: "info" }}
+        title="Deposit"
+        onClose={onClose}
+      />
+      <View style={styles.path}>
+        <Text style={[type.body, styles.cryptoIntro]}>
+          Add funds any way you like — we convert it to USX automatically.
+        </Text>
+
+        {onramp.supported ? (
+          <Button
+            label="Buy with card"
+            onPress={buy}
+            variant="primary"
+            size="lg"
+            fullWidth
+            glow
+            loading={status === "buying"}
+            disabled={busy}
+          />
+        ) : null}
+
+        <DepositAddressCard address={chain.address ?? "—"} live network="Solana" />
+        <Text style={[type.caption, styles.simulateHint]}>
+          Or send SOL / USDC to that address. Keep a little SOL for network fees.
+        </Text>
+
+        <Button
+          label="Convert wallet to USX"
+          onPress={convert}
+          variant={onramp.supported ? "secondary" : "primary"}
+          size="lg"
+          fullWidth
+          loading={status === "converting" || status === "waiting"}
+          disabled={busy}
+        />
+
+        {msg ? (
+          <Text style={[type.caption, status === "error" ? styles.errMsg : styles.okMsg]}>
+            {msg}
+          </Text>
+        ) : null}
+      </View>
+    </Screen>
+  );
+}
+
 // ── Card / Apple Pay sub-flow ─────────────────────────────────────────────────
 function CashPath({
   amount,
@@ -273,4 +397,6 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   simulateHint: { color: colors.textFaint, textAlign: "center" },
+  okMsg: { color: colors.yes, textAlign: "center" },
+  errMsg: { color: colors.no, textAlign: "center" },
 });
