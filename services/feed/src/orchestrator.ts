@@ -148,6 +148,18 @@ const SET_PIECE_HARD_TIMEOUT_MS = 120_000;
  * keep waiting (finalizeMatch is the real backstop at the whistle).
  */
 const WHICH_SIDE_REARM_MS = 120_000;
+
+/**
+ * Coarse match period from a match-minute (openClockMin / currentClockMin format, where the
+ * integer part is the minute and stoppage is a small fraction, e.g. 45+2 → 45.02). Half-time
+ * splits at 45, full time at 90. Used to keep a period market ("goal before half-time?") from
+ * paying YES on a goal in a LATER period if the status frame that should have settled it was missed.
+ */
+function periodBucket(min: number): 'first' | 'second' | 'extra' {
+  if (min < 45.5) return 'first'; // first half + its stoppage (45+x stored as 45.0x)
+  if (min < 90.5) return 'second'; // second half + its stoppage
+  return 'extra';
+}
 /**
  * SET-PIECE FRESHNESS — a "goal from this corner/free kick?" market must open RIGHT AFTER the
  * kick is awarded, never a beat later (by then the set piece has already been taken/cleared, so
@@ -1981,6 +1993,16 @@ export class Orchestrator {
   ): OutcomeDecision | undefined {
     if (target.isPeriod && ev.type === 'goal') {
       if (target.team && ev.team !== target.team) return undefined;
+      // PERIOD GUARD: a period market ("goal before half-time?" / before full-time / extra time)
+      // pays YES only on a goal in the SAME period it opened in. If ESPN drops the half-time
+      // status frame and a 1st-half market lingers, a 2nd-half goal must NOT settle it YES — it
+      // stays for the HT/FT status sweep (resolveOpenPeriodMarkets) to settle NO.
+      if (
+        target.openClockMin !== undefined &&
+        periodBucket(this.currentClockMin()) !== periodBucket(target.openClockMin)
+      ) {
+        return undefined;
+      }
       return { outcome: 'YES' };
     }
 
