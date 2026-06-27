@@ -62,6 +62,9 @@ export default function PlayTab() {
   const bal = useDisplayBalance();
   const account = useAccount();
   const playMode = store.session.moneyMode === "points";
+  // Signed-out (Privy enabled, ready, not authenticated) → show a clean "Log in"
+  // CTA in the header instead of a profile icon for an account that doesn't exist.
+  const needsSignIn = account.enabled && account.ready && !account.authenticated;
 
   // Seamless real-money entry: tapping "Real" while signed out opens the Privy
   // login (which silently mints the Solana wallet) instead of switching into a
@@ -144,26 +147,37 @@ export default function PlayTab() {
           <UnifiedHeader
             variant="tab"
             right={
-              <View style={styles.headerRight}>
-                <BalancePill
-                  balance={bal.amount}
-                  format={bal.format}
-                  balanceLabel={playMode ? "points" : "balance"}
-                  showAddCash={!playMode}
-                  hapticsEnabled={hx}
-                  onAddCash={addCash}
-                  onOpenProfile={() => router.push("/(tabs)/profile")}
+              needsSignIn ? (
+                // Signed out → a single clear Log in CTA (Privy). No PFP for an
+                // account that doesn't exist yet; login mints the embedded wallet.
+                <Button
+                  label="Log in"
+                  onPress={() => account.login()}
+                  variant="primary"
+                  size="md"
                 />
-                {/* The ONLY way to Profile now there's no tab bar — a standard
-                    person icon top-right. Profile holds wallet + rank + history. */}
-                <IconButton
-                  accessibilityLabel="Profile"
-                  onPress={() => router.push("/(tabs)/profile")}
-                  haptic="tap"
-                >
-                  <IconProfile size={22} color={colors.textPrimary} />
-                </IconButton>
-              </View>
+              ) : (
+                <View style={styles.headerRight}>
+                  <BalancePill
+                    balance={bal.amount}
+                    format={bal.format}
+                    balanceLabel={playMode ? "points" : "balance"}
+                    showAddCash={!playMode}
+                    hapticsEnabled={hx}
+                    onAddCash={addCash}
+                    onOpenProfile={() => router.push("/(tabs)/profile")}
+                  />
+                  {/* The ONLY way to Profile now there's no tab bar — a standard
+                      person icon top-right. Profile holds wallet + rank + history. */}
+                  <IconButton
+                    accessibilityLabel="Profile"
+                    onPress={() => router.push("/(tabs)/profile")}
+                    haptic="tap"
+                  >
+                    <IconProfile size={22} color={colors.textPrimary} />
+                  </IconButton>
+                </View>
+              )
             }
           />
         </View>
