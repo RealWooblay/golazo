@@ -78,7 +78,11 @@ DIR=$(grep -E '^AI_DIRECTOR=' /opt/golazo/services/feed/.env 2>/dev/null | tail 
 echo "GOLAZO_ENV enhancer=$([ "$ENH" = 1 ] && [ "$HAS_KEY" = 1 ] && echo on || echo off) director=$([ "$DIR" = 1 ] && [ "$HAS_KEY" = 1 ] && echo on || echo off) key=$([ "$HAS_KEY" = 1 ] && echo set || echo missing)"
 
 cd /opt/golazo/apps/mobile
-rm -rf dist
+# Clean build: clear dist AND the Metro/expo transform cache. Without the cache
+# wipe, a redeploy can serve a STALE bundle that didn't pick up config/app.json
+# changes (this is what shipped the public RPC + an old program id once).
+rm -rf dist .expo
+rm -rf node_modules/.cache "${TMPDIR:-/tmp}/metro-"* "${TMPDIR:-/tmp}/haste-map-"* 2>/dev/null || true
 if [ -n "$GOLAZO_DOMAIN" ]; then
     EXPO_USE_METRO_WORKSPACE_ROOT=1 \
     EXPO_PUBLIC_FEED_URL="${FEED_URL}" \
@@ -88,7 +92,7 @@ if [ -n "$GOLAZO_DOMAIN" ]; then
     EXPO_PUBLIC_GOLAZO_PROGRAM_ID=3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM \
     EXPO_PUBLIC_USX_MINT=6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG \
     EXPO_PUBLIC_BET_DELAY_MS=5000 \
-    npx expo export -p web
+    npx expo export -p web --clear
   else
     EXPO_USE_METRO_WORKSPACE_ROOT=1 \
     EXPO_PUBLIC_CHAIN_ENABLED=1 \
@@ -97,7 +101,7 @@ if [ -n "$GOLAZO_DOMAIN" ]; then
     EXPO_PUBLIC_GOLAZO_PROGRAM_ID=3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM \
     EXPO_PUBLIC_USX_MINT=6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG \
     EXPO_PUBLIC_BET_DELAY_MS=5000 \
-    npx expo export -p web
+    npx expo export -p web --clear
 fi
 
 cat >/opt/golazo/static-server.mjs <<'JS'

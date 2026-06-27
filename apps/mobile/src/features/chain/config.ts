@@ -48,11 +48,22 @@ export const PLACEHOLDER_PROGRAM_ID =
 export const DEPLOYED_PROGRAM_ID =
   "3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM";
 
-/** Public RPC endpoints per cluster (devnet is the default target). */
+/**
+ * RPC endpoint per cluster. mainnet-beta defaults to the Helius endpoint, NOT the
+ * public api.mainnet-beta.solana.com — the public node rate-limits hard and would
+ * choke the Jupiter swap (many getBalance/getTokenAccounts/sendRawTransaction
+ * calls). This is the SOURCE OF TRUTH for the mainnet RPC: web reads config via
+ * Constants.expoConfig.extra (the dynamic-key process.env path can't be inlined by
+ * Metro), so the EXPO_PUBLIC_SOLANA_RPC_URL deploy override is unreliable — baking
+ * Helius here guarantees mainnet uses it regardless of env/extra. (Client-exposed
+ * RPC key by nature; rotate/domain-restrict for scale.)
+ */
+const MAINNET_RPC =
+  "https://mainnet.helius-rpc.com/?api-key=faccc8c2-7e65-4c16-bfc8-c493c721285e";
 const CLUSTER_RPC: Record<Cluster, string> = {
   devnet: "https://api.devnet.solana.com",
   testnet: "https://api.testnet.solana.com",
-  "mainnet-beta": "https://api.mainnet-beta.solana.com",
+  "mainnet-beta": MAINNET_RPC,
   localnet: "http://127.0.0.1:8899",
 };
 
@@ -115,7 +126,9 @@ function readEnv(key: string): string | undefined {
 }
 
 function readCluster(): Cluster {
-  const raw = (readEnv("SOLANA_CLUSTER") ?? "devnet").toLowerCase();
+  // Default mainnet-beta: this app ships configured for mainnet. Local dev points
+  // elsewhere via app.json `extra` (SOLANA_CLUSTER), the reliable web config source.
+  const raw = (readEnv("SOLANA_CLUSTER") ?? "mainnet-beta").toLowerCase();
   if (
     raw === "devnet" ||
     raw === "testnet" ||
