@@ -11,7 +11,7 @@
 //
 // Web-safe: no chain/native lib at module load (address comes via the store
 // contract; ramp/browser/clipboard shims lazy-require behind fallbacks).
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Platform, StyleSheet, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useStore } from "@/state/store";
@@ -188,51 +188,95 @@ function RealChainDeposit({
   const [msg, setMsg] = useState<string | null>(null);
   const busy = status === "buying" || status === "waiting" || status === "converting";
 
-  const convert = useCallback(async () => {
+  // Latest chain handle for the interval closure (avoids stale captures).
+  const chainRef = useRef(chain);
+  chainRef.current = chain;
+  // armed → a deposit is expected (on-ramp purchased OR balance grew) → convert it.
+  const armedRef = useRef(false);
+  const doneRef = useRef(false);
+  const convertingRef = useRef(false);
+  const baseSolRef = useRef<number | null>(null);
+
+  // Auto-swap whatever non-USX landed → USX. Returns silently while nothing has
+  // arrived yet (swapAllToUsx no longer throws on empty), so the poll can keep
+  // waiting; only a real swap failure surfaces an error.
+  const autoConvert = useCallback(async () => {
+    if (convertingRef.current || doneRef.current) return;
+    convertingRef.current = true;
     setStatus("converting");
-    setMsg(null);
+    setMsg("Converting your deposit to USX…");
     try {
-      const { swapped, failures } = await chain.convertToUsx();
-      if (swapped.length === 0) {
+      const { swapped, failures } = await chainRef.current.convertToUsx();
+      if (swapped.length > 0) {
+        doneRef.current = true;
+        armedRef.current = false;
+        const usd = swapped.reduce((s, r) => s + r.outUsd, 0);
+        setStatus("done");
+        setMsg(`Added ${money(usd)} USX to your balance.`);
+      } else if (failures.length > 0) {
         setStatus("error");
-        setMsg(failures[0]?.reason ?? "Nothing to convert yet — fund the wallet first.");
-        return;
+        setMsg(failures[0].reason);
+      } else {
+        // Nothing has landed yet — stay armed and keep waiting for the deposit.
+        setStatus("waiting");
+        setMsg("Waiting for your deposit to arrive…");
       }
-      const usd = swapped.reduce((s, r) => s + r.outUsd, 0);
-      const skipped = failures.length
-        ? ` (${failures.length} asset${failures.length > 1 ? "s" : ""} skipped)`
-        : "";
-      setStatus("done");
-      setMsg(`Converted to ${money(usd)} USX${skipped}.`);
     } catch (e) {
       setStatus("error");
       setMsg(e instanceof Error ? e.message : "Couldn't convert to USX.");
+    } finally {
+      convertingRef.current = false;
     }
-  }, [chain]);
+  }, []);
 
-  const buy = useCallback(async (method: "card" | "stripe") => {
-    if (!onramp.supported || !chain.address) return;
-    setStatus("buying");
-    setMsg(null);
-    try {
-      await onramp.open({
-        address: chain.address,
-        method,
-        onExit: () => {
-          // The card payout settles seconds-to-minutes AFTER the widget closes —
-          // wait, then auto-swap whatever landed into USX.
-          setStatus("waiting");
-          setMsg("Waiting for your deposit to arrive, then converting to USX…");
-          setTimeout(() => {
-            void convert();
-          }, 8000);
-        },
-      });
-    } catch (e) {
-      setStatus("error");
-      setMsg(e instanceof Error ? e.message : "Couldn't open card funding.");
-    }
-  }, [onramp, chain.address, convert]);
+  // One poll loop while the screen is open: a deposit (on-ramp payout or a direct
+  // send that grows the balance) auto-converts to USX — no button. Pre-existing
+  // funds are NOT touched: only an INCREASE past the mount baseline arms it.
+  useEffect(() => {
+    let alive = true;
+    const id = setInterval(async () => {
+      if (!alive || doneRef.current) return;
+      const info = await chainRef.current.refreshBalance().catch(() => null);
+      const sol = info?.balanceSol;
+      if (typeof sol === "number") {
+        if (baseSolRef.current === null) baseSolRef.current = sol;
+        else if (sol > baseSolRef.current + 0.0005) armedRef.current = true; // a deposit arrived
+        if (sol > (baseSolRef.current ?? 0)) baseSolRef.current = sol;
+      }
+      if (armedRef.current && !convertingRef.current) await autoConvert();
+    }, 6000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [autoConvert]);
+
+  const buy = useCallback(
+    async (method: "card" | "stripe") => {
+      const c = chainRef.current;
+      if (!onramp.supported || !c.address) return;
+      setStatus("buying");
+      setMsg(null);
+      try {
+        await onramp.open({
+          address: c.address,
+          method,
+          // The payout settles async after the widget closes — arm the watcher; it
+          // converts the moment the funds land (no fixed timeout to guess at).
+          onExit: () => {
+            armedRef.current = true;
+            doneRef.current = false;
+            setStatus("waiting");
+            setMsg("Waiting for your deposit to arrive…");
+          },
+        });
+      } catch (e) {
+        setStatus("error");
+        setMsg(e instanceof Error ? e.message : "Couldn't open card funding.");
+      }
+    },
+    [onramp],
+  );
 
   return (
     <Screen topInset footerSpace={spacing.xl}>
@@ -244,7 +288,7 @@ function RealChainDeposit({
       />
       <View style={styles.path}>
         <Text style={[type.body, styles.cryptoIntro]}>
-          Add funds any way you like — we convert it to USX automatically.
+          Add funds any way you like — they convert to USX automatically.
         </Text>
 
         {onramp.supported ? (
@@ -273,22 +317,29 @@ function RealChainDeposit({
 
         <DepositAddressCard address={chain.address ?? "—"} live network="Solana" />
         <Text style={[type.caption, styles.simulateHint]}>
-          Or send SOL / USDC to that address. Keep a little SOL for network fees.
+          Or send SOL / USDC to that address — it's converted to USX automatically.
+          Keep a little SOL for network fees.
         </Text>
-
-        <Button
-          label="Convert wallet to USX"
-          onPress={convert}
-          variant={onramp.supported ? "secondary" : "primary"}
-          size="lg"
-          fullWidth
-          loading={status === "converting" || status === "waiting"}
-          disabled={busy}
-        />
 
         {msg ? (
           <Text style={[type.caption, status === "error" ? styles.errMsg : styles.okMsg]}>
             {msg}
+          </Text>
+        ) : null}
+
+        {/* Fallback only (not the primary flow): if an auto-detect was missed —
+            e.g. a direct USDC send that didn't change the SOL balance — let the
+            user nudge the conversion. Subtle link, not a button. */}
+        {status === "idle" || status === "error" ? (
+          <Text
+            style={[type.caption, styles.convertLink]}
+            onPress={() => {
+              armedRef.current = true;
+              doneRef.current = false;
+              void autoConvert();
+            }}
+          >
+            Already sent funds? Convert to USX
           </Text>
         ) : null}
       </View>
@@ -411,4 +462,5 @@ const styles = StyleSheet.create({
   simulateHint: { color: colors.textFaint, textAlign: "center" },
   okMsg: { color: colors.yes, textAlign: "center" },
   errMsg: { color: colors.no, textAlign: "center" },
+  convertLink: { color: colors.cyan, textAlign: "center", textDecorationLine: "underline" },
 });

@@ -196,19 +196,17 @@ export async function swapToUsx(
  * Convert the WHOLE wallet to USX: swap every non-USX balance (SOL above the fee
  * reserve + each SPL token) in turn. Returns a result per successful swap; a
  * per-asset failure (no route / bad rate / dust) is collected, never thrown, so
- * one bad asset can't strand the others. Throws only if NOTHING was swappable.
+ * one bad asset can't strand the others. When nothing is swappable yet it returns
+ * EMPTY (no throw) — so a deposit watcher can poll this safely until funds land;
+ * empty candidates only do balance reads (no Jupiter call), so polling is cheap.
  */
 export async function swapAllToUsx(
   ctx: ChainContext,
 ): Promise<{ swapped: SwapResult[]; failures: { label: string; reason: string }[] }> {
   const candidates = await findSwappableBalances(ctx);
-  if (candidates.length === 0) {
-    throw new Error(
-      "Nothing to convert — fund the wallet with SOL or USDC first (keep a little SOL for fees).",
-    );
-  }
   const swapped: SwapResult[] = [];
   const failures: { label: string; reason: string }[] = [];
+  if (candidates.length === 0) return { swapped, failures };
   for (const c of candidates) {
     try {
       swapped.push(await swapToUsx(ctx, c.mint, c.amount));
