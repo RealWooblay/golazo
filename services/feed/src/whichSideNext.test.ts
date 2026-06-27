@@ -31,9 +31,10 @@ class StubFeed implements FeedSource {
       scoreHome: this.scoreHome,
       scoreAway: this.scoreAway,
       clock: this.clock,
-      status: 'live',
+      status: this.statusVal,
     };
   }
+  private statusVal: GameState['status'] = 'live';
   poll(): FeedEvent[] {
     return this.polls.shift() ?? [];
   }
@@ -46,6 +47,10 @@ class StubFeed implements FeedSource {
   }
   setClock(c: string): void {
     this.clock = c;
+  }
+  /** Drive the match-status transition (real feeds report full time as status='final'). */
+  setStatus(s: GameState['status']): void {
+    this.statusVal = s;
   }
   async close(): Promise<void> {}
 }
@@ -212,16 +217,23 @@ describe('which-side-next contest — the scoped decisive-event NO', () => {
       await orch.stop();
     });
 
-    it('VOIDs/refunds at the deadline when NEITHER team threatens — never settles NO', async () => {
+    it('does NOT void mid-match (re-arms), then VOIDs/refunds at FULL TIME — never NO', async () => {
       const feed = new StubFeed();
       const orch = new Orchestrator(simConfig(), feed);
       const m = await openAndLockVersus(orch, feed);
 
-      // No decisive event at all — run well past the deadline. The deadline sweep must
-      // VOID (refund), NOT write NO: the contest never happened.
+      // No decisive event — well past the content deadline the contest must NOT void: it simply
+      // hasn't happened yet, so it re-arms and stays live ("until the next corner", as promised).
       await vi.advanceTimersByTimeAsync(600_000);
       await orch.simTick();
-      const after = orch.simMarkets().find((x) => x.id === m.id)!;
+      let after = orch.simMarkets().find((x) => x.id === m.id)!;
+      expect(after.status).not.toBe('void');
+
+      // Full time (status transition, like a real feed): the contest can never be decided now →
+      // VOID + refund, NEVER NO. Without this it would hold the stake forever in single-game mode.
+      feed.setStatus('final');
+      await orch.simTick();
+      after = orch.simMarkets().find((x) => x.id === m.id)!;
       expect(after.status).toBe('void');
       expect(after.settlement?.outcome).toBe('VOID');
       await orch.stop();

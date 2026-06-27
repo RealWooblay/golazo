@@ -28,10 +28,10 @@ function sessionNet(
   if (result === "void") return 0;
   const stake = m.userStake ?? bet?.stake;
   if (result === "lost") return stake != null ? -stake : bet?.delta;
-  if (bet) {
-    if (bet.stake > 0 && bet.delta > bet.stake) return bet.delta - bet.stake;
-    return bet.delta;
-  }
+  // bet.delta is ALREADY the signed net (won ? payout - stake : -stake), so trust it directly.
+  // (Previously this re-subtracted the stake whenever bet.delta > bet.stake — i.e. any win above
+  // 2.0x — making the row read one stake short of the balance credit and the session P&L pill.)
+  if (bet) return bet.delta;
   return undefined;
 }
 

@@ -235,7 +235,9 @@ export const config: Config = {
       : process.env.POINTS_STORE_PATH?.trim() || join(homedir(), '.golazo', 'points.json'),
   rake: num('RAKE', 0.06),
   feeRecipient: process.env.FEE_RECIPIENT?.trim() || '5kBBKSV2EUyLsa2sXoK9E1VVzmDXCaHnQiMfz8B8yJtP',
-  baseSeed: num('BASE_SEED', 12345),
+  // No house seed by default: a seeded pool has no Bet PDA, so its net share is paid to nobody
+  // (strands funds) and dilutes real winners. Keep 0 unless a seed is explicitly funded + claimed.
+  baseSeed: num('BASE_SEED', 0),
   liquidityBotsEnabled: bool('LIQUIDITY_BOTS'),
   botCount: num('BOT_COUNT', 24),
   pointsBotCount: num('POINTS_BOT_COUNT', 12),
@@ -251,9 +253,12 @@ export const config: Config = {
   solanaRpcUrl: string('SOLANA_RPC_URL', 'http://127.0.0.1:8899'),
   golazoProgramId: string('GOLAZO_PROGRAM_ID', '3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM'),
   chainSeedLamports: num('CHAIN_SEED_LAMPORTS', 0),
-  // >= BET_DELAY_MS (5s client hold) + ~4s devnet confirm headroom so an in-flight
-  // real-money place_bet lands before the on-chain market flips to Locked.
-  chainLockGraceMs: num('CHAIN_LOCK_GRACE_MS', 10_000),
+  // ANTI-SNIPE: 0 by default so the on-chain twin locks AT lockAt (the same instant the engine
+  // locks), leaving NO window in which a known/held outcome can be bet with real USX. (It was 10s
+  // to let an in-flight place_bet confirm, but the program has no on-chain betting-close check, so
+  // ANY grace is an exploitable snipe window.) flushChainLock also freezes the twin the moment an
+  // outcome is held. Only raise this with a redeployed program that enforces betting_closes_at.
+  chainLockGraceMs: num('CHAIN_LOCK_GRACE_MS', 0),
 };
 
 /** One-line, secret-free summary for the boot log. */

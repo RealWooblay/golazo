@@ -26,6 +26,14 @@ describe('pool odds', () => {
     expect(q.payout).toBeCloseTo(235, 6);
     expect(q.multiple).toBeCloseTo(2.35, 6);
   });
+
+  it('quotes a one-sided book at 1.0x, never a sub-1.0x "win"', () => {
+    // Empty book: the first bettor has no opposing stake, so this would settle as a 1.0x refund.
+    // The quote must read 1.0x, not stake*(1-rake) (which showed a LOSING multiple on a win).
+    const q = indicativeQuote({ yes: 0, no: 0 }, 'YES', 600, RAKE);
+    expect(q.multiple).toBe(1);
+    expect(q.payout).toBe(600);
+  });
 });
 
 describe('settlement', () => {
@@ -77,5 +85,31 @@ describe('settlement', () => {
     expect(s.rakeTaken).toBe(0);
     expect(s.totalPayouts).toBe(0);
     expect(s.payouts.map((p) => p.payout)).toEqual([40, 60]);
+  });
+
+  it('refunds a ONE-SIDED WIN at 1.0x — no rake, no self-funded loss', () => {
+    // Everyone backs the same side and that side wins. There is no losing counter-pool to win
+    // FROM or to rake, so each winner gets their stake back (1.0x) — never stake*(1-rake), the bug
+    // that made a winner lose ~6% of their own money. The outcome label stays the real result.
+    const pool: Pool = { yes: 1000, no: 0 };
+    const bets: Bet[] = [
+      { userId: 'a', side: 'YES', stake: 600 },
+      { userId: 'b', side: 'YES', stake: 400 },
+    ];
+    const s = settle(pool, bets, 'YES', RAKE);
+    expect(s.outcome).toBe('YES');
+    expect(s.rakeTaken).toBe(0);
+    expect(s.payouts.find((p) => p.userId === 'a')!.payout).toBe(600);
+    expect(s.payouts.find((p) => p.userId === 'b')!.payout).toBe(400);
+  });
+
+  it('a ONE-SIDED LOSS still forfeits the stake (being the only side is not a refund)', () => {
+    // Everyone backed the side that LOST. No winners → they forfeit; the operator keeps the pool.
+    // This is the deliberate counterpart to the one-sided-win refund (NOT a void).
+    const pool: Pool = { yes: 1000, no: 0 };
+    const bets: Bet[] = [{ userId: 'a', side: 'YES', stake: 1000 }];
+    const s = settle(pool, bets, 'NO', RAKE);
+    expect(s.outcome).toBe('NO');
+    expect(s.payouts.find((p) => p.userId === 'a')!.payout).toBe(0);
   });
 });

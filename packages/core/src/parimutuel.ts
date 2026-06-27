@@ -57,7 +57,11 @@ export function indicativeQuote(
   if (stake <= 0) return { payout: 0, multiple: 0 };
   const after = poolAfterBet(p, side, stake);
   const winningPool = side === 'YES' ? after.yes : after.no;
+  const losingPool = side === 'YES' ? after.no : after.yes;
   if (winningPool <= 0) return { payout: 0, multiple: 0 };
+  // No opposing stake → one-sided: this would settle as a 1.0x refund (no counter-pool to win
+  // from or rake). Quote 1.0x, never the sub-1.0x "win" that applying rake to an empty book gave.
+  if (losingPool <= 0) return { payout: stake, multiple: 1 };
   const payout = (stake / winningPool) * netPool(after, rake);
   return { payout, multiple: payout / stake };
 }
@@ -116,9 +120,14 @@ export function settle(
   }
 
   const gross = grossPool(p);
-  const rakeTaken = gross * rake;
-  const distributable = gross - rakeTaken;
   const winningPool = outcome === 'YES' ? p.yes : p.no;
+  const losingPool = outcome === 'YES' ? p.no : p.yes;
+  // Rake only makes sense when there's a LOSING counter-pool to take it from. With no losing
+  // stake (a one-sided winning book) take NO rake — otherwise a winner is paid stake*(1-rake)
+  // and loses ~6% of their OWN money (the bug). Note: a one-sided LOSS — everyone backed the
+  // side that LOST — is NOT a refund; those bettors still forfeit (being the only side ≠ a void).
+  const rakeTaken = losingPool > 0 ? gross * rake : 0;
+  const distributable = gross - rakeTaken;
 
   const payouts: Payout[] = bets.map((b) => {
     const won = b.side === outcome;
@@ -126,9 +135,10 @@ export function settle(
       userId: b.userId,
       side: b.side,
       stake: b.stake,
-      // Winner: split the distributable pool by stake share. A one-sided winner (nobody on
-      // the losing side) has no pot to win FROM, so they get their stake back (1.0x) — never 0.
-      payout: won ? (winningPool > 0 ? (b.stake / winningPool) * distributable : b.stake) : 0,
+      // Winner: split the distributable pool by stake share. A one-sided winner (no losing
+      // counter-pool) has nothing to win FROM, so they just get their stake back (1.0x) — never 0,
+      // never stake*(1-rake).
+      payout: won ? (losingPool > 0 ? (b.stake / winningPool) * distributable : b.stake) : 0,
       won,
     };
   });

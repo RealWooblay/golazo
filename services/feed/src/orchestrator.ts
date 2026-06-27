@@ -566,6 +566,13 @@ export class Orchestrator {
     this.server.roomManager.lockExpiredMarkets();
     await this.checkPeriodMarkets(game);
 
+    // FULL-TIME SWEEP on the STATUS transition. Real feeds (ESPN) report end-of-match as
+    // status==='final', NOT a 'final'-typed FeedEvent (only sim/replay emit that) — so the
+    // event-keyed handler in processEvent is dead on live feeds. finalizeMatch is run-once
+    // (matchFinalized → idempotent across ticks) and voids/refunds every still-open market, so
+    // nothing — especially a which-side contest — is left holding real stake at the whistle.
+    if (game.status === 'final') this.finalizeMatch();
+
     const livePlay = game.status === 'live' && !this.breakPaused;
 
     // HEARTBEAT: relax momentum one tick BEFORE broadcasting so the bar keeps breathing
@@ -1698,6 +1705,14 @@ export class Orchestrator {
       // full-time, where finalizeMatch voids + refunds it. This is what the card promises with
       // "until the next corner" — no premature refund mid-match.
       if (isWhichSideNextKind(m.kind)) {
+        // ...UNLESS the match is over: a contest that never happened can't be decided, so VOID +
+        // refund instead of re-arming the deadline forever. finalizeMatch is the primary backstop,
+        // but in single-game forceEventId mode the feed never rotates (resetForNewMatch won't run),
+        // so without this a which-side market would hold real stake indefinitely past the whistle.
+        if (this.feed.state().status === 'final') {
+          this.voidMarket(t, 'full_time');
+          continue;
+        }
         this.extendMarketResolve(t, now + WHICH_SIDE_REARM_MS);
         continue;
       }
@@ -1928,6 +1943,11 @@ export class Orchestrator {
           decision.outcome === 'YES' && prev?.outcome !== 'YES' && !isWhichSideNextKind(m.kind);
         if (!prev || yesOverrides) {
           target.pendingOutcome = decision;
+          // FREEZE THE ON-CHAIN TWIN THE INSTANT A RESULT IS KNOWN. Off-chain betting stops here
+          // (the pendingOutcome guard rejects later bets), but the on-chain twin would otherwise
+          // stay Open until lockAt(+grace) — a window to bet a KNOWN outcome with real USX. Lock
+          // it now; flushChainLock is idempotent (no-ops once the twin is locked / has no seed).
+          this.flushChainLock(target);
         }
         settled = true;
         continue;
