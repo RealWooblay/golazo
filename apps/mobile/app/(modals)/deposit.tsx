@@ -210,13 +210,14 @@ function RealChainDeposit({
     }
   }, [chain]);
 
-  const buy = useCallback(async () => {
+  const buy = useCallback(async (method: "card" | "stripe") => {
     if (!onramp.supported || !chain.address) return;
     setStatus("buying");
     setMsg(null);
     try {
       await onramp.open({
         address: chain.address,
+        method,
         onExit: () => {
           // The card payout settles seconds-to-minutes AFTER the widget closes —
           // wait, then auto-swap whatever landed into USX.
@@ -249,12 +250,23 @@ function RealChainDeposit({
         {onramp.supported ? (
           <Button
             label="Buy with card"
-            onPress={buy}
+            onPress={() => buy("card")}
             variant="primary"
             size="lg"
             fullWidth
             glow
             loading={status === "buying"}
+            disabled={busy}
+          />
+        ) : null}
+
+        {onramp.supported && onramp.stripeSupported ? (
+          <Button
+            label="Pay with Stripe"
+            onPress={() => buy("stripe")}
+            variant="secondary"
+            size="lg"
+            fullWidth
             disabled={busy}
           />
         ) : null}

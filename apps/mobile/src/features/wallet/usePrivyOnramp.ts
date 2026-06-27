@@ -5,6 +5,7 @@
 export interface PrivyOnrampOpenOpts {
   address: string;
   amountUsd?: number;
+  method?: "card" | "stripe";
   provider?: "moonpay" | "coinbase";
   /** Fired when the user closes the on-ramp flow (settlement is async after this). */
   onExit?: () => void;
@@ -13,12 +14,14 @@ export interface PrivyOnrampOpenOpts {
 export interface PrivyOnramp {
   /** True only where the Privy on-ramp can actually run (web, signed in). */
   supported: boolean;
+  stripeSupported: boolean;
   open: (opts: PrivyOnrampOpenOpts) => Promise<void>;
 }
 
 export function usePrivyOnramp(): PrivyOnramp {
   return {
     supported: false,
+    stripeSupported: false,
     open: async () => {
       throw new Error("Card funding is available on the web app.");
     },
