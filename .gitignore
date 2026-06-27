@@ -21,6 +21,8 @@ services/feed/operator-keypair.json
 **/*-keypair.json
 **/deploy-keypair.json
 *.keypair.json
+# Local funded wallets (alice/bob/etc.) — real funds, never commit.
+keys/
 
 # local editor / tooling
 .claude/settings.local.json
@@ -28,5 +30,5 @@ services/feed/operator-keypair.json
 trailer/
 .claude/
 
-# marketing: keep the deliverables, drop the regenerable promo frames
-marketing/promo/frames/
+# marketing: keep the deliverables (mp4s), drop the regenerable promo frame dirs
+marketing/promo/frames*/
