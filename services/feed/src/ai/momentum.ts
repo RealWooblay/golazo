@@ -153,10 +153,12 @@ export function momentumMarketSpec(
   // the BROADER "a SHOT or CORNER next spell?" (a wider, higher-YES question) so the
   // momentum board varies and resolves YES more often. Even counter → shot-or-corner.
   if (counter % 2 === 0) {
+    // TEAMLESS wording: these resolve on EITHER team's shot/corner (ESPN can't reliably attribute
+    // open-play shots), so the card must NOT name a team — naming one paid the wrong side.
     const broadLines = [
-      `${teamName} shot or corner coming?`,
-      `Shot or corner for ${teamName}?`,
-      `${teamName} to win a shot or corner?`,
+      `A shot or corner this spell?`,
+      `Shot or corner coming?`,
+      `A shot or a corner soon?`,
     ];
     return {
       kind: 'shot_or_corner_in_window',
@@ -164,13 +166,14 @@ export function momentumMarketSpec(
       trueProb: 0.5,
     };
   }
+  // TEAMLESS (either-team resolver) — see above. Never name a team on a shot-window card.
   const shotLines = [
-    `Shot from ${teamName} coming?`,
-    `${teamName} shot incoming?`,
-    `${teamName} to test the keeper?`,
-    `${teamName} to create a chance?`,
-    `${teamName} to get a shot off?`,
-    `Will ${teamName} shoot soon?`,
+    `A shot coming?`,
+    `Shot incoming?`,
+    `An effort on goal soon?`,
+    `A chance this spell?`,
+    `A shot in the next moment?`,
+    `Will there be a shot soon?`,
   ];
   return {
     kind: 'shot_in_window',

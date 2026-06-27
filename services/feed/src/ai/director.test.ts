@@ -29,7 +29,7 @@ describe('MarketDirector.validateProposal — the palette + selection wall', () 
     expect(p!.slot).toBe('versus');
     expect(p!.team).toBe('home');
     // Built from the curated bank with {team}/{opp} substituted (home = Brazil = YES side first).
-    expect(p!.question).toBe('Who threatens next: Brazil or Argentina?');
+    expect(p!.question).toBe('Next shot: Brazil or Argentina?');
     expect(p!.bornAt).toBe(NOW);
   });
 
@@ -47,7 +47,7 @@ describe('MarketDirector.validateProposal — the palette + selection wall', () 
   it('IGNORES any free-text question — the AI can never WRITE wording, only SELECT it', () => {
     const p = validateProposal(
       {
-        kind: 'shot_in_window',
+        kind: 'score_in_window',
         team: 'away',
         line: 0,
         question: 'totally made up free text 123',
@@ -87,15 +87,22 @@ describe('MarketDirector.validateProposal — the palette + selection wall', () 
   });
 
   it('REJECTS a team-bound kind with no/invalid team, and a teamless kind that carries a team', () => {
-    // shot_in_window needs a real team.
-    expect(validateProposal({ kind: 'shot_in_window', line: 0, trueProb: 0.4, windowMs: 10_000 }, game(), NOW)).toBeNull();
+    // next_shot (versus) needs a real team.
+    expect(validateProposal({ kind: 'next_shot', line: 0, trueProb: 0.4, windowMs: 10_000 }, game(), NOW)).toBeNull();
     expect(
-      validateProposal({ kind: 'shot_in_window', team: 'nobody', line: 0, trueProb: 0.4, windowMs: 10_000 }, game(), NOW),
+      validateProposal({ kind: 'next_shot', team: 'nobody', line: 0, trueProb: 0.4, windowMs: 10_000 }, game(), NOW),
     ).toBeNull();
-    // over_corners must NOT carry a team.
+    // over_corners is teamless and must NOT carry a team. (shot_in_window is now teamless too.)
     expect(
       validateProposal({ kind: 'over_corners', team: 'home', line: 0, trueProb: 0.5, windowMs: 10_000 }, game(), NOW),
     ).toBeNull();
+    expect(
+      validateProposal({ kind: 'shot_in_window', team: 'home', line: 0, trueProb: 0.5, windowMs: 10_000 }, game(), NOW),
+    ).toBeNull();
+    // ...and shot_in_window with NO team now SUCCEEDS (teamless either-team shot market).
+    expect(
+      validateProposal({ kind: 'shot_in_window', line: 0, trueProb: 0.5, windowMs: 10_000 }, game(), NOW),
+    ).not.toBeNull();
   });
 
   it('CLAMPS trueProb, windowMs and relevance into safe bounds', () => {

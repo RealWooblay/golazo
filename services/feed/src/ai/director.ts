@@ -46,9 +46,10 @@ export const DIRECTOR_PALETTE: ReadonlySet<string> = new Set([
 
 /** Kinds that REQUIRE a team (a side the market is about). The rest are teamless either-team. */
 const TEAM_BOUND: ReadonlySet<string> = new Set([
-  'shot_in_window',
+  // shot_in_window + shot_or_corner_in_window are TEAMLESS (either-team resolver — the card must
+  // not name a side, or it pays the wrong team). score_in_window stays team-bound: goals carry
+  // their team reliably, so "X to score?" resolves cleanly.
   'score_in_window',
-  'shot_or_corner_in_window',
   'next_shot',
   'next_corner',
   'next_goal',
@@ -64,12 +65,10 @@ const TEAM_BOUND: ReadonlySet<string> = new Set([
  */
 const LINE_BANK: Record<string, readonly string[]> = {
   shot_in_window: [
-    '{team} to get a shot away this spell?',
-    'Can {team} work a shot here?',
-    '{team} to test the keeper soon?',
-    'A shot brewing for {team}?',
-    '{team} to have a crack at goal?',
-    '{team} to threaten the goal this spell?',
+    'A shot this spell?',
+    'A shot coming here?',
+    'An effort on goal soon?',
+    'A chance worked this spell?',
   ],
   score_in_window: [
     '{team} to score in the next few minutes?',
@@ -80,16 +79,15 @@ const LINE_BANK: Record<string, readonly string[]> = {
     'A goal coming for {team}?',
   ],
   shot_or_corner_in_window: [
-    '{team} to win a shot or a corner this spell?',
-    '{team} to force a corner or an effort soon?',
-    '{team} to carve out a chance or a corner?',
-    '{team} to threaten with a shot or corner?',
+    'A shot or a corner this spell?',
+    'A corner or an effort soon?',
+    'A shot or corner from this attack?',
   ],
   next_shot: [
-    'Who threatens next: {team} or {opp}?',
     'Next shot: {team} or {opp}?',
+    'Who shoots next: {team} or {opp}?',
     'Next effort on goal: {team} or {opp}?',
-    'Who has the next chance: {team} or {opp}?',
+    'Next team to shoot: {team} or {opp}?',
   ],
   next_corner: [
     'Next corner: {team} or {opp}?',

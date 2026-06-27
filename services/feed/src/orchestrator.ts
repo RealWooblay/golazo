@@ -667,7 +667,13 @@ export class Orchestrator {
     // so this only ever fills loose shots / attacks / corners.
     if (!ev.team) {
       const pressing = this.momentum.read().bar;
-      if (pressing) ev.team = pressing;
+      if (pressing) {
+        ev.team = pressing;
+        // Mark it INFERRED — a momentum-bar GUESS, not ESPN's attribution. A resolver that pays
+        // a specific side (the which-side contests) must NOT settle on a guessed team, or it pays
+        // the wrong winner when ESPN merely omitted the team. (Window markets are teamless.)
+        ev.meta = { ...ev.meta, teamInferred: true };
+      }
     }
 
     this.bumpCountMarkets(ev); // over/under count markets: YES the instant they cross the line
@@ -1221,6 +1227,10 @@ export class Orchestrator {
    */
   private resolveWhichSideMarkets(ev: FeedEvent): void {
     if (!ev.team) return; // a decisive event must be attributable to a side
+    // ...and to ESPN's REAL attribution, not the momentum-bar guess — settling "who wins the next
+    // corner/booking/shot?" off an inferred team pays the wrong winner. Treat an inferred-team
+    // event as non-decisive; the contest waits for a real-team event or VOIDs/refunds at the whistle.
+    if (ev.meta?.teamInferred) return;
     for (const t of [...this.tracked.values()]) {
       const m = this.engine.get(t.marketId);
       if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
@@ -1978,7 +1988,18 @@ export class Orchestrator {
     }
 
     if (isSetPieceGoalKind(m.kind)) {
-      if (ev.type === 'goal') return { outcome: 'YES' };
+      if (ev.type === 'goal') {
+        // YES only if ESPN's goal text says it came FROM this set piece — NOT any goal by the
+        // team. (Was: any goal → YES, which paid "Goal from the corner?" / "penalty scored?" on
+        // an unrelated open-play goal, or after a saved penalty.) Ambiguous attribution VOIDs
+        // (refund); a goal clearly NOT from the set piece is ignored → play_end/deadline NOs it.
+        const v = parseGoalSource(ev.text, m.kind);
+        if (v === 'yes') return { outcome: 'YES' };
+        if (v === 'ambiguous') {
+          return { outcome: 'VOID', voidCause: 'ambiguous_attribution', voidReason: ev.text.slice(0, 80) };
+        }
+        return undefined;
+      }
       if (ev.type === 'shot' || ev.type === 'miss') {
         this.markSetPieceTaken(target, m);
         return undefined;

@@ -214,14 +214,14 @@ const CORNER_COUNT_QUESTIONS: ((line: number, mins: number) => string)[] = [
   (line, mins) => `Over ${line} corners in ${mins} min?`,
   (line, mins) => `${line + 1}+ corners in ${mins} min?`,
   (line, mins) => `More than ${line} corners in ${mins} min?`,
-  (line, mins) => `${line + 1} corners in ${mins} min?`,
+  (line, mins) => `${line + 1}+ corners in ${mins} min?`,
 ];
 
 const SHOT_COUNT_QUESTIONS: ((line: number, mins: number) => string)[] = [
   (line, mins) => `Over ${line} shots in ${mins} min?`,
   (line, mins) => `${line + 1}+ shots in ${mins} min?`,
   (line, mins) => `More than ${line} shots in ${mins} min?`,
-  (line, mins) => `${line + 1} shots in ${mins} min?`,
+  (line, mins) => `${line + 1}+ shots in ${mins} min?`,
 ];
 
 /** Rotating count-slot heartbeat — corners vs shots, varied copy. */
