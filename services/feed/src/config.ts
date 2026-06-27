@@ -169,7 +169,9 @@ export interface Config {
    * would arrive after lock and fail with `MarketNotOpen` (0x1770). So we keep the chain
    * twin Open for this grace after the engine locks — long enough for the held tx to
    * confirm — while the client-side hold + `bettingClosesAt` remain the real anti-latency
-   * defense. Must be >= BET_DELAY_MS + devnet confirm headroom. Default 10s.
+   * defense. Default 0 (ANTI-SNIPE: lock the twin AT lockAt, no window for a known
+   * outcome) — the program has no on-chain betting-close check, so any grace is exploitable.
+   * See the runtime default + rationale at the CHAIN_LOCK_GRACE_MS line below.
    */
   chainLockGraceMs: number;
 }

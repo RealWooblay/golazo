@@ -87,29 +87,29 @@ describe('settlement', () => {
     expect(s.payouts.map((p) => p.payout)).toEqual([40, 60]);
   });
 
-  it('refunds a ONE-SIDED WIN at 1.0x — no rake, no self-funded loss', () => {
-    // Everyone backs the same side and that side wins. There is no losing counter-pool to win
-    // FROM or to rake, so each winner gets their stake back (1.0x) — never stake*(1-rake), the bug
-    // that made a winner lose ~6% of their own money. The outcome label stays the real result.
+  it('VOIDs/refunds a ONE-SIDED WIN at 1.0x — no rake, no self-funded loss', () => {
+    // One side backed, that side wins: no counter-pool to win FROM or rake, so each bettor gets
+    // their stake back (1.0x) — never stake*(1-rake). Reported VOID (no genuine contest).
     const pool: Pool = { yes: 1000, no: 0 };
     const bets: Bet[] = [
       { userId: 'a', side: 'YES', stake: 600 },
       { userId: 'b', side: 'YES', stake: 400 },
     ];
     const s = settle(pool, bets, 'YES', RAKE);
-    expect(s.outcome).toBe('YES');
+    expect(s.outcome).toBe('VOID');
     expect(s.rakeTaken).toBe(0);
     expect(s.payouts.find((p) => p.userId === 'a')!.payout).toBe(600);
     expect(s.payouts.find((p) => p.userId === 'b')!.payout).toBe(400);
   });
 
-  it('a ONE-SIDED LOSS still forfeits the stake (being the only side is not a refund)', () => {
-    // Everyone backed the side that LOST. No winners → they forfeit; the operator keeps the pool.
-    // This is the deliberate counterpart to the one-sided-win refund (NOT a void).
+  it('VOIDs/refunds a ONE-SIDED LOSS too — agrees with the on-chain isOneSidedRealBook void', () => {
+    // One side backed, that side LOSES: still no genuine opponent, so REFUND (not forfeit) — the
+    // operator voids/refunds this on-chain, so the off-chain settlement must too or the app P&L,
+    // the points score, and the real USX wallet would disagree.
     const pool: Pool = { yes: 1000, no: 0 };
     const bets: Bet[] = [{ userId: 'a', side: 'YES', stake: 1000 }];
     const s = settle(pool, bets, 'NO', RAKE);
-    expect(s.outcome).toBe('NO');
-    expect(s.payouts.find((p) => p.userId === 'a')!.payout).toBe(0);
+    expect(s.outcome).toBe('VOID');
+    expect(s.payouts.find((p) => p.userId === 'a')!.payout).toBe(1000);
   });
 });

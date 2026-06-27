@@ -82,7 +82,7 @@ describe('points parimutuel: multiple moves on REAL aggregate user money (no see
     expect(by('cy').balance).toBe(400); // 500 − 100, nothing back
   });
 
-  it('one-sided WIN returns the stake (1.0x — nothing to win FROM)', () => {
+  it('one-sided WIN VOIDs/refunds the stake (1.0x — nothing to win FROM)', () => {
     const pm = new PointsManager();
     const market = openMarket('m3', 0.5);
     pm.onMarketOpen(market);
@@ -91,24 +91,24 @@ describe('points parimutuel: multiple moves on REAL aggregate user money (no see
 
     const resolved = pm.onMarketResolve({ ...market, settlement: { outcome: 'YES' } } as unknown as Market);
     const amy = resolved.settled!.find((s) => s.userId === 'amy')!;
-    expect(amy.outcome).toBe('YES');
+    expect(amy.outcome).toBe('VOID'); // no genuine two-way contest → void
     expect(amy.payout).toBe(100); // stake straight back, no profit
     expect(amy.balance).toBe(500);
   });
 
-  it('one-sided LOSS forfeits the whole stake (no opponent is NOT a refund)', () => {
+  it('one-sided LOSS also VOIDs/refunds — matches the on-chain isOneSidedRealBook void', () => {
     const pm = new PointsManager();
     const market = openMarket('m4', 0.5);
     pm.onMarketOpen(market);
     pm.register('amy', 'amy');
     pm.placeBet('amy', 'm4', 'YES', 100); // only YES is backed
 
-    // Wrong, with nobody on the other side → you LOSE it all (the house keeps the unmatched
-    // stake). It does NOT auto-VOID/refund just because you were alone.
+    // No genuine opponent → REFUND, not forfeit. The on-chain operator voids/refunds a one-sided
+    // real book; the off-chain settlement must agree so the app P&L + points + USX wallet match.
     const resolved = pm.onMarketResolve({ ...market, settlement: { outcome: 'NO' } } as unknown as Market);
     const amy = resolved.settled!.find((s) => s.userId === 'amy')!;
-    expect(amy.outcome).toBe('NO');
-    expect(amy.payout).toBe(0); // forfeit
-    expect(amy.balance).toBe(400); // 500 − 100 staked, nothing back
+    expect(amy.outcome).toBe('VOID');
+    expect(amy.payout).toBe(100); // refunded
+    expect(amy.balance).toBe(500); // 500 − 100 staked + 100 refunded
   });
 });

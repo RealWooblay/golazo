@@ -102,9 +102,17 @@ export function settle(
   rake: number,
   seedAmount = 0,
 ): Settlement {
-  if (outcome === 'VOID') {
+  const gross = grossPool(p);
+  // VOID — or a ONE-SIDED book (all stake on a single side) — refunds every stake at 1.0x and
+  // takes no rake, reported as VOID. A one-sided book is no genuine two-way contest: a "winner"
+  // has nothing to win FROM (paying stake*(1-rake) would cost them ~6% of their OWN money) and a
+  // "loser" had no real opponent (forfeiting would hand the house a no-contest pool). Refunding
+  // BOTH keeps the off-chain settlement consistent with the operator's on-chain isOneSidedRealBook
+  // void — so the app's P&L, the cross-mode points score, and the real USX wallet all agree.
+  const oneSided = gross > 0 && (p.yes <= 0 || p.no <= 0);
+  if (outcome === 'VOID' || oneSided) {
     return {
-      outcome,
+      outcome: 'VOID',
       rakeTaken: 0,
       distributable: 0,
       totalPayouts: 0,
@@ -119,15 +127,9 @@ export function settle(
     };
   }
 
-  const gross = grossPool(p);
-  const winningPool = outcome === 'YES' ? p.yes : p.no;
-  const losingPool = outcome === 'YES' ? p.no : p.yes;
-  // Rake only makes sense when there's a LOSING counter-pool to take it from. With no losing
-  // stake (a one-sided winning book) take NO rake — otherwise a winner is paid stake*(1-rake)
-  // and loses ~6% of their OWN money (the bug). Note: a one-sided LOSS — everyone backed the
-  // side that LOST — is NOT a refund; those bettors still forfeit (being the only side ≠ a void).
-  const rakeTaken = losingPool > 0 ? gross * rake : 0;
+  const rakeTaken = gross * rake;
   const distributable = gross - rakeTaken;
+  const winningPool = outcome === 'YES' ? p.yes : p.no;
 
   const payouts: Payout[] = bets.map((b) => {
     const won = b.side === outcome;
@@ -135,10 +137,9 @@ export function settle(
       userId: b.userId,
       side: b.side,
       stake: b.stake,
-      // Winner: split the distributable pool by stake share. A one-sided winner (no losing
-      // counter-pool) has nothing to win FROM, so they just get their stake back (1.0x) — never 0,
-      // never stake*(1-rake).
-      payout: won ? (losingPool > 0 ? (b.stake / winningPool) * distributable : b.stake) : 0,
+      // Two-sided book: winners split the distributable pool by stake share. (One-sided books are
+      // refunded above, so winningPool is always > 0 here.)
+      payout: won ? (b.stake / winningPool) * distributable : 0,
       won,
     };
   });
