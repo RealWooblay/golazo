@@ -84,17 +84,19 @@ async function openAndLockVersus(orch: Orchestrator, feed: StubFeed): Promise<Ma
 }
 
 describe('which-side-next contest — the scoped decisive-event NO', () => {
-  it('palette: only next_* kinds are which-side, and next_shot decides on any real threat', () => {
+  it('palette: only next_* kinds are which-side, and next_shot decides on a REAL shot only', () => {
     expect(isWhichSideNextKind('next_shot')).toBe(true);
     expect(isWhichSideNextKind('next_corner')).toBe(true);
     expect(isWhichSideNextKind('shot_in_window')).toBe(false);
     expect(isWhichSideNextKind('over_corners')).toBe(false);
-    // The broad "who threatens next?" set — a shot, a corner, OR a dangerous attack.
+    // "Next shot" settles on an ACTUAL shot only — never a corner or a fuzzy dangerous attack.
     const set = decisiveEventTypes('next_shot');
-    for (const t of ['shot', 'miss', 'goal', 'corner', 'dangerous_attack'] as const) {
+    for (const t of ['shot', 'miss', 'goal'] as const) {
       expect(set.has(t)).toBe(true);
     }
-    expect(set.has('free_kick')).toBe(false);
+    for (const t of ['corner', 'dangerous_attack', 'free_kick'] as const) {
+      expect(set.has(t)).toBe(false);
+    }
   });
 
   describe('resolution', () => {
@@ -133,35 +135,27 @@ describe('which-side-next contest — the scoped decisive-event NO', () => {
       await orch.stop();
     });
 
-    // REGRESSION (verifier lens 4): corner + dangerous_attack are decisive for next_shot but
-    // are NOT routed through the resolver-branch gate — they must still settle the contest via
-    // the dedicated resolveWhichSideMarkets pass, or the opponent-first NO is dead and a later
-    // same-team shot mis-settles YES.
-    it('settles NO when the OTHER team wins a CORNER first (not just a shot)', async () => {
+    // REGRESSION (real-money): "Next shot" must settle on a REAL shot ONLY. A corner or a fuzzy
+    // dangerous-attack must NOT decide it — that mis-paid a side that never shot (and contradicted
+    // the companion shot-window market). The contest waits for an actual shot.
+    it('does NOT settle on a corner / dangerous attack — only a real shot decides next_shot', async () => {
       const feed = new StubFeed();
       const orch = new Orchestrator(simConfig(), feed);
       const m = await openAndLockVersus(orch, feed);
       expect(m.team).toBe('home');
 
+      // Neither a corner nor a dangerous attack (either side) resolves a "Next shot" contest.
       feed.push([mk('corner', 'away')]);
       await orch.simTick();
-      const after = orch.simMarkets().find((x) => x.id === m.id)!;
-      expect(after.settlement?.outcome).toBe('NO');
-      await orch.stop();
-    });
-
-    it('settles NO on an OTHER-team DANGEROUS ATTACK, and a later same-team shot can NOT flip it', async () => {
-      const feed = new StubFeed();
-      const orch = new Orchestrator(simConfig(), feed);
-      const m = await openAndLockVersus(orch, feed);
-      expect(m.team).toBe('home');
-
-      // Away threatens first → NO. Then home shoots — first-decisive-wins must hold the NO.
-      feed.push([mk('dangerous_attack', 'away')]);
+      feed.push([mk('dangerous_attack', 'home')]);
       await orch.simTick();
-      feed.push([mk('shot', 'home')]);
+      let after = orch.simMarkets().find((x) => x.id === m.id)!;
+      expect(after.settlement).toBeUndefined();
+
+      // The next REAL shot (away) settles it NO.
+      feed.push([mk('shot', 'away')]);
       await orch.simTick();
-      const after = orch.simMarkets().find((x) => x.id === m.id)!;
+      after = orch.simMarkets().find((x) => x.id === m.id)!;
       expect(after.settlement?.outcome).toBe('NO');
       await orch.stop();
     });

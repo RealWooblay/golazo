@@ -149,12 +149,15 @@ describe('PHASE 6 which-side-next palette', () => {
     expect(resolveDeadlineMs('next_card')).toBeGreaterThan(0);
   });
 
-  it('decides next_shot on any real attacking threat, and maps to the versus slot', () => {
+  it('decides next_shot on a REAL shot only (not a corner / dangerous attack), versus slot', () => {
     const set = decisiveEventTypes('next_shot');
-    for (const t of ['shot', 'miss', 'goal', 'corner', 'dangerous_attack'] as const) {
+    for (const t of ['shot', 'miss', 'goal'] as const) {
       expect(set.has(t)).toBe(true);
     }
-    expect(set.has('free_kick')).toBe(false);
+    // A corner or a fuzzy "dangerous attack" must NOT settle a "Next shot" contest.
+    for (const t of ['corner', 'dangerous_attack', 'free_kick'] as const) {
+      expect(set.has(t)).toBe(false);
+    }
     expect(marketSlot('next_shot')).toBe('versus');
     expect(resolveDeadlineMs('next_shot')).toBeGreaterThan(0);
   });

@@ -249,8 +249,8 @@ type VersusPhrase = (a: string, b: string) => string;
 
 const NEXT_SHOT_PHRASES: readonly VersusPhrase[] = [
   (a, b) => `Next shot: ${a} or ${b}?`,
-  (a, b) => `Next attack: ${a} or ${b}?`,
-  (a, b) => `Next chance: ${a} or ${b}?`,
+  (a, b) => `Who shoots next: ${a} or ${b}?`,
+  (a, b) => `Next team to shoot: ${a} or ${b}?`,
 ];
 const NEXT_CORNER_PHRASES: readonly VersusPhrase[] = [
   (a, b) => `Next corner: ${a} or ${b}?`,
@@ -372,13 +372,13 @@ export function triggerWordingProblem(kind: string, question: string, isPeriod =
 
 /** Feed event types that DECIDE a which-side-next market (whichever team does it first). */
 export function decisiveEventTypes(kind: string): ReadonlySet<FeedEventType> {
-  // next_shot is the BROAD "who threatens next?" contest — any real attacking THREAT
-  // (a shot/miss/goal, a corner, or a dangerous attack) decides it, so the window reliably
-  // catches one and the contest resolves YES/NO instead of voiding. next_corner/next_goal
-  // are narrow variants kept for the AI director to open with sharper timing (they VOID
-  // often on a blind clock).
+  // next_shot resolves on an ACTUAL shot ONLY — a shot/miss/goal by either side. It must NOT
+  // settle on a corner or a fuzzy "dangerous attack": the card says "Next shot", so deciding it
+  // off a non-shot (a side that never shot) is a wrong, real-money resolution — and it directly
+  // contradicted the companion shot-window market. If no real shot lands before the whistle the
+  // contest VOIDs/refunds (fair). Strict = the wording is honest.
   if (kind === 'next_shot')
-    return new Set<FeedEventType>(['shot', 'miss', 'goal', 'corner', 'dangerous_attack']);
+    return new Set<FeedEventType>(['shot', 'miss', 'goal']);
   if (kind === 'next_corner') return new Set<FeedEventType>(['corner']);
   if (kind === 'next_goal') return new Set<FeedEventType>(['goal']);
   // next_card — whichever team's player is booked next (any card by either side decides it).
