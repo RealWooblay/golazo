@@ -249,7 +249,7 @@ export const config: Config = {
   chainEnabled: bool('CHAIN_ENABLED'),
   operatorKeypair: process.env.OPERATOR_KEYPAIR?.trim() || undefined,
   solanaRpcUrl: string('SOLANA_RPC_URL', 'http://127.0.0.1:8899'),
-  golazoProgramId: string('GOLAZO_PROGRAM_ID', 'GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu'),
+  golazoProgramId: string('GOLAZO_PROGRAM_ID', '3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM'),
   chainSeedLamports: num('CHAIN_SEED_LAMPORTS', 0),
   // >= BET_DELAY_MS (5s client hold) + ~4s devnet confirm headroom so an in-flight
   // real-money place_bet lands before the on-chain market flips to Locked.

@@ -1,7 +1,7 @@
 [toolchain]
-# Pin to a recent stable Anchor. The user's local toolchain decides the actual
-# version used to build; this is just the declared expectation.
-anchor_version = "0.30.1"
+# Modern Anchor line. Ships current Agave platform-tools (recent cargo), avoiding
+# the old-cargo edition2024 dependency-resolution failures of the 0.30 line.
+anchor_version = "1.0.2"
 
 [features]
 resolution = true
@@ -10,7 +10,7 @@ skip-lint = false
 [programs.localnet]
 # Program id — synced to target/deploy/golazo_parimutuel-keypair.json and the
 # declare_id! in programs/golazo-parimutuel/src/lib.rs.
-golazo_parimutuel = "GicM38EbfZJ3azwbE34MPTFQgqQnxNyjrXPG9zr8Wbfu"
+golazo_parimutuel = "3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM"
 
 [registry]
 url = "https://api.apr.dev"

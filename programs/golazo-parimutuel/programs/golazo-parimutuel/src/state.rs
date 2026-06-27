@@ -51,10 +51,11 @@ pub enum Outcome {
 
 /// PDA seeds: ["market", authority, market_seed].
 ///
-/// Holds the pool accounting plus lifecycle. Lamports are NOT stored here — they
-/// live in a dedicated, data-less, system-owned vault PDA (see `Vault` doc on
-/// the accounts) so the market's own rent-exempt balance can never be confused
-/// with bettor funds and so we can derive a clean signer for withdrawals.
+/// Holds the pool accounting plus lifecycle. USX tokens are NOT stored here —
+/// they live in a dedicated PDA-owned USX token account (the vault, authority =
+/// this Market PDA; see `initialize_market`) so the market's own SOL rent can
+/// never be confused with bettor funds and so we can derive a clean signer for
+/// payouts.
 #[account]
 pub struct Market {
     /// The operator that may lock/resolve/void this market. Enforced via `has_one`.
@@ -70,9 +71,9 @@ pub struct Market {
     pub status: MarketStatus,
     /// Settled side (None until Resolved).
     pub outcome: Outcome,
-    /// Total lamports staked on YES.
+    /// Total USX base units staked on YES.
     pub pool_yes: u64,
-    /// Total lamports staked on NO.
+    /// Total USX base units staked on NO.
     pub pool_no: u64,
     /// Optional original YES seed (normally zero in zero-capital mode).
     pub seed_yes: u64,
@@ -82,13 +83,16 @@ pub struct Market {
     pub vault_bump: u8,
     /// Bump for this market PDA.
     pub bump: u8,
+    /// True once the operator rake has been swept to the treasury. Guards against
+    /// a second sweep dipping into the net pool owed to winners (see `sweep_rake`).
+    pub rake_swept: bool,
 }
 
 impl Market {
     /// 8-byte Anchor discriminator + sum of field sizes.
     /// Pubkey(32) + u64(8) + [u8;32](32) + u16(2) + status enum(1) + outcome enum(1)
-    /// + 4*u64(32) + 2*u8(2).
-    pub const SIZE: usize = 8 + 32 + 8 + 32 + 2 + 1 + 1 + 32 + 2;
+    /// + 4*u64(32) + 2*u8(2) + rake_swept bool(1).
+    pub const SIZE: usize = 8 + 32 + 8 + 32 + 2 + 1 + 1 + 32 + 2 + 1;
 
     /// gross = pool_yes + pool_no.  Mirrors off-chain `grossPool`.
     pub fn gross(&self) -> Result<u128> {
@@ -121,6 +125,17 @@ impl Market {
             Outcome::None => err!(GolazoError::MarketNotSettled),
         }
     }
+
+    /// Operator rake = gross - net (rounding dust falls to the operator). Sweeping
+    /// exactly this leaves the vault holding `net`, which is precisely the sum of
+    /// all winner payouts — so sweeping is safe regardless of claim order.
+    pub fn rake_amount(&self) -> Result<u64> {
+        let rake = self
+            .gross()?
+            .checked_sub(self.net()?)
+            .ok_or_else(|| error!(GolazoError::MathOverflow))?;
+        u64::try_from(rake).map_err(|_| error!(GolazoError::MathOverflow))
+    }
 }
 
 /// PDA seeds: ["bet", market, bettor].
@@ -136,7 +151,7 @@ pub struct Bet {
     pub bettor: Pubkey,
     /// Which side they backed.
     pub side: Side,
-    /// Lamports staked.
+    /// USX base units staked.
     pub stake: u64,
     /// Double-spend guard: flipped true the first time this bet is claimed.
     pub claimed: bool,

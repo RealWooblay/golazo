@@ -4,13 +4,12 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MarketVM } from "@/state/types";
-import { LAMPORTS_PER_SOL } from "@/features/chain/config";
+import { baseUnitsFromUsd, usdFromBaseUnits } from "@/features/chain/config";
 import { holdBeforeChainBet } from "@/features/chain/betHold";
 import type { UseChain } from "@/features/chain/useChain";
 import type { OnChainSide } from "@/features/chain/types";
 import type { ChainBetVM, ChainOdds } from "@/features/match/chainBetTypes";
 
-const SOL_PER_UNIT = 0.01;
 const FEE_HEADROOM_SOL = 0.01;
 const CHAIN_TWIN_POLL_MS = 1500;
 const CHAIN_TWIN_MAX_WAIT_MS = 45_000;
@@ -95,16 +94,14 @@ export function useChainBets(
             const py = Number(om.poolYesLamports);
             const pn = Number(om.poolNoLamports);
             const gross = py + pn;
-            const stakeLamports = Math.round(
-              stake * SOL_PER_UNIT * LAMPORTS_PER_SOL,
-            );
+            const stakeBaseUnits = baseUnitsFromUsd(stake);
             odds[m.id] = {
-              oddsYes: chain.quoteBet(om, "Yes", stakeLamports)
+              oddsYes: chain.quoteBet(om, "Yes", stakeBaseUnits)
                 .estimatedMultiple,
-              oddsNo: chain.quoteBet(om, "No", stakeLamports)
+              oddsNo: chain.quoteBet(om, "No", stakeBaseUnits)
                 .estimatedMultiple,
               yesShare: gross > 0 ? (100 * py) / gross : 50,
-              poolSol: gross / LAMPORTS_PER_SOL,
+              poolUsd: usdFromBaseUnits(gross),
             };
           }
         } catch {
@@ -193,11 +190,14 @@ export function useChainBets(
       const onChain = market.onChain;
       if (!enabled || !onChain || !chain.ready || placing) return false;
       const { authority, marketSeed } = onChain;
-      const stakeSol = stakeUnits * SOL_PER_UNIT;
-      const stakeLamports = Math.round(stakeSol * LAMPORTS_PER_SOL);
+      const stakeBaseUnits = baseUnitsFromUsd(stakeUnits);
 
-      if (chain.balanceSol < stakeSol + FEE_HEADROOM_SOL) {
-        setError("Low balance — fund your wallet in the Wallet tab.");
+      if (chain.balanceUsd < stakeUnits) {
+        setError("Low USX balance — fund your wallet in the Wallet tab.");
+        return false;
+      }
+      if (chain.balanceSol < FEE_HEADROOM_SOL) {
+        setError("Low SOL for fees — add a little SOL in the Wallet tab.");
         return false;
       }
       if (betsRef.current.some((b) => b.offChainMarketId === market.id)) {
@@ -240,12 +240,12 @@ export function useChainBets(
         }
 
         const onChainSide: OnChainSide = side === "YES" ? "Yes" : "No";
-        const quote = chain.quoteBet(om, onChainSide, stakeLamports);
+        const quote = chain.quoteBet(om, onChainSide, stakeBaseUnits);
         const res = await chain.placeBetOnChain({
           authority,
           marketSeed,
           side: onChainSide,
-          stakeLamports,
+          stakeLamports: stakeBaseUnits,
         });
 
         setBets((prev) => [
@@ -256,7 +256,7 @@ export function useChainBets(
             offChainMarketId: market.id,
             question: market.question,
             side,
-            stakeSol,
+            stakeUsd: stakeUnits,
             estimatedMultiple: quote.estimatedMultiple,
             betSignature: res.signature,
             betUrl: res.explorerUrl,
