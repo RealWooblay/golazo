@@ -33,47 +33,67 @@ export function PointsLeaderboard({
     );
   }
 
+  // Podium-first: show ONLY the top 3 (gold/silver/bronze), then — if you're not up
+  // there — a divider and just YOUR row with your real rank. Everyone between 3rd and
+  // you, and everyone below you, is skipped. Tight + aspirational, not an endless list.
+  const top3 = players.slice(0, 3);
+  const meIdx = meId ? players.findIndex((p) => p.userId === meId) : -1;
+  const showMeRow = meIdx >= 3; // you exist on the board but below the podium
+
+  const renderRow = (p: PointsPlayer, rank: number) => {
+    const isMe = !!meId && p.userId === meId;
+    const medal = MEDAL[rank - 1]; // gold/silver/bronze for ranks 1-3, undefined otherwise
+    return (
+      <View
+        key={p.userId}
+        style={StyleSheet.flatten([
+          styles.row,
+          compact ? styles.rowCompact : undefined,
+          medal ? { borderColor: medal + "66" } : undefined,
+          isMe ? styles.rowMe : undefined,
+        ])}
+      >
+        <Text
+          style={StyleSheet.flatten([styles.rankNum, medal ? { color: medal } : undefined])}
+          allowFontScaling={false}
+        >
+          {rank <= 3 ? rank : `#${rank}`}
+        </Text>
+
+        <View style={styles.who}>
+          <Text style={styles.name} numberOfLines={1}>
+            {p.name || "Player"}
+          </Text>
+          {isMe ? (
+            <View style={styles.youBadge}>
+              <Text style={styles.youBadgeText}>YOU</Text>
+            </View>
+          ) : null}
+        </View>
+
+        <View style={styles.points}>
+          <AnimatedNumber value={p.balance} format={pts} style={styles.ptsValue} />
+          <Text style={styles.ptsLabel}>PTS</Text>
+        </View>
+      </View>
+    );
+  };
+
   return (
     <View style={styles.wrap}>
-      {players.map((p, i) => {
-        const isMe = !!meId && p.userId === meId;
-        return (
-          <View
-            key={p.userId}
-            style={StyleSheet.flatten([
-              styles.row,
-              compact ? styles.rowCompact : undefined,
-            ])}
-          >
-            <Text style={styles.rankNum} allowFontScaling={false}>
-              {i + 1}
-            </Text>
-
-            <View style={styles.who}>
-              <Text style={styles.name} numberOfLines={1}>
-                {p.name || "Player"}
-              </Text>
-              {isMe ? (
-                <View style={styles.youBadge}>
-                  <Text style={styles.youBadgeText}>YOU</Text>
-                </View>
-              ) : null}
-            </View>
-
-            <View style={styles.points}>
-              <AnimatedNumber
-                value={p.balance}
-                format={pts}
-                style={styles.ptsValue}
-              />
-              <Text style={styles.ptsLabel}>PTS</Text>
-            </View>
-          </View>
-        );
-      })}
+      {top3.map((p, i) => renderRow(p, i + 1))}
+      {showMeRow ? (
+        <>
+          <Text style={styles.divider}>· · ·</Text>
+          {renderRow(players[meIdx]!, meIdx + 1)}
+        </>
+      ) : null}
     </View>
   );
 }
+
+/** Gold / silver / bronze for the podium (ranks 1-3). */
+const MEDAL = ["#FFD23F", "#C8D0DA", "#CD7F32"] as const;
 
 const styles = StyleSheet.create({
   wrap: { gap: spacing.sm },
@@ -103,6 +123,15 @@ const styles = StyleSheet.create({
     borderColor: colors.hairline,
   },
   rowCompact: { paddingVertical: spacing.sm },
+  rowMe: { borderColor: colors.glow.cyanSoft, backgroundColor: colors.alpha.cyan },
+  divider: {
+    ...type.mono,
+    fontSize: 14,
+    color: colors.textFaint,
+    textAlign: "center",
+    letterSpacing: 4,
+    paddingVertical: 2,
+  },
 
   rankNum: {
     ...type.mono,

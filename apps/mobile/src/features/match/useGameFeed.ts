@@ -446,6 +446,23 @@ export function useGameFeed(): GameFeedApi {
       }, delay);
     };
 
+    // DEMO ONLY: a fake-money showcase must ALWAYS resolve YES/NO, never one-sided-VOID. The
+    // bots pick random sides, so a thin market can end up with an empty side → the on-chain
+    // one-sided-void rule (correct for real USX) would refund it, which is what made the demo
+    // "void everything". Seed a tiny amount on BOTH sides at open so the pool is never one-sided.
+    const DEMO_SEED = 8;
+    const seedBothSides = (m: Market) => {
+      engine.placeBet(m.id, "house_yes", "YES", DEMO_SEED);
+      engine.placeBet(m.id, "house_no", "NO", DEMO_SEED);
+    };
+    // Set-pieces are OFF in the live product (feed delay) AND they mis-settle in the sim
+    // (parseGoalSource can't match the sim's goal text → VOID). The demo mirrors live: same
+    // momentum/window markets, never set-pieces.
+    const DEMO_SKIP_KINDS = new Set([
+      "corner", "free_kick", "penalty", "var_check",
+      "goal_from_corner", "goal_from_free_kick", "penalty_scored", "penalty_awarded",
+    ]);
+
     // Engine -> UI: every pool change (bot OR human bet) re-flattens the VM so
     // odds + the split bar move live.
     const offUpdate = engine.on("update", (m) => {
@@ -593,6 +610,7 @@ export function useGameFeed(): GameFeedApi {
         openMarket = m;
         openMarketIdRef.current = m.id;
         lastMomOpenAt = Date.now();
+        seedBothSides(m);
         upsertMarket({ ...toVM(m), subtitle: ev.text });
         bots = runBots(engine, m);
         return;
@@ -600,11 +618,13 @@ export function useGameFeed(): GameFeedApi {
 
       const trigger = triggerFromEvent(ev, ctx);
       if (!trigger) return;
+      if (DEMO_SKIP_KINDS.has(trigger.kind)) return; // demo mirrors live — no set-pieces
       const m = engine.openMarket({
         ...trigger,
         // Tight deadline backup — sim resolves ~1–2s after lock, not 60s.
         resolveWindowMs: trigger.windowMs + 5_000,
       });
+      seedBothSides(m);
       openMarket = m;
       openMarketIdRef.current = m.id;
       const openerSeq =
