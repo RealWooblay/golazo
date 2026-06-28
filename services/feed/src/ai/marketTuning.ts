@@ -63,6 +63,12 @@ export function tierOf(type: FeedEvent['type']): MarketTier | 'ignore' {
 export function clockMinutes(ev: FeedEvent): number | undefined {
   const raw = ev.meta?.clock;
   if (typeof raw !== 'string') return undefined;
+  // No real minute in the string ("HT" / "FT" / "" / "Live") → treat as NO clock, not 0.
+  // parseClockKey returns base 0 for these, which made feedLagMinutes report the FULL match
+  // clock as "lag" — inflating avgFeedLagMin to ~the match minute AND tripping isStalePlay so
+  // clockless openers (commentary corners/free-kicks) got wrongly skipped. The wallclock gate
+  // (ESPN's own timestamp) stays the real freshness signal.
+  if (!/\d/.test(raw)) return undefined;
   const c = parseClockKey(raw);
   return c.base + c.stopp / 100;
 }
