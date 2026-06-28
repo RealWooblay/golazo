@@ -15,6 +15,15 @@ if [ -f "$BUNDLE_ENV" ]; then
     >>"$SECRETS_TMP" 2>/dev/null || true
 fi
 
+# COLD-BUILD MEMORY: this box has ~3.8GB RAM and NO swap; a from-scratch metro build (which the
+# cache wipe below forces so source changes actually ship) OOMs with no buffer — that hard-OOM
+# is what took the site down. Ensure a 1G swapfile exists so a cold build can page instead of
+# being kernel-killed. Idempotent + best-effort: never abort the deploy on swap setup.
+if ! swapon --show 2>/dev/null | grep -q .; then
+  ( fallocate -l 1G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=1024 ) \
+    && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile || true
+fi
+
 npm install --include=dev
 npm run build --workspace @golazo/core
 
@@ -92,6 +101,7 @@ rm -rf node_modules/.cache /opt/golazo/node_modules/.cache \
        /tmp/metro-* /tmp/haste-map-* /tmp/metro-cache \
        "${TMPDIR:-/tmp}/metro-"* "${TMPDIR:-/tmp}/haste-map-"* 2>/dev/null || true
 if [ -n "$GOLAZO_DOMAIN" ]; then
+    NODE_OPTIONS=--max-old-space-size=3072 \
     EXPO_USE_METRO_WORKSPACE_ROOT=1 \
     EXPO_PUBLIC_FEED_URL="${FEED_URL}" \
     EXPO_PUBLIC_CHAIN_ENABLED=1 \
@@ -102,6 +112,7 @@ if [ -n "$GOLAZO_DOMAIN" ]; then
     EXPO_PUBLIC_BET_DELAY_MS=5000 \
     npx expo export -p web --clear
   else
+    NODE_OPTIONS=--max-old-space-size=3072 \
     EXPO_USE_METRO_WORKSPACE_ROOT=1 \
     EXPO_PUBLIC_CHAIN_ENABLED=1 \
     EXPO_PUBLIC_SOLANA_CLUSTER=mainnet-beta \
