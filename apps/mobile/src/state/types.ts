@@ -107,6 +107,17 @@ export interface ClosedMarketVM {
   revealedAt?: number;
   /** Short human reason this market was voided/refunded (set only on voids). */
   voidReason?: string;
+  // ── on-chain bet rows (real USX) — present only for chain bets in the session list ──
+  /** Explorer link to the on-chain BET tx (shown as a row "view tx" link). */
+  txUrl?: string;
+  /** Explorer link to the CLAIM tx, once claimed. */
+  claimUrl?: string;
+  /** Resolved on-chain but not yet claimed → the row is tappable to claim (reveal = claim). */
+  claimable?: boolean;
+  /** Claim tx in flight. */
+  claiming?: boolean;
+  /** On-chain bet placed but not yet resolved → render a "waiting" row, no net. */
+  pending?: boolean;
 }
 
 // ── Persisted ledger (Profile screen + history) ──────────────────────────────

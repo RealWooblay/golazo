@@ -28,7 +28,6 @@ import {
 import { resolveTeams } from "@/features/match/teams";
 import { sideDisplayLabel } from "@/features/match/marketMeta";
 import {
-  ChainBetPanel,
   ClosedMarketsList,
   MarketCard,
   RevealCard,
@@ -194,10 +193,48 @@ export default function MatchScreen() {
       });
     }
     for (const m of historicMarkets) byId.set(m.marketId, { ...byId.get(m.marketId), ...m });
+    // On-chain (real USX) bets render IN this session list too — same rows, with a tx link and
+    // tap-to-claim — instead of a separate panel above. Win amount uses the bet-time estimate
+    // (the exact on-chain payout isn't on the bet VM yet); void = refund (0), loss = -stake.
+    for (const cb of chainBets.bets) {
+      const r = cb.resolvedOutcome;
+      const stake = cb.stakeUsd;
+      const won = cb.won === true;
+      const delta = !r
+        ? undefined
+        : r === "VOID"
+          ? 0
+          : won
+            ? stake * (cb.estimatedMultiple - 1)
+            : -stake;
+      byId.set(cb.offChainMarketId, {
+        ...byId.get(cb.offChainMarketId),
+        marketId: cb.offChainMarketId,
+        question: cb.question,
+        outcome: (r ?? "VOID") as ClosedMarketVM["outcome"],
+        oddsYes: 1,
+        oddsNo: 1,
+        poolYes: 0,
+        poolNo: 0,
+        poolTotal: 0,
+        yesShare: 50,
+        settledAt: Date.now(),
+        userSide: cb.side,
+        userStake: stake,
+        userDelta: delta,
+        voidReason: r === "VOID" ? "no one took the other side" : undefined,
+        txUrl: cb.betUrl,
+        claimUrl: cb.claimUrl,
+        claimable: !!cb.claimable && !cb.claimSignature,
+        claiming: !!cb.claiming,
+        pending: !r,
+        revealedAt: Date.now(),
+      });
+    }
     return Array.from(byId.values()).sort(
       (a, b) => (b.revealedAt ?? b.settledAt) - (a.revealedAt ?? a.settledAt),
     );
-  }, [effectiveMode, gameBets, historicMarkets]);
+  }, [effectiveMode, gameBets, historicMarkets, chainBets.bets]);
 
   // ── Win confetti: fire when a reveal is acknowledged as a win ───────────────
   const [confettiTrigger, setConfettiTrigger] = useState(0);
@@ -287,14 +324,11 @@ export default function MatchScreen() {
           </View>
         ) : null}
 
-        {/* On-chain wallet + real-bet receipt (only when chain mode is live). */}
-        {chain.configured ? (
+        {/* On-chain bet errors surface here; the bet receipts themselves now live IN the
+            session list below (same rows, with a tx link + tap-to-claim) — no panel above. */}
+        {chain.configured && chainBets.error ? (
           <View style={styles.gutter}>
-            <ChainBetPanel
-              bets={chainBets.bets}
-              error={chainBets.error}
-              onClaim={chainBets.claim}
-            />
+            <Banner tone="danger" message={chainBets.error} />
           </View>
         ) : null}
 
@@ -473,6 +507,7 @@ export default function MatchScreen() {
             markets={sessionMarkets}
             userBets={gameBets}
             catchingUp={catchingUp}
+            onClaim={chainBets.claim}
           />
         </View>
       </View>

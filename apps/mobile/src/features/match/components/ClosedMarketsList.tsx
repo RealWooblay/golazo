@@ -1,7 +1,11 @@
 import React, { useMemo } from "react";
-import { StyleSheet, View } from "react-native";
+import { Linking, StyleSheet, View } from "react-native";
 import { colors, spacing, type } from "@/theme";
-import { FlatRow, MiniBadge, MonoStat, Overline, Text } from "@/ui";
+import { FlatRow, MiniBadge, MonoStat, Overline, Pressable, Text } from "@/ui";
+
+const openTx = (url?: string) => {
+  if (url) Linking.openURL(url).catch(() => {});
+};
 import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
 import type { BetRow, ClosedMarketVM } from "@/state/types";
 import { resultBadgeLabel, sideDisplayLabel } from "../marketMeta";
@@ -52,10 +56,13 @@ export function ClosedMarketsList({
   markets,
   userBets = [],
   catchingUp = false,
+  onClaim,
 }: {
   markets: ClosedMarketVM[];
   userBets?: BetRow[];
   catchingUp?: boolean;
+  /** Claim a resolved on-chain bet — tapping a claimable row IS the claim (no button). */
+  onClaim?: (marketId: string) => void;
 }) {
   const { signedFormat } = useDisplayBalance();
   const betByMarket = useMemo(
@@ -92,17 +99,21 @@ export function ClosedMarketsList({
       <View style={styles.list}>
         {markets.map((m) => {
           const bet = betByMarket.get(m.marketId);
-          const result = userResult(m, bet);
-          const badge = badgeColors(result);
-          const label = resultBadgeLabel(m.outcome, m.kind, m.question);
+          const pending = m.pending === true; // on-chain bet placed, not yet resolved
+          const result = pending ? "none" : userResult(m, bet);
+          const badge = pending ? { bg: colors.cyan, fg: "#04122e" } : badgeColors(result);
+          const label = pending ? "LIVE" : resultBadgeLabel(m.outcome, m.kind, m.question);
           const side = m.userSide ?? bet?.side;
           const sideLabel = side ? sideDisplayLabel(side, m.kind, m.question) : null;
-          const net = sessionNet(m, bet, result);
+          const net = pending ? undefined : sessionNet(m, bet, result);
           const accent =
             result === "won" ? colors.yes : result === "lost" ? colors.no : undefined;
+          const claimable = !!m.claimable && !!onClaim && !m.claiming;
+          // on-chain rows carry a tx link + a claim state (claiming / claimed / tap-to-claim)
+          const hasChainRow = !!(m.txUrl || m.claimUrl || claimable || m.claiming);
 
-          return (
-            <FlatRow key={m.marketId} faint compact accent={accent}>
+          const inner = (
+            <FlatRow faint compact accent={accent}>
               <View style={styles.main}>
                 <Text style={styles.question} numberOfLines={1}>
                   {m.question}
@@ -116,6 +127,27 @@ export function ClosedMarketsList({
                   <Overline size={8.5} style={styles.voidLine}>
                     {m.voidReason}
                   </Overline>
+                ) : null}
+                {hasChainRow ? (
+                  <View style={styles.chainRow}>
+                    {m.txUrl ? (
+                      <Text style={styles.txLink} onPress={() => openTx(m.txUrl)}>
+                        view tx ↗
+                      </Text>
+                    ) : null}
+                    {m.claiming ? (
+                      <Text style={styles.claimHint}>claiming…</Text>
+                    ) : m.claimUrl ? (
+                      <Text
+                        style={[styles.claimHint, { color: colors.gold }]}
+                        onPress={() => openTx(m.claimUrl)}
+                      >
+                        claimed ✓
+                      </Text>
+                    ) : claimable ? (
+                      <Text style={[styles.claimHint, { color: colors.yes }]}>tap to claim →</Text>
+                    ) : null}
+                  </View>
                 ) : null}
               </View>
               <View style={styles.result}>
@@ -135,14 +167,25 @@ export function ClosedMarketsList({
                   }
                   style={styles.net}
                 >
-                  {net !== undefined && result !== "none"
-                    ? result === "void"
-                      ? "void"
-                      : signedFormat(net)
-                    : ""}
+                  {pending
+                    ? "…"
+                    : net !== undefined && result !== "none"
+                      ? result === "void"
+                        ? "void"
+                        : signedFormat(net)
+                      : ""}
                 </MonoStat>
               </View>
             </FlatRow>
+          );
+
+          // A claimable on-chain row IS the claim — tap the row (no separate button).
+          return claimable ? (
+            <Pressable key={m.marketId} onPress={() => onClaim!(m.marketId)} haptic="tap">
+              {inner}
+            </Pressable>
+          ) : (
+            <View key={m.marketId}>{inner}</View>
           );
         })}
       </View>
@@ -164,4 +207,7 @@ const styles = StyleSheet.create({
   result: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
   badgeCol: { minWidth: 46, alignItems: "flex-start" },
   net: { minWidth: 48, textAlign: "right" },
+  chainRow: { flexDirection: "row", gap: spacing.sm, alignItems: "center", marginTop: 2 },
+  txLink: { ...type.caption, fontSize: 10, color: colors.cyan },
+  claimHint: { ...type.caption, fontSize: 10, color: colors.textFaint },
 });
