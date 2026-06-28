@@ -16,6 +16,9 @@ export interface ChainBetVM {
   claimable: boolean;
   resolvedOutcome?: "YES" | "NO" | "VOID";
   won?: boolean;
+  /** Exact payout in USX (human units) once resolved — computed from the final on-chain pools.
+   *  Win row shows realizedUsd − stake; VOID = stake (refund). Absent until resolved. */
+  realizedUsd?: number;
   claiming: boolean;
   claimSignature?: string;
   claimUrl?: string;

@@ -205,7 +205,7 @@ export default function MatchScreen() {
         : r === "VOID"
           ? 0
           : won
-            ? stake * (cb.estimatedMultiple - 1)
+            ? (cb.realizedUsd != null ? cb.realizedUsd - stake : stake * (cb.estimatedMultiple - 1))
             : -stake;
       byId.set(cb.offChainMarketId, {
         ...byId.get(cb.offChainMarketId),

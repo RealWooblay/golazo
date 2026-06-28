@@ -5,12 +5,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { MarketVM } from "@/state/types";
 import { baseUnitsFromUsd, usdFromBaseUnits } from "@/features/chain/config";
+import { net as bpsNet } from "@/features/chain/bps";
 import { holdBeforeChainBet } from "@/features/chain/betHold";
 import type { UseChain } from "@/features/chain/useChain";
 import type { OnChainSide } from "@/features/chain/types";
 import type { ChainBetVM, ChainOdds } from "@/features/match/chainBetTypes";
 
 const CHAIN_TWIN_POLL_MS = 1500;
+/** Minimum real-money bet (USX). Floors out dust bets that cost more in sponsored gas +
+ *  account rent than they stake — a small abuse/UX guard. The real sponsorship-abuse defense
+ *  is the Privy dashboard policy (program allowlist + spend cap + per-wallet rate limit). */
+const MIN_STAKE_USD = 1;
 const CHAIN_TWIN_MAX_WAIT_MS = 45_000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -141,10 +146,27 @@ export function useChainBets(
                 : om.outcome === "No"
                   ? "NO"
                   : b.resolvedOutcome;
+          const won = outcome !== "VOID" && b.side === outcome;
+          // Exact realized payout from the FINAL on-chain pools (the bet is already counted in
+          // the winning pool, so divide by the pool as-is — do NOT add the stake again). VOID =
+          // full refund. This is what the session row shows as the real win/loss, not an estimate.
+          let realizedUsd: number | undefined;
+          if (won) {
+            const winPool = b.side === "YES" ? om.poolYesLamports : om.poolNoLamports;
+            const stakeBase = BigInt(baseUnitsFromUsd(b.stakeUsd));
+            const payoutBase =
+              winPool > 0n
+                ? (stakeBase * bpsNet(om.poolYesLamports, om.poolNoLamports, om.rakeBps)) / winPool
+                : stakeBase;
+            realizedUsd = usdFromBaseUnits(payoutBase);
+          } else if (outcome === "VOID") {
+            realizedUsd = b.stakeUsd;
+          }
           updates[b.offChainMarketId] = {
             claimable: true,
             resolvedOutcome: outcome,
-            won: outcome !== "VOID" && b.side === outcome,
+            won,
+            ...(realizedUsd !== undefined ? { realizedUsd } : {}),
           };
         } catch {
           /* rpc blip */
@@ -191,6 +213,10 @@ export function useChainBets(
       const { authority, marketSeed } = onChain;
       const stakeBaseUnits = baseUnitsFromUsd(stakeUnits);
 
+      if (stakeUnits < MIN_STAKE_USD) {
+        setError(`Minimum bet is $${MIN_STAKE_USD}.`);
+        return false;
+      }
       if (chain.balanceUsd < stakeUnits) {
         setError("Low USX balance — fund your wallet in the Wallet tab.");
         return false;
