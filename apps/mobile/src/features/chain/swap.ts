@@ -3,10 +3,9 @@
  *
  * Turns "the user funded their wallet with whatever (SOL / USDC / an on-ramp
  * payout)" into "the user holds USX, the settlement asset". Quotes + builds the
- * swap on Jupiter's REST API, signs the returned VersionedTransaction with the
- * SAME embedded-wallet signer the rest of the chain layer uses
- * (`ctx.provider.sendAndConfirm`, which routes through the Privy adapter), and
- * confirms it.
+ * swap on Jupiter's REST API, sends the returned VersionedTransaction through
+ * the SAME sponsored Privy sender the rest of the chain layer uses, and confirms
+ * it.
  *
  * HEAVY (pulls @solana/web3.js) — reach it ONLY via a dynamic `import('./swap')`
  * from inside useChain(), exactly like ./client and ./provider, so a screen that
@@ -16,8 +15,7 @@
  *   • no Jupiter route        → throw (never silently burn the input);
  *   • price impact over cap   → throw (USX has depegged before — never swap into
  *                               a bad rate);
- *   • SOL is reserved for fees → we never swap the lamports needed to pay for the
- *                               swap itself (+ the USX ATA rent).
+ *   • sponsored sends         → users do not need to keep SOL back for gas.
  */
 
 import "./polyfills";
@@ -37,8 +35,8 @@ const TOKEN_PROGRAM_ID = new PublicKey(
 /** Jupiter free-tier host (no key). Swap to a paid `api.jup.ag` host if rate-limited. */
 const JUPITER_BASE = "https://lite-api.jup.ag/swap/v1";
 
-/** Keep this much SOL back for tx fees + the USX ATA rent — never swap it away. */
-const SOL_FEE_RESERVE_LAMPORTS = 0.012 * LAMPORTS_PER_SOL;
+/** Sponsored sends mean SOL deposits can be converted instead of held back for gas. */
+const SOL_FEE_RESERVE_LAMPORTS = 0;
 /** Below this, a token/SOL balance is dust — not worth a swap's fees. */
 const MIN_SWAP_LAMPORTS = 0.003 * LAMPORTS_PER_SOL;
 /** Reject a swap whose price impact exceeds this (USX depeg / thin-route protection). */
@@ -77,8 +75,8 @@ const labelFor = (mint: string): string =>
 
 /**
  * Enumerate everything in the wallet that is NOT already USX and is worth
- * swapping: real SOL (above the fee reserve) + every positive SPL token balance.
- * The caller swaps each candidate into USX.
+ * swapping: SOL + every positive SPL token balance. The caller swaps each
+ * candidate into USX.
  */
 export async function findSwappableBalances(
   ctx: ChainContext,
@@ -87,7 +85,7 @@ export async function findSwappableBalances(
   const usxMint = ctx.config.usxMint;
   const out: SwapCandidate[] = [];
 
-  // Native SOL minus the fee reserve (we still need SOL to PAY for the swap).
+  // Native SOL. Sponsored sends mean the user does not need to keep a fee reserve.
   const lamports = await ctx.connection.getBalance(owner, "confirmed");
   const swappableSol = lamports - SOL_FEE_RESERVE_LAMPORTS;
   if (swappableSol >= MIN_SWAP_LAMPORTS) {
@@ -162,6 +160,32 @@ async function buildSwapTx(
   return json.swapTransaction;
 }
 
+async function sendSwapTx(
+  ctx: ChainContext,
+  vtx: VersionedTransaction,
+): Promise<string> {
+  if (ctx.wallet.sendSponsored) {
+    try {
+      const signature = await ctx.wallet.sendSponsored(
+        Uint8Array.from(vtx.serialize()),
+      );
+      await ctx.connection.confirmTransaction(signature, "confirmed");
+      return signature;
+    } catch (e) {
+      // Same graceful degrade as bets: sponsorship validates pre-broadcast, so fall back to a
+      // self-paid send rather than hard-failing the deposit's auto-convert.
+      console.warn("[chain] sponsored swap failed, falling back to self-paid:", e);
+      try {
+        return await ctx.provider.sendAndConfirm(vtx);
+      } catch (e2) {
+        console.warn("[chain] self-paid swap fallback failed:", e2);
+        throw new Error("Swap didn't go through. Please try again.");
+      }
+    }
+  }
+  return ctx.provider.sendAndConfirm(vtx);
+}
+
 /**
  * Swap `amount` raw base units of `inputMint` into USX. Quotes (guarding route +
  * price impact), builds, signs with the embedded wallet, sends + confirms.
@@ -181,8 +205,7 @@ export async function swapToUsx(
   const vtx = VersionedTransaction.deserialize(
     Uint8Array.from(Buffer.from(swapB64, "base64")),
   );
-  // sendAndConfirm signs via the embedded-wallet adapter (Privy on web), sends + confirms.
-  const signature = await ctx.provider.sendAndConfirm(vtx);
+  const signature = await sendSwapTx(ctx, vtx);
 
   return {
     signature,

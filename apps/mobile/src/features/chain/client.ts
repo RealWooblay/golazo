@@ -144,9 +144,7 @@ async function sendIxs(
   const tx = new Transaction().add(...ixs);
   // GASLESS path: when the wallet supports sponsored sends (Privy web + native gas
   // sponsorship), Privy pays the Solana fee so the bettor needs NO SOL. We set feePayer +
-  // blockhash so the message serializes (the user is the fee payer in the message; Privy's
-  // sponsor:true rewrites it to its sponsor wallet at send), hand it to Privy, then confirm.
-  // Otherwise fall back to the provider (legacy native keypair pays its own fee).
+  // blockhash so the message serializes, hand it to Privy, then confirm.
   if (ctx.wallet.sendSponsored) {
     try {
       const { blockhash, lastValidBlockHeight } =
@@ -161,12 +159,21 @@ async function sendIxs(
       );
       return { signature, explorerUrl: explorerTxUrl(signature, ctx.config.cluster) };
     } catch (e) {
-      // Sponsorship not enabled / rejected → Privy throws BEFORE broadcasting (it validates
-      // eligibility first), so falling back to a normal bettor-paid send is safe (no double
-      // send). The tx object was never signed here (Privy signs a copy from the bytes), so the
-      // provider can sign + send it fresh below. Keeps betting working even before the Privy
-      // dashboard gas-sponsorship toggle is on (bettor then needs a little SOL).
-      console.warn("[chain] sponsored send failed; falling back to bettor-paid:", e);
+      // Gas sponsorship can fail (dashboard policy off / paymaster unfunded / transient).
+      // Privy validates sponsorship BEFORE broadcast, so the tx never reached the chain —
+      // safe to retry as a normal self-paid send (works for anyone holding a little SOL). A
+      // bet is never lost to a flaky sponsor; we only surface an error if the retry ALSO fails.
+      console.warn("[chain] sponsored send failed, falling back to self-paid:", e);
+      try {
+        const fresh = new Transaction().add(...ixs);
+        const signature = await ctx.provider.sendAndConfirm(fresh, []);
+        return { signature, explorerUrl: explorerTxUrl(signature, ctx.config.cluster) };
+      } catch (e2) {
+        console.warn("[chain] self-paid fallback failed:", e2);
+        throw new Error(
+          "Bet didn't go through. Try again — if your wallet has no SOL for fees, gas sponsorship needs enabling.",
+        );
+      }
     }
   }
   const signature = await ctx.provider.sendAndConfirm(tx, []);

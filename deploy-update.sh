@@ -139,7 +139,15 @@ const server = createServer((req, res) => {
   if (path === '/') path = '/index.html';
   let file = join(root, path);
   if (!existsSync(file) || statSync(file).isDirectory()) file = join(root, 'index.html');
-  res.setHeader('Cache-Control', file.endsWith('index.html') ? 'no-cache' : 'public, max-age=31536000, immutable');
+  // HTML entry points must NEVER be cached: they point to the content-hashed JS bundle, so a
+  // cached index.html keeps an old bundle alive forever (the "demo still voids / sponsored fail"
+  // staleness). no-store (not just no-cache, which the browser can serve without a validator
+  // since we emit no ETag) guarantees every load fetches fresh HTML → latest bundle. Hashed
+  // assets stay immutable (safe — the hash changes when content does).
+  res.setHeader(
+    'Cache-Control',
+    file.endsWith('.html') ? 'no-store, no-cache, must-revalidate' : 'public, max-age=31536000, immutable',
+  );
   res.setHeader('Content-Type', types.get(extname(file)) ?? 'application/octet-stream');
   createReadStream(file).pipe(res);
 });
