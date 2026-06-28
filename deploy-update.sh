@@ -81,8 +81,16 @@ cd /opt/golazo/apps/mobile
 # Clean build: clear dist AND the Metro/expo transform cache. Without the cache
 # wipe, a redeploy can serve a STALE bundle that didn't pick up config/app.json
 # changes (this is what shipped the public RPC + an old program id once).
-rm -rf dist .expo
-rm -rf node_modules/.cache "${TMPDIR:-/tmp}/metro-"* "${TMPDIR:-/tmp}/haste-map-"* 2>/dev/null || true
+rm -rf dist .expo /opt/golazo/.expo
+# Wipe EVERY transform cache, or a redeploy reuses stale output and serves an OLD bundle even
+# though the source changed (confirmed: source on box had the fix, built bundle did not). With
+# EXPO_USE_METRO_WORKSPACE_ROOT the metro + expo caches live at the WORKSPACE root and ~/.expo,
+# not just apps/mobile — clear them all with hardcoded paths (the TMPDIR glob alone was missing
+# /root/.expo and /tmp/metro-cache, which is what kept pinning the bundle).
+rm -rf node_modules/.cache /opt/golazo/node_modules/.cache \
+       "$HOME/.expo" /root/.expo \
+       /tmp/metro-* /tmp/haste-map-* /tmp/metro-cache \
+       "${TMPDIR:-/tmp}/metro-"* "${TMPDIR:-/tmp}/haste-map-"* 2>/dev/null || true
 if [ -n "$GOLAZO_DOMAIN" ]; then
     EXPO_USE_METRO_WORKSPACE_ROOT=1 \
     EXPO_PUBLIC_FEED_URL="${FEED_URL}" \
