@@ -38,6 +38,15 @@ export interface AiWatcherContext {
 }
 
 /**
+ * SET-PIECE MARKETS DISABLED. This watcher ONLY opens real-time MOMENT markets — goal-from-
+ * corner / free-kick, penalty, VAR — which don't work on the ~40s-delayed ESPN feed: the
+ * moment has already happened by the time the market opens, so the wallclock guard voids them.
+ * Disabled until a near-real-time data feed exists. Flip to true to re-enable. (Open-play
+ * volume — momentum/window, counts, which-side, period — comes from other openers, unaffected.)
+ */
+const SET_PIECES_ENABLED = false;
+
+/**
  * Decide whether to open a market for the LATEST event, given recent context.
  * Set-piece → open it from rules (no LLM); anything else → null. Open-play volume
  * now comes from the momentum path, not from here.
@@ -49,6 +58,8 @@ export async function aiTriggerFromEvents(
 ): Promise<MarketTrigger | null> {
   const latest = recentEvents[recentEvents.length - 1];
   if (!latest) return null;
+  // Set-piece / VAR moment markets are off on the delayed feed — see SET_PIECES_ENABLED.
+  if (!SET_PIECES_ENABLED) return null;
 
   const knob = knobFor(latest.type);
   if (!knob) return null; // ignore — not an openable moment
