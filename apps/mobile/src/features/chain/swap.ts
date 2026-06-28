@@ -35,8 +35,11 @@ const TOKEN_PROGRAM_ID = new PublicKey(
 /** Jupiter free-tier host (no key). Swap to a paid `api.jup.ag` host if rate-limited. */
 const JUPITER_BASE = "https://lite-api.jup.ag/swap/v1";
 
-/** Sponsored sends mean SOL deposits can be converted instead of held back for gas. */
-const SOL_FEE_RESERVE_LAMPORTS = 0;
+/** Keep a little SOL back for gas so a bet's self-paid fallback works even when Privy gas
+ *  sponsorship is off/flaky. 0.01 SOL covers the one-time USX token-account rent (~0.002) plus
+ *  ~hundreds of tx fees; the rest of a SOL deposit still converts to USX. (Previously 0 — which
+ *  swapped away ALL SOL and left no gas, so bets failed when sponsorship didn't cover them.) */
+const SOL_FEE_RESERVE_LAMPORTS = Math.round(0.01 * LAMPORTS_PER_SOL);
 /** Below this, a token/SOL balance is dust — not worth a swap's fees. */
 const MIN_SWAP_LAMPORTS = 0.003 * LAMPORTS_PER_SOL;
 /** Reject a swap whose price impact exceeds this (USX depeg / thin-route protection). */
