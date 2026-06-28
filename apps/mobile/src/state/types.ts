@@ -19,8 +19,10 @@ import type { MarketSlot, Outcome, Side } from "@golazo/core";
 /** Which feed the app is running against. */
 export type FeedMode = "offline" | "live";
 
-/** Real money (SOL/play $) vs server-authoritative play points. */
+/** Real money (USX/play $) vs server-authoritative paper points. */
 export type MoneyMode = "real" | "points";
+/** Which balance rail a persisted ledger row belongs to. */
+export type LedgerRail = "cash" | "points" | "usx";
 
 /** Phase of the on-screen market card. */
 export type MarketPhase = "idle" | "open" | "locked" | "resolved";
@@ -133,6 +135,8 @@ export type TransactionStatus = "pending" | "complete" | "failed";
  */
 export interface BetRow {
   kind: "bet";
+  /** Keeps paper, sandbox cash, and real USX stats from being combined. */
+  rail?: LedgerRail;
   id: string; // unique row id
   marketId: string;
   /** The game this bet was on — lets a match screen show only THIS match's run. */
@@ -154,6 +158,8 @@ export interface BetRow {
 /** A money movement (deposit or withdrawal), persisted. */
 export interface TransactionRow {
   kind: "transaction";
+  /** Keeps paper, sandbox cash, and real USX history from being combined. */
+  rail?: LedgerRail;
   id: string;
   type: "deposit" | "withdraw";
   amount: number; // always positive; `delta` carries the sign

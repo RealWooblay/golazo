@@ -535,7 +535,9 @@ export function useGameFeed(): GameFeedApi {
         const m = engine.get(openMarket.id);
         if (m && (m.status === "open" || m.status === "locked")) {
           clearDeadlineTimer();
-          engine.resolve(openMarket.id, "VOID");
+          // Match ended before the window resolved → the thing didn't happen = NO. The demo is a
+          // fake-money showcase and must NEVER void (with seedBothSides this is the last VOID path).
+          engine.resolve(openMarket.id, "NO");
         }
       }
 
@@ -601,8 +603,8 @@ export function useGameFeed(): GameFeedApi {
           slot: "window",
           team: momLeader,
           question: big
-            ? `${teamName} laying siege — to SCORE soon?`
-            : `${teamName} on top — a SHOT this spell?`,
+            ? `${teamName} to score in the next 2 min?`
+            : `${teamName} to have a shot in the next 2 min?`,
           windowMs: 9000,
           trueProb: big ? 0.22 : 0.4,
           resolveWindowMs: 16000,
@@ -1114,6 +1116,7 @@ export function useGameFeed(): GameFeedApi {
     // Profile screen reads the real bet, not the lossy legacy HistoryRow shape.
     const row: BetRow = {
       kind: "bet",
+      rail: pointsMode ? "points" : "cash",
       id: betRowId(),
       marketId: reveal.marketId,
       gameId: game?.gameId, // scope the match "YOUR RUN" rail to this game only

@@ -37,6 +37,7 @@ import { usePointsIdentity } from "@/features/points/usePointsIdentity";
 import { pts } from "@/lib/format";
 import { AccountCard } from "@/features/auth/AccountCard";
 import { useAccount } from "@/features/auth/useAccount";
+import type { LedgerRail } from "@/state/types";
 
 const FILTERS: { value: LedgerFilter; label: string }[] = [
   { value: "all", label: "All" },
@@ -50,8 +51,13 @@ export default function ProfileHub() {
   const store = useStore();
   const hx = store.session.hapticsOn;
 
-  const bal = useDisplayBalance(); // real SOL in chain mode, play $ otherwise
-  const stats = useMemo(() => lifetimeStats(store.bets), [store.bets]);
+  const bal = useDisplayBalance(); // real USX in chain mode, paper points or sandbox cash otherwise
+  const activeRail: LedgerRail = bal.points ? "points" : bal.chain ? "usx" : "cash";
+  const scopedBets = useMemo(
+    () => store.bets.filter((b) => (b.rail ?? "cash") === activeRail),
+    [store.bets, activeRail],
+  );
+  const stats = useMemo(() => lifetimeStats(scopedBets), [scopedBets]);
 
   // Wallet (real-mode on-chain wallet + faucet/withdraw flow).
   const chain = useChain();
@@ -75,9 +81,13 @@ export default function ProfileHub() {
   usePointsLeaderboardSync(true);
 
   const [filter, setFilter] = useState<LedgerFilter>("all");
+  const scopedHistory = useMemo(
+    () => store.history.filter((item) => (item.rail ?? "cash") === activeRail),
+    [store.history, activeRail],
+  );
   const ledger = useMemo(
-    () => filterLedger(store.history, filter),
-    [store.history, filter],
+    () => filterLedger(scopedHistory, filter),
+    [scopedHistory, filter],
   );
   const HISTORY_CAP = 5;
   const visibleLedger = useMemo(() => ledger.slice(0, HISTORY_CAP), [ledger]);
@@ -142,6 +152,8 @@ export default function ProfileHub() {
         name={store.session.displayName ?? ""}
         balance={bal.amount}
         balanceFormat={bal.format}
+        balanceLabel={bal.points ? "Points" : bal.chain ? "USX balance" : "Balance"}
+        signedFormat={bal.signedFormat}
         stats={stats}
         onEditName={openEdit}
       />
@@ -158,7 +170,6 @@ export default function ProfileHub() {
           <ChainWalletHero
             address={chain.address}
             balanceUsd={chain.balanceUsd}
-            balanceSol={chain.balanceSol}
             airdropEnabled={faucetEnabled}
             onFund={fund}
             onWithdraw={openWithdraw}
@@ -282,14 +293,14 @@ export default function ProfileHub() {
           <LinkRow
             glyph=""
             title="Demo match"
-            sub="Offline sim — practice the loop without the live feed"
+            sub="Demo match with paper points"
             onPress={loadDemo}
             hapticsEnabled={hx}
           />
           <LinkRow
             glyph=""
             title="How GOLAZO works"
-            sub="The mechanic in 30 seconds"
+            sub="Market flow and settlement"
             onPress={() => router.push("/how-it-works")}
             hapticsEnabled={hx}
           />

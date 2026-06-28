@@ -21,13 +21,17 @@ export function ProfileHero({
   name,
   balance,
   balanceFormat,
+  balanceLabel = "Balance",
+  signedFormat,
   stats,
   onEditName,
 }: {
   name: string;
   balance: number;
-  /** Formatter for the balance — pts in paper mode, $ or SOL-backed $ otherwise. */
+  /** Formatter for the balance — pts in paper mode, $/USX otherwise. */
   balanceFormat?: (n: number) => string;
+  balanceLabel?: string;
+  signedFormat?: (n: number) => string;
   stats: LifetimeStats;
   onEditName: () => void;
 }) {
@@ -35,7 +39,7 @@ export function ProfileHero({
   const display = name?.trim() || "Player";
   const netPositive = stats.net >= 0;
   const formatAmount = balanceFormat ?? currency.format;
-  const formatSigned = currency.signedFormat;
+  const formatSigned = signedFormat ?? currency.signedFormat;
 
   return (
     <Entrance>
@@ -60,7 +64,7 @@ export function ProfileHero({
             </PressableScale>
             <View style={styles.balanceRow}>
               <Text preset="caption" muted>
-                Balance
+                {balanceLabel}
               </Text>
               <CountUp
                 value={balance}

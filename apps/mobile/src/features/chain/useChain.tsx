@@ -86,7 +86,7 @@ export interface UseChain {
 
   /** Embedded wallet pubkey (base58) once connected — the deposit address. */
   address?: string;
-  /** Native SOL balance — only used to pay transaction fees. */
+  /** Native SOL balance, kept for diagnostics and devnet faucet flows. */
   balanceSol: number;
   balanceLamports: bigint;
   /** USX balance (base units) — the bettable balance. */
@@ -113,8 +113,8 @@ export interface UseChain {
   /** Send SOL out of the embedded wallet to an external address (advanced). */
   withdrawSol: (toAddress: string, sol: number) => Promise<TxResult>;
   /**
-   * Auto-swap EVERYTHING non-USX in the wallet (SOL above the fee reserve + any
-   * SPL token) into USX via Jupiter — the "send anything, get USX" deposit step.
+   * Auto-swap EVERYTHING non-USX in the wallet (SOL + any SPL token) into USX
+   * via Jupiter — the "send anything, get USX" deposit step.
    * Returns a result per successful swap + per-asset failures (never throws on a
    * single bad asset; throws only if nothing was swappable).
    */
@@ -214,7 +214,7 @@ export function ChainProvider({
   const [address, setAddress] = useState<string | undefined>(undefined);
   const [balanceLamports, setBalanceLamports] = useState<bigint>(0n);
   const [balanceSol, setBalanceSol] = useState<number>(0);
-  // USX is the bettable/displayed balance; SOL above is only for tx fees.
+  // USX is the bettable/displayed balance; SOL is diagnostic/devnet-only in the UI.
   const [balanceUsxBaseUnits, setBalanceUsxBaseUnits] = useState<bigint>(0n);
   const [balanceUsd, setBalanceUsd] = useState<number>(0);
 

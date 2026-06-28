@@ -221,9 +221,8 @@ export function useChainBets(
         setError("Low USX balance — fund your wallet in the Wallet tab.");
         return false;
       }
-      // No SOL pre-check: bets are sent GASLESS via Privy native gas sponsorship (Privy pays
-      // the fee), so a bettor never needs SOL. If sponsorship is misconfigured the on-chain
-      // send surfaces the real error rather than us pre-blocking on a balance we don't require.
+      // No SOL pre-check: bets are sent through Privy native gas sponsorship, so
+      // a bettor never needs SOL.
       if (betsRef.current.some((b) => b.offChainMarketId === market.id)) {
         setError("One on-chain bet per market.");
         return false;

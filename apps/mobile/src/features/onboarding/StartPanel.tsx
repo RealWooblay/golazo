@@ -7,7 +7,7 @@ import { Button, Text } from "@/ui";
 
 /**
  * StartPanel — frictionless onboarding finish. Paper trade by default: live
- * feed, fake points, global rank — no real money required.
+ * feed, paper points, global rank — no real money required.
  */
 export function StartPanel({
   name,
@@ -27,7 +27,7 @@ export function StartPanel({
             {pts(POINTS_START_BALANCE)}
           </Text>
           <Text style={styles.stackSub}>
-            Live moments · fake points · real leaderboard
+            Live moments · paper points · global rank
           </Text>
         </View>
       </View>
@@ -58,7 +58,7 @@ export function StartPanel({
         haptic="win"
       />
       <Text preset="caption" faint center style={styles.fine}>
-        No real money. Switch to Real mode later for devnet SOL.
+        Start with paper points. Real mode uses USX.
       </Text>
     </View>
   );

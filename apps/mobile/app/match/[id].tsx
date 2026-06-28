@@ -14,7 +14,7 @@ import { colors, spacing, type } from "@/theme";
 import { AnimatedNumber, Banner, Button, Chip, Confetti, MonoStat, Overline, Screen, Text, Toast } from "@/ui";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useStore } from "@/state/store";
-import type { ClosedMarketVM } from "@/state/types";
+import type { BetRow, ClosedMarketVM } from "@/state/types";
 import { bettingClosesAt, bettingSafetyBufferMs, RAKE } from "@/lib/config";
 import { multiple } from "@/lib/format";
 import { useTick } from "@/hooks";
@@ -235,6 +235,44 @@ export default function MatchScreen() {
       (a, b) => (b.revealedAt ?? b.settledAt) - (a.revealedAt ?? a.settledAt),
     );
   }, [effectiveMode, gameBets, historicMarkets, chainBets.bets]);
+
+  useEffect(() => {
+    if (!chainMode) return;
+    for (const cb of chainBets.bets) {
+      const outcome = cb.resolvedOutcome;
+      if (!outcome) continue;
+      const won = outcome !== "VOID" && cb.side === outcome;
+      if ((won || outcome === "VOID") && !cb.claimSignature) continue;
+
+      const id = `bet_chain_${cb.betSignature}`;
+      if (store.bets.some((b) => b.id === id)) continue;
+
+      const stake = cb.stakeUsd;
+      const payout =
+        outcome === "VOID"
+          ? stake
+          : won
+            ? (cb.realizedUsd ?? stake * cb.estimatedMultiple)
+            : 0;
+      const row: BetRow = {
+        kind: "bet",
+        rail: "usx",
+        id,
+        marketId: cb.offChainMarketId,
+        gameId: game?.gameId,
+        label: sideDisplayLabel(cb.side, undefined, cb.question),
+        question: cb.question,
+        side: cb.side,
+        stake,
+        payoutMult: stake > 0 ? payout / stake : 0,
+        outcome,
+        won,
+        delta: outcome === "VOID" ? 0 : won ? payout - stake : -stake,
+        at: Date.now(),
+      };
+      store.addBet(row);
+    }
+  }, [chainMode, chainBets.bets, store.bets, store.addBet, game?.gameId]);
 
   // ── Win confetti: fire when a reveal is acknowledged as a win ───────────────
   const [confettiTrigger, setConfettiTrigger] = useState(0);

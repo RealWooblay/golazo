@@ -12,7 +12,7 @@ import type { MoneyMode } from "@/state/types";
 
 const SEGMENTS: { key: MoneyMode; label: string; sub: string; tint: string }[] = [
   { key: "real", label: "Real", sub: "USX", tint: colors.cyan },
-  { key: "points", label: "Paper", sub: "Fake points", tint: colors.yes },
+  { key: "points", label: "Paper", sub: "Points", tint: colors.yes },
 ];
 
 const TRACK_PAD = 4;

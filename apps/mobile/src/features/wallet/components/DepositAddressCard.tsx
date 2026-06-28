@@ -108,12 +108,11 @@ export function DepositAddressCard({
         <Banner
           tone="info"
           title="Demo deposit"
-          message="This is a sandbox address for the play-money demo. Connect a wallet to deposit real crypto."
+          message="This is a demo address. Connect a wallet to deposit crypto."
         />
       ) : (
         <Text style={[type.caption, styles.hint]}>
-          Send only SOL or SPL tokens on {network}. Funds credit after on-chain
-          confirmation.
+          Send SOL, USDC, or USX on {network}. Supported assets auto-convert to USX.
         </Text>
       )}
     </View>

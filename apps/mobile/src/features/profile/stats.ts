@@ -3,8 +3,8 @@ import type { BetRow, HistoryItem } from "@/state";
 /**
  * PROFILE STATS — pure derivations over the persisted ledger. Kept dependency-free
  * and side-effect-free so the Profile screen just reads them (and they're trivial
- * to unit-test). All money is play-money; a "win" is a settled bet with won=true
- * (a VOID refund counts as neither a win nor a loss).
+ * to unit-test). A "win" is a settled bet with won=true; a VOID refund counts
+ * as neither a win nor a loss.
  */
 
 export interface LifetimeStats {

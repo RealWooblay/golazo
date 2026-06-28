@@ -317,8 +317,7 @@ function RealChainDeposit({
 
         <DepositAddressCard address={chain.address ?? "—"} live network="Solana" />
         <Text style={[type.caption, styles.simulateHint]}>
-          Or send SOL / USDC to that address — it's converted to USX automatically.
-          Keep a little SOL for network fees.
+          SOL, USDC, and USX deposits are accepted. Supported assets auto-convert to USX.
         </Text>
 
         {msg ? (
@@ -432,7 +431,7 @@ function CryptoPath({
             glow
           />
           <Text style={[type.caption, styles.simulateHint]}>
-            Demo the auto-credit without a real transfer
+            Demo credit, no transfer
           </Text>
         </View>
       ) : null}

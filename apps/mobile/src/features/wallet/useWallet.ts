@@ -127,8 +127,7 @@ export function useWallet(): UseWallet {
           kind: "deposit",
           status: "success",
           amount,
-          message:
-            "Finish in the secure payment window — your balance updates on confirmation.",
+          message: "Finish in the secure payment window.",
         });
         hapticIf(hapticsOn, "select");
       } catch (e) {

@@ -156,7 +156,7 @@ export function momentumMarketSpec(
     // TEAMLESS wording: these resolve on EITHER team's shot/corner (ESPN can't reliably attribute
     // open-play shots), so the card must NOT name a team — naming one paid the wrong side.
     const broadLines = [
-      `A shot or corner this spell?`,
+      `A shot or corner next?`,
       `Shot or corner coming?`,
       `A shot or a corner soon?`,
     ];
@@ -171,7 +171,7 @@ export function momentumMarketSpec(
     `A shot coming?`,
     `Shot incoming?`,
     `An effort on goal soon?`,
-    `A chance this spell?`,
+    `A clear chance soon?`,
     `A shot in the next moment?`,
     `Will there be a shot soon?`,
   ];

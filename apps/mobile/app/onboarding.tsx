@@ -52,9 +52,9 @@ const SLIDES: Slide[] = [
   },
   {
     key: "slate",
-    eyebrow: "EVERY MATCH, EVERY MOMENT",
-    title: "Always something live.",
-    body: "A full slate of in-play games, each spinning up fresh markets as the action unfolds. Jump into any of them.",
+    eyebrow: "LIVE MATCH SLATE",
+    title: "Pick a fixture.",
+    body: "Open a live match and take the markets as they appear.",
     scene: <SceneLiveSlate />,
     accent: colors.cyan,
   },

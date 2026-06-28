@@ -33,14 +33,6 @@ function isPlausibleSolanaAddress(addr: string): boolean {
   return BASE58_RE.test(addr.trim());
 }
 
-/**
- * Cashing out sends USX; the network fee (and any one-time recipient-account
- * rent) is paid in SOL from the embedded wallet, SEPARATELY from the USX amount.
- * So the full USX balance is withdrawable — we just require a little SOL on hand
- * to cover the fee + a possible ~0.002 SOL ATA-creation for a first-time recipient.
- */
-const WITHDRAW_FEE_HEADROOM_SOL = 0.003;
-
 /** Local flow snapshot for the LIVE on-chain send (the sandbox path uses
  *  useWallet().flow; this drives the same <FlowStatus> for the real transfer). */
 interface LiveFlow {
@@ -121,17 +113,6 @@ export default function WithdrawModal() {
         status: "error",
         amount: numeric,
         message: "Your wallet isn't connected yet — try again in a moment.",
-      });
-      hapticIf(hapticsOn, "error");
-      return;
-    }
-    // The USX amount isn't reduced for fees — fees are SOL — but the wallet must
-    // hold a little SOL to pay the network fee (+ a first-time recipient ATA).
-    if (chain.balanceSol < WITHDRAW_FEE_HEADROOM_SOL) {
-      setLiveFlow({
-        status: "error",
-        amount: numeric,
-        message: "Add a little SOL to your wallet to cover the network fee.",
       });
       hapticIf(hapticsOn, "error");
       return;
@@ -309,14 +290,13 @@ export default function WithdrawModal() {
         ) : null}
       </View>
 
-      {/* Review summary. Sandbox has no fee (play money); live fees are set by
-          the network at send time — so we don't fabricate a "$0.00". */}
+      {/* Review summary. Live chain sends use the sponsored transaction path. */}
       <View style={styles.review}>
         <ReviewRow label="Amount" value={money(numeric)} />
         <ReviewRow label="To" value="Crypto wallet" />
         <ReviewRow
           label="Fee"
-          value={isLive ? "Network fee" : "$0.00"}
+          value={isLive ? "Sponsored" : "$0.00"}
           accent
         />
         <View style={styles.reviewDivider} />
@@ -339,7 +319,7 @@ export default function WithdrawModal() {
         />
         <Text style={[type.caption, styles.legal]}>
           {isLive
-            ? "Sent on-chain to the address above. Network fees apply."
+            ? "Sent on-chain to the address above."
             : "Demo mode — no real funds move. Debits your play balance."}
         </Text>
       </View>

@@ -3,7 +3,7 @@
 import React from "react";
 import { StyleSheet, View } from "react-native";
 import { useRouter } from "expo-router";
-import { Screen, Text, Card, Banner } from "@/ui";
+import { Screen, Text, Card } from "@/ui";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { colors, spacing } from "@/theme";
 
@@ -52,13 +52,6 @@ export default function HowItWorks() {
           </Card>
         ))}
       </View>
-
-      <Banner
-        tone="info"
-        title="Play money"
-        message="This build runs a simulated match by default. Point it at a live feed from Profile → settings."
-        style={{ marginTop: spacing.lg }}
-      />
     </Screen>
   );
 }

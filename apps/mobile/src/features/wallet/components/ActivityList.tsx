@@ -30,7 +30,7 @@ export function ActivityList({
         <EmptyState
           icon=""
           title="No movements yet"
-          body="Add cash to load up your play balance — it lands instantly."
+          body="Deposits and withdrawals appear here."
           ctaLabel={onAddCash ? "Add cash" : undefined}
           onCta={onAddCash}
         />

@@ -57,8 +57,7 @@ export function EmptyLobby({ onHowItWorks }: { onHowItWorks: () => void }) {
         No match in play
       </Text>
       <Text preset="body" muted center style={styles.emptyBody}>
-        The pitch is quiet right now. When kickoff hits, the next attack opens a
-        market right here.
+        Live markets appear here as matches kick off.
       </Text>
       <PressableScale
         haptic="tap"
@@ -119,8 +118,8 @@ export function NextMatch({
         </View>
       </View>
 
-      <Text style={styles.nextHint} center>
-        Markets open the second it kicks off.
+        <Text style={styles.nextHint} center>
+        Markets open at kickoff.
       </Text>
       <PressableScale
         haptic="tap"
@@ -185,7 +184,7 @@ export function HowItWorksNudge({
       <View style={styles.nudgeText}>
         <Text preset="bodyStrong">New here? How GOLAZO works</Text>
         <Text preset="caption" muted>
-          Bet the play, get paid in seconds — a 60-second read.
+          Market flow and settlement.
         </Text>
       </View>
       <View style={styles.nudgeArrow} />
@@ -217,7 +216,7 @@ export function PracticeCard({
         <Text style={styles.practiceEyebrow}>PRACTICE WHILE YOU WAIT</Text>
         <Text preset="bodyStrong">Run a demo match</Text>
         <Text preset="caption" muted>
-          An offline sim on play money — learn the loop while the slate is quiet.
+          Demo match with paper points.
         </Text>
       </View>
       <Text preset="bodyStrong" color={colors.yes} style={styles.practiceCta}>

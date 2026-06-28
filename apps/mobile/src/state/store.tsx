@@ -343,6 +343,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     ({ amount, method }: DepositArgs): TransactionRow => {
       const row: TransactionRow = {
         kind: "transaction",
+        rail: "cash",
         id: rowId("dep"),
         type: "deposit",
         amount,
@@ -361,6 +362,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     ({ amount, destination }: WithdrawArgs): TransactionRow => {
       const row: TransactionRow = {
         kind: "transaction",
+        rail: "cash",
         id: rowId("wd"),
         type: "withdraw",
         amount,

@@ -1,7 +1,7 @@
 // CHAIN WALLET HERO — the REAL on-chain wallet view for the Wallet tab, shown
 // when on-chain (Live) mode is connected. This is the embedded self-custodial
-// Solana wallet: its real SOL balance, its deposit address (send SOL here to
-// fund — the real on-ramp), a devnet/localnet faucet, and a real withdraw.
+// Solana wallet: its USX balance, its deposit address, a devnet/localnet faucet,
+// and a real withdraw.
 //
 // No play-money here. When chain mode is OFF the Wallet tab shows the play
 // balance instead (WalletHero).
@@ -15,7 +15,6 @@ import { copyToClipboard } from "../platform";
 export function ChainWalletHero({
   address,
   balanceUsd,
-  balanceSol,
   airdropEnabled,
   onFund,
   onWithdraw,
@@ -26,8 +25,6 @@ export function ChainWalletHero({
   address?: string;
   /** USX balance (the bettable balance), shown as the headline dollars. */
   balanceUsd: number;
-  /** Native SOL — only pays tx fees. */
-  balanceSol: number;
   airdropEnabled: boolean;
   onFund: () => void;
   onWithdraw: () => void;
@@ -50,11 +47,9 @@ export function ChainWalletHero({
       <Text style={styles.balance} allowFontScaling={false}>
         {money(balanceUsd)}
       </Text>
-      <Text style={styles.hint}>
-        {balanceSol.toFixed(3)} SOL for fees
-      </Text>
+      <Text style={styles.hint}>USX available for markets</Text>
 
-      {/* Deposit address = the real on-ramp: send SOL here to fund. Shown IN
+      {/* Deposit address = the real on-ramp. Shown IN
           FULL (selectable, wrapping monospace) since this is the address the
           user copies/scans to receive funds — never truncate the receive addr. */}
       <Pressable onPress={copy} style={styles.addrRow} haptic="tap">
@@ -67,7 +62,7 @@ export function ChainWalletHero({
         <Text style={styles.copy}>{copied ? "copied ✓" : "copy"}</Text>
       </Pressable>
       <Text style={styles.hint}>
-        Send USX here to bet — network fees are sponsored.
+        Send SOL, USDC, or USX. Supported assets auto-convert to USX.
       </Text>
 
       <View style={styles.actions}>
@@ -93,7 +88,7 @@ export function ChainWalletHero({
           variant="secondary"
           size="md"
           onPress={onWithdraw}
-          disabled={balanceSol <= 0}
+          disabled={balanceUsd <= 0}
           style={styles.action}
         />
       </View>
