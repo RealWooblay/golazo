@@ -1,6 +1,10 @@
 import { useMemo } from "react";
 import { usePrivy } from "@privy-io/react-auth";
-import { useWallets, useSignTransaction } from "@privy-io/react-auth/solana";
+import {
+  useWallets,
+  useSignTransaction,
+  useSignAndSendTransaction,
+} from "@privy-io/react-auth/solana";
 import type { PrivySignerState } from "./provider";
 
 /**
@@ -22,6 +26,7 @@ export function usePrivyChainSigner(): PrivySignerState {
   const { authenticated, ready: privyReady } = usePrivy();
   const { wallets, ready: walletsReady } = useWallets();
   const { signTransaction } = useSignTransaction();
+  const { signAndSendTransaction } = useSignAndSendTransaction();
   const wallet = wallets?.[0];
   const address = wallet?.address;
 
@@ -40,7 +45,28 @@ export function usePrivyChainSigner(): PrivySignerState {
           });
           return signedTransaction;
         },
+        // GASLESS: sign + send with Privy paying the Solana fee (native gas
+        // sponsorship, sponsor:true) so a bettor never needs SOL. Returns the raw
+        // signature bytes; provider.ts base58-encodes it. Requires gas sponsorship
+        // enabled in the Privy dashboard; if it's off, Privy errors and the caller
+        // surfaces it (we don't silently charge the user).
+        sendSponsored: async (txBytes) => {
+          const { signature } = await signAndSendTransaction({
+            transaction: txBytes,
+            wallet,
+            options: { sponsor: true },
+          });
+          return signature;
+        },
       },
     };
-  }, [privyReady, authenticated, walletsReady, wallet, address, signTransaction]);
+  }, [
+    privyReady,
+    authenticated,
+    walletsReady,
+    wallet,
+    address,
+    signTransaction,
+    signAndSendTransaction,
+  ]);
 }

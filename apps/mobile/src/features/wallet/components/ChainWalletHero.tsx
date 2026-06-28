@@ -67,7 +67,7 @@ export function ChainWalletHero({
         <Text style={styles.copy}>{copied ? "copied ✓" : "copy"}</Text>
       </Pressable>
       <Text style={styles.hint}>
-        Send USX here to bet; keep a little SOL for fees.
+        Send USX here to bet — network fees are sponsored.
       </Text>
 
       <View style={styles.actions}>

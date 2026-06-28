@@ -142,6 +142,33 @@ async function sendIxs(
   ixs: TransactionInstruction[],
 ): Promise<TxResult> {
   const tx = new Transaction().add(...ixs);
+  // GASLESS path: when the wallet supports sponsored sends (Privy web + native gas
+  // sponsorship), Privy pays the Solana fee so the bettor needs NO SOL. We set feePayer +
+  // blockhash so the message serializes (the user is the fee payer in the message; Privy's
+  // sponsor:true rewrites it to its sponsor wallet at send), hand it to Privy, then confirm.
+  // Otherwise fall back to the provider (legacy native keypair pays its own fee).
+  if (ctx.wallet.sendSponsored) {
+    try {
+      const { blockhash, lastValidBlockHeight } =
+        await ctx.connection.getLatestBlockhash("confirmed");
+      tx.feePayer = ctx.wallet.publicKey;
+      tx.recentBlockhash = blockhash;
+      const bytes = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
+      const signature = await ctx.wallet.sendSponsored(Uint8Array.from(bytes));
+      await ctx.connection.confirmTransaction(
+        { signature, blockhash, lastValidBlockHeight },
+        "confirmed",
+      );
+      return { signature, explorerUrl: explorerTxUrl(signature, ctx.config.cluster) };
+    } catch (e) {
+      // Sponsorship not enabled / rejected → Privy throws BEFORE broadcasting (it validates
+      // eligibility first), so falling back to a normal bettor-paid send is safe (no double
+      // send). The tx object was never signed here (Privy signs a copy from the bytes), so the
+      // provider can sign + send it fresh below. Keeps betting working even before the Privy
+      // dashboard gas-sponsorship toggle is on (bettor then needs a little SOL).
+      console.warn("[chain] sponsored send failed; falling back to bettor-paid:", e);
+    }
+  }
   const signature = await ctx.provider.sendAndConfirm(tx, []);
   return { signature, explorerUrl: explorerTxUrl(signature, ctx.config.cluster) };
 }

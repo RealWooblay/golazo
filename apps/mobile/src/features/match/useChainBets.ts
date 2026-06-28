@@ -10,7 +10,6 @@ import type { UseChain } from "@/features/chain/useChain";
 import type { OnChainSide } from "@/features/chain/types";
 import type { ChainBetVM, ChainOdds } from "@/features/match/chainBetTypes";
 
-const FEE_HEADROOM_SOL = 0.01;
 const CHAIN_TWIN_POLL_MS = 1500;
 const CHAIN_TWIN_MAX_WAIT_MS = 45_000;
 
@@ -196,10 +195,9 @@ export function useChainBets(
         setError("Low USX balance — fund your wallet in the Wallet tab.");
         return false;
       }
-      if (chain.balanceSol < FEE_HEADROOM_SOL) {
-        setError("Low SOL for fees — add a little SOL in the Wallet tab.");
-        return false;
-      }
+      // No SOL pre-check: bets are sent GASLESS via Privy native gas sponsorship (Privy pays
+      // the fee), so a bettor never needs SOL. If sponsorship is misconfigured the on-chain
+      // send surfaces the real error rather than us pre-blocking on a balance we don't require.
       if (betsRef.current.some((b) => b.offChainMarketId === market.id)) {
         setError("One on-chain bet per market.");
         return false;

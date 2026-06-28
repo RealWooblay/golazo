@@ -29,6 +29,7 @@ import {
   type Idl,
   type Wallet,
   setProvider,
+  utils,
 } from "@coral-xyz/anchor";
 import {
   Connection,
@@ -70,6 +71,12 @@ export interface ChainSigner {
   /** base58 pubkey — the deposit address shown in the UI. */
   address: string;
   anchorWallet: AnchorWalletLike;
+  /**
+   * When present (Privy web + gas sponsorship), send a serialized tx GASLESSLY —
+   * Privy pays the Solana fee, the bettor needs no SOL. Returns the base58 signature.
+   * Absent on the legacy native keypair (which pays its own fee via the provider).
+   */
+  sendSponsored?: (txBytes: Uint8Array) => Promise<string>;
 }
 
 /**
@@ -84,6 +91,8 @@ export interface PrivyRawSigner {
   address: string;
   /** Sign a serialized tx; returns the serialized SIGNED tx. */
   signSerialized: (txBytes: Uint8Array) => Promise<Uint8Array>;
+  /** Gasless: sign + SEND with Privy sponsoring the fee; returns raw signature bytes. */
+  sendSponsored?: (txBytes: Uint8Array) => Promise<Uint8Array>;
 }
 
 /** What the chain layer should bind to, decided by the Privy auth state. */
@@ -123,6 +132,12 @@ function buildPrivySigner(privy: PrivyRawSigner): ChainSigner {
   return {
     publicKey,
     address: privy.address,
+    sendSponsored: privy.sendSponsored
+      ? async (txBytes: Uint8Array) => {
+          const sig = await privy.sendSponsored!(txBytes);
+          return utils.bytes.bs58.encode(Buffer.from(sig));
+        }
+      : undefined,
     anchorWallet: {
       publicKey,
       signTransaction: sign,
