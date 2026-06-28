@@ -171,7 +171,7 @@ async function sendIxs(
       } catch (e2) {
         console.warn("[chain] self-paid fallback failed:", e2);
         throw new Error(
-          "Bet didn't go through. Try again — if your wallet has no SOL for fees, gas sponsorship needs enabling.",
+          "Bet didn't go through. Try again. If your wallet has no SOL for fees, gas sponsorship needs to be on.",
         );
       }
     }

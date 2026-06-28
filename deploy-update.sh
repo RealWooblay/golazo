@@ -87,10 +87,15 @@ DIR=$(grep -E '^AI_DIRECTOR=' /opt/golazo/services/feed/.env 2>/dev/null | tail 
 echo "GOLAZO_ENV enhancer=$([ "$ENH" = 1 ] && [ "$HAS_KEY" = 1 ] && echo on || echo off) director=$([ "$DIR" = 1 ] && [ "$HAS_KEY" = 1 ] && echo on || echo off) key=$([ "$HAS_KEY" = 1 ] && echo set || echo missing)"
 
 cd /opt/golazo/apps/mobile
-# Clean build: clear dist AND the Metro/expo transform cache. Without the cache
-# wipe, a redeploy can serve a STALE bundle that didn't pick up config/app.json
-# changes (this is what shipped the public RPC + an old program id once).
-rm -rf dist .expo /opt/golazo/.expo
+# Prefer a PREBUILT web bundle shipped in the tarball (built on the dev machine, which has the
+# RAM for a cold metro build — this 3.8GB box OOMs on one, which is what took the site down).
+# EXPO_PUBLIC_* are baked at build time, so a shipped dist is served as-is. Only build here if
+# no dist was shipped.
+if [ -d dist ] && [ -n "$(ls -A dist 2>/dev/null)" ]; then
+  echo "[deploy] using prebuilt web bundle from tarball: $(ls dist/_expo/static/js/web/entry-*.js 2>/dev/null | head -1)"
+else
+  echo "[deploy] no prebuilt dist in tarball — building on the box"
+  rm -rf dist .expo /opt/golazo/.expo
 # Wipe EVERY transform cache, or a redeploy reuses stale output and serves an OLD bundle even
 # though the source changed (confirmed: source on box had the fix, built bundle did not). With
 # EXPO_USE_METRO_WORKSPACE_ROOT the metro + expo caches live at the WORKSPACE root and ~/.expo,
@@ -121,6 +126,7 @@ if [ -n "$GOLAZO_DOMAIN" ]; then
     EXPO_PUBLIC_USX_MINT=6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG \
     EXPO_PUBLIC_BET_DELAY_MS=5000 \
     npx expo export -p web --clear
+  fi
 fi
 
 cat >/opt/golazo/static-server.mjs <<'JS'

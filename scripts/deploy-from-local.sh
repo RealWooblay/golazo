@@ -15,7 +15,6 @@ tar -czf "$TARBALL" \
   --exclude='trailer' \
   --exclude='marketing' \
   --exclude='programs/golazo-parimutuel/target/debug' \
-  --exclude='apps/mobile/dist' \
   --exclude='apps/mobile/.expo' \
   --exclude='programs/golazo-parimutuel/deploy-keypair.json' \
   --exclude='programs/golazo-parimutuel/target' \
