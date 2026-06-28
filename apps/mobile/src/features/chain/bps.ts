@@ -46,7 +46,12 @@ export function indicativePayout(
   if (stakeLamports <= 0n) return 0n;
   const after = poolAfterBet(poolYes, poolNo, side, stakeLamports);
   const winningPool = side === "Yes" ? after.yes : after.no;
+  const losingPool = side === "Yes" ? after.no : after.yes;
   if (winningPool <= 0n) return 0n;
+  // One-sided book (no opposing stake) → nothing to win FROM and no rake to take, so it settles
+  // as a 1.0x refund. Quote 1.0x, never the sub-1.0x stake*(1-rake) that applying rake to an empty
+  // book produced ("$1 @ est. 0.94x" on a market that then voids + refunds in full).
+  if (losingPool <= 0n) return stakeLamports;
   return (stakeLamports * net(after.yes, after.no, rakeBps)) / winningPool;
 }
 

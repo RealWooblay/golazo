@@ -42,7 +42,7 @@ function Receipt({
     bet.resolvedOutcome && bet.resolvedOutcome !== "VOID"
       ? `Result: ${bet.resolvedOutcome} · ${bet.won ? "your side won" : "your side lost"}`
       : bet.resolvedOutcome === "VOID"
-        ? "Result: VOID · stake refunded"
+        ? "Result: VOID · refunded — no one took the other side"
         : null;
   return (
     <Surface radius={radius.lg} borderColor={tint} style={styles.receipt}>
