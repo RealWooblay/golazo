@@ -20,14 +20,14 @@ const config = getDefaultConfig(__dirname);
 // `ox/erc8010` cascade like SDK 51 had with disableHierarchicalLookup).
 config.resolver.unstable_enablePackageExports = true;
 
-// Stub Privy's unused EVM / payment integrations → a no-op (metro-empty-stub.js).
-// @privy-io/react-auth statically imports a wide surface of Ethereum-wallet and
-// payment SDKs (x402, permissionless, Coinbase, WalletConnect, Abstract, Base,
-// Stripe). Metro doesn't tree-shake, so it would force-resolve all of them even
-// though GOLAZO only uses email/passkey login + a Solana embedded wallet. Routing
-// them to a proxy stub keeps the EVM stack out of the bundle and those code paths
-// never run for our Solana-only flows. (On SDK 52 the ox/viem resolution is fine
-// thanks to hierarchical lookup, so only these top-level EVM modules need stubbing.)
+// Stub Privy's unused EVM integrations → a no-op (metro-empty-stub.js).
+// @privy-io/react-auth statically imports a wide surface of Ethereum-wallet SDKs
+// (x402, permissionless, Coinbase, WalletConnect, Abstract, Base). Metro doesn't
+// tree-shake, so it would force-resolve all of them even though GOLAZO only uses
+// email/passkey login + a Solana embedded wallet.
+//
+// @stripe/crypto is NOT stubbed — Privy's useFiatOnramp Stripe onramp requires it
+// (peer dependency of @privy-io/react-auth).
 const PRIVY_EVM_STUBS = [
   "x402",
   "permissionless",
@@ -40,7 +40,6 @@ const PRIVY_EVM_STUBS = [
   "@reown",
   "@abstract-foundation/agw-client",
   "@base-org/account",
-  "@stripe/crypto",
 ];
 const emptyStub = path.resolve(__dirname, "metro-empty-stub.js");
 const upstreamResolveRequest = config.resolver.resolveRequest;

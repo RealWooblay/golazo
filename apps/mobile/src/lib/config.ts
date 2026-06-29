@@ -80,7 +80,7 @@ function isPlaceholderFeedUrl(url: string): boolean {
 }
 
 /** Explicit feed URL from env / app.json extra (empty → use the dev fallback). */
-function readFeedUrl(): string | undefined {
+export function readFeedUrl(): string | undefined {
   const fromProcess =
     typeof process !== "undefined"
       ? (process.env?.EXPO_PUBLIC_FEED_URL as string | undefined)
@@ -89,4 +89,49 @@ function readFeedUrl(): string | undefined {
   const extra = (Constants.expoConfig?.extra ?? {}) as Record<string, unknown>;
   const v = extra.FEED_URL;
   return typeof v === "string" && v.trim().length > 0 ? v.trim() : undefined;
+}
+
+/**
+ * Solana JSON-RPC URL for the client. Never embeds a private API key — production
+ * web/native use the feed's `/rpc` proxy on the same host as the WebSocket feed.
+ *
+ * Override with EXPO_PUBLIC_SOLANA_RPC_URL only for local dev (e.g. direct devnet).
+ */
+export function defaultSolanaRpcUrl(): string {
+  const explicit =
+    typeof process !== "undefined"
+      ? (process.env?.EXPO_PUBLIC_SOLANA_RPC_URL as string | undefined)
+      : undefined;
+  if (explicit && explicit.trim().length > 0 && !explicit.includes("api-key=")) {
+    return explicit.trim();
+  }
+
+  // Hosted web — same origin as the static app (Caddy/static-server proxies /rpc).
+  if (typeof window !== "undefined" && window.location?.hostname) {
+    const { protocol, hostname, port } = window.location;
+    const httpProto = protocol === "https:" ? "https:" : "http:";
+    const host =
+      port && port !== "80" && port !== "443"
+        ? `${hostname}:${port}`
+        : hostname;
+    return `${httpProto}//${host}/rpc`;
+  }
+
+  const feed = readFeedUrl();
+  if (feed && !isPlaceholderFeedUrl(feed)) {
+    try {
+      const u = new URL(feed.replace(/^ws/i, "http"));
+      u.protocol = u.protocol === "wss:" ? "https:" : "http:";
+      u.pathname = "/rpc";
+      u.search = "";
+      return u.toString();
+    } catch {
+      /* fall through */
+    }
+  }
+
+  const hostUri =
+    Constants.expoConfig?.hostUri ?? Constants.expoGoConfig?.debuggerHost;
+  const host = hostUri ? hostUri.split(":")[0] : "localhost";
+  return `http://${host}:${WS_DEFAULT_PORT}/rpc`;
 }

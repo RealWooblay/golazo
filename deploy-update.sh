@@ -11,7 +11,7 @@ tar -xzf /opt/golazo.tgz -C /opt/golazo
 BUNDLE_ENV=/opt/golazo/services/feed/.env
 SECRETS_TMP=$(mktemp)
 if [ -f "$BUNDLE_ENV" ]; then
-  grep -E '^(ANTHROPIC_API_KEY|AI_MODEL|AI_TIMEOUT_MS|AI_RESOLVE_TIMEOUT_MS|MIN_CONFIDENCE)=' "$BUNDLE_ENV" \
+  grep -E '^(ANTHROPIC_API_KEY|SOLANA_RPC_URL|AI_MODEL|AI_TIMEOUT_MS|AI_RESOLVE_TIMEOUT_MS|MIN_CONFIDENCE)=' "$BUNDLE_ENV" \
     >>"$SECRETS_TMP" 2>/dev/null || true
 fi
 
@@ -49,7 +49,8 @@ ESPN_POLL_MS=2500
 ESPN_LEAGUE=fifa.world
 ESPN_COMMENTARY_LANG=dual
 CHAIN_ENABLED=1
-SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=faccc8c2-7e65-4c16-bfc8-c493c721285e
+# SOLANA_RPC_URL — set via services/feed/.env.deploy (Helius key stays server-side).
+# Client uses https://<domain>/rpc (proxied to this URL).
 GOLAZO_PROGRAM_ID=3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM
 USX_MINT=6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG
 OPERATOR_KEYPAIR=./operator-keypair.json
@@ -85,6 +86,13 @@ grep -q '^ANTHROPIC_API_KEY=.' /opt/golazo/services/feed/.env 2>/dev/null && HAS
 ENH=$(grep -E '^AI_ENHANCER=' /opt/golazo/services/feed/.env 2>/dev/null | tail -1 | cut -d= -f2)
 DIR=$(grep -E '^AI_DIRECTOR=' /opt/golazo/services/feed/.env 2>/dev/null | tail -1 | cut -d= -f2)
 echo "GOLAZO_ENV enhancer=$([ "$ENH" = 1 ] && [ "$HAS_KEY" = 1 ] && echo on || echo off) director=$([ "$DIR" = 1 ] && [ "$HAS_KEY" = 1 ] && echo on || echo off) key=$([ "$HAS_KEY" = 1 ] && echo set || echo missing)"
+HAS_RPC=0
+grep -q '^SOLANA_RPC_URL=.' /opt/golazo/services/feed/.env 2>/dev/null && HAS_RPC=1
+echo "GOLAZO_ENV solana_rpc=$([ "$HAS_RPC" = 1 ] && echo configured || echo MISSING)"
+if [ "$HAS_RPC" != 1 ]; then
+  echo "ABORT: SOLANA_RPC_URL missing from feed .env — refusing restart (real-money RPC would break)." >&2
+  exit 1
+fi
 
 cd /opt/golazo/apps/mobile
 # Prefer a PREBUILT web bundle shipped in the tarball (built on the dev machine, which has the
@@ -111,7 +119,6 @@ if [ -n "$GOLAZO_DOMAIN" ]; then
     EXPO_PUBLIC_FEED_URL="${FEED_URL}" \
     EXPO_PUBLIC_CHAIN_ENABLED=1 \
     EXPO_PUBLIC_SOLANA_CLUSTER=mainnet-beta \
-    EXPO_PUBLIC_SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=faccc8c2-7e65-4c16-bfc8-c493c721285e \
     EXPO_PUBLIC_GOLAZO_PROGRAM_ID=3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM \
     EXPO_PUBLIC_USX_MINT=6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG \
     EXPO_PUBLIC_BET_DELAY_MS=5000 \
@@ -121,7 +128,6 @@ if [ -n "$GOLAZO_DOMAIN" ]; then
     EXPO_USE_METRO_WORKSPACE_ROOT=1 \
     EXPO_PUBLIC_CHAIN_ENABLED=1 \
     EXPO_PUBLIC_SOLANA_CLUSTER=mainnet-beta \
-    EXPO_PUBLIC_SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=faccc8c2-7e65-4c16-bfc8-c493c721285e \
     EXPO_PUBLIC_GOLAZO_PROGRAM_ID=3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM \
     EXPO_PUBLIC_USX_MINT=6FrrzDk5mQARGc1TDYoyVnSyRdds1t4PbtohCD6p3tgG \
     EXPO_PUBLIC_BET_DELAY_MS=5000 \
@@ -156,7 +162,7 @@ const types = new Map([
 
 const server = createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
-  if (url.pathname === '/health' || url.pathname === '/metrics' || url.pathname === '/audit' || url.pathname.startsWith('/state')) {
+  if (url.pathname === '/health' || url.pathname === '/metrics' || url.pathname === '/audit' || url.pathname.startsWith('/state') || url.pathname === '/rpc' || url.pathname === '/rpc/') {
     proxy.web(req, res, { target: `http://127.0.0.1:${FEED_PORT}` });
     return;
   }

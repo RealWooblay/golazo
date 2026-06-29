@@ -12,12 +12,12 @@
 // Web-safe: no chain/native lib at module load (address comes via the store
 // contract; ramp/browser/clipboard shims lazy-require behind fallbacks).
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { Platform, StyleSheet, View } from "react-native";
+import { Linking, Platform, StyleSheet, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useStore } from "@/state/store";
 import type { DepositMethod } from "@/state/types";
 import { Screen, Text, Button, Toast } from "@/ui";
-import { colors, spacing, type } from "@/theme";
+import { colors, radius, spacing, type } from "@/theme";
 import { money } from "@/lib/format";
 import {
   AmountInput,
@@ -159,11 +159,6 @@ export default function DepositModal() {
             glow
             disabled={numeric <= 0}
           />
-          <Text style={[type.caption, styles.legal]}>
-            {wallet.isLive
-              ? "Powered by a secure payment provider. You leave the app to complete payment."
-              : "Demo mode — no real charge. Credits your play balance instantly."}
-          </Text>
         </View>
       ) : null}
 
@@ -174,6 +169,23 @@ export default function DepositModal() {
 
 // ── REAL on-chain USX deposit: card on-ramp + one-tap auto-swap to USX ─────────
 type RealStatus = "idle" | "buying" | "waiting" | "converting" | "done" | "error";
+
+/**
+ * Deposit trust checklist — minimal on-chain proof link only.
+ */
+function TrustChecklist({ address, done }: { address?: string; done?: boolean }) {
+  const explorer = address ? `https://solscan.io/account/${address}` : undefined;
+  if (!explorer) return null;
+  return (
+    <Text
+      style={styles.trustProof}
+      onPress={() => Linking.openURL(explorer).catch(() => {})}
+    >
+      {done ? "View on Solscan ↗" : "Verify wallet on Solscan ↗"}
+    </Text>
+  );
+}
+
 
 function RealChainDeposit({
   chain,
@@ -196,6 +208,11 @@ function RealChainDeposit({
   const doneRef = useRef(false);
   const convertingRef = useRef(false);
   const baseSolRef = useRef<number | null>(null);
+  /** USDC balance snapshot at card-purchase start — card payouts are USDC (SOL won't move). */
+  const usdcBaselineRef = useRef<number | null>(null);
+
+  const usdcAmount = (candidates: Awaited<ReturnType<typeof chain.peekSwappable>>) =>
+    candidates.find((c) => c.label === "USDC")?.amount ?? 0;
 
   // Auto-swap whatever non-USX landed → USX. Returns silently while nothing has
   // arrived yet (swapAllToUsx no longer throws on empty), so the poll can keep
@@ -204,22 +221,23 @@ function RealChainDeposit({
     if (convertingRef.current || doneRef.current) return;
     convertingRef.current = true;
     setStatus("converting");
-    setMsg("Converting your deposit to USX…");
+    setMsg("Converting…");
     try {
       const { swapped, failures } = await chainRef.current.convertToUsx();
       if (swapped.length > 0) {
         doneRef.current = true;
         armedRef.current = false;
+        usdcBaselineRef.current = null;
         const usd = swapped.reduce((s, r) => s + r.outUsd, 0);
         setStatus("done");
-        setMsg(`Added ${money(usd)} USX to your balance.`);
+        setMsg(`Added ${money(usd)} USX`);
       } else if (failures.length > 0) {
         setStatus("error");
         setMsg(failures[0].reason);
       } else {
         // Nothing has landed yet — stay armed and keep waiting for the deposit.
         setStatus("waiting");
-        setMsg("Waiting for your deposit to arrive…");
+        setMsg("Waiting…");
       }
     } catch (e) {
       setStatus("error");
@@ -229,27 +247,35 @@ function RealChainDeposit({
     }
   }, []);
 
-  // One poll loop while the screen is open: a deposit (on-ramp payout or a direct
-  // send that grows the balance) auto-converts to USX — no button. Pre-existing
-  // funds are NOT touched: only an INCREASE past the mount baseline arms it.
+  // Poll while waiting: detect USDC (card) or SOL (crypto) deposits → auto-convert.
   useEffect(() => {
     let alive = true;
-    const id = setInterval(async () => {
+    const tick = async () => {
       if (!alive || doneRef.current) return;
-      const info = await chainRef.current.refreshBalance().catch(() => null);
+      const [info, candidates] = await Promise.all([
+        chainRef.current.refreshBalance().catch(() => null),
+        chainRef.current.peekSwappable().catch(() => []),
+      ]);
       const sol = info?.balanceSol;
       if (typeof sol === "number") {
         if (baseSolRef.current === null) baseSolRef.current = sol;
-        else if (sol > baseSolRef.current + 0.0005) armedRef.current = true; // a deposit arrived
+        else if (sol > baseSolRef.current + 0.0005) armedRef.current = true;
         if (sol > (baseSolRef.current ?? 0)) baseSolRef.current = sol;
       }
+      const usdc = usdcAmount(candidates);
+      if (usdcBaselineRef.current !== null && usdc > usdcBaselineRef.current) {
+        armedRef.current = true;
+      }
       if (armedRef.current && !convertingRef.current) await autoConvert();
-    }, 6000);
+    };
+    const ms = status === "waiting" || status === "converting" ? 3000 : 6000;
+    const id = setInterval(() => void tick(), ms);
+    void tick();
     return () => {
       alive = false;
       clearInterval(id);
     };
-  }, [autoConvert]);
+  }, [autoConvert, status]);
 
   const buy = useCallback(
     async (method: "card" | "stripe") => {
@@ -258,19 +284,21 @@ function RealChainDeposit({
       setStatus("buying");
       setMsg(null);
       try {
+        const before = await c.peekSwappable().catch(() => []);
+        usdcBaselineRef.current = usdcAmount(before);
         await onramp.open({
           address: c.address,
           method,
-          // The payout settles async after the widget closes — arm the watcher; it
-          // converts the moment the funds land (no fixed timeout to guess at).
+          // Payout settles async — arm watcher; USDC increase also arms via poll.
           onExit: () => {
             armedRef.current = true;
             doneRef.current = false;
             setStatus("waiting");
-            setMsg("Waiting for your deposit to arrive…");
+            setMsg("Waiting…");
           },
         });
       } catch (e) {
+        usdcBaselineRef.current = null;
         setStatus("error");
         setMsg(e instanceof Error ? e.message : "Couldn't open card funding.");
       }
@@ -287,38 +315,23 @@ function RealChainDeposit({
         onClose={onClose}
       />
       <View style={styles.path}>
-        <Text style={[type.body, styles.cryptoIntro]}>
-          Add funds any way you like — they convert to USX automatically.
-        </Text>
-
         {onramp.supported ? (
-          <Button
-            label="Buy with card"
-            onPress={() => buy("card")}
-            variant="primary"
-            size="lg"
-            fullWidth
-            glow
-            loading={status === "buying"}
-            disabled={busy}
-          />
-        ) : null}
-
-        {onramp.supported && onramp.stripeSupported ? (
-          <Button
-            label="Pay with Stripe"
-            onPress={() => buy("stripe")}
-            variant="secondary"
-            size="lg"
-            fullWidth
-            disabled={busy}
-          />
+          <View style={styles.cardBlock}>
+            <Button
+              label="Add with card"
+              onPress={() => buy("stripe")}
+              variant="primary"
+              size="lg"
+              fullWidth
+              glow
+              loading={status === "buying"}
+              disabled={busy}
+            />
+          </View>
         ) : null}
 
         <DepositAddressCard address={chain.address ?? "—"} live network="Solana" />
-        <Text style={[type.caption, styles.simulateHint]}>
-          SOL, USDC, and USX deposits are accepted. Supported assets auto-convert to USX.
-        </Text>
+        <TrustChecklist address={chain.address ?? undefined} done={status === "done"} />
 
         {msg ? (
           <Text style={[type.caption, status === "error" ? styles.errMsg : styles.okMsg]}>
@@ -338,7 +351,7 @@ function RealChainDeposit({
               void autoConvert();
             }}
           >
-            Already sent funds? Convert to USX
+            Convert to USX
           </Text>
         ) : null}
       </View>
@@ -378,7 +391,6 @@ function CashPath({
         <MethodOption
           icon=""
           title="Debit or credit card"
-          subtitle="Visa · Mastercard · instant"
           tag={demoTag ?? "Instant"}
           tint="cyan"
           selected={method === "card"}
@@ -388,7 +400,6 @@ function CashPath({
           <MethodOption
             icon=""
             title="Apple Pay"
-            subtitle="One-tap checkout"
             tag={demoTag ?? "Fast"}
             tint="yes"
             selected={method === "apple_pay"}
@@ -412,9 +423,6 @@ function CryptoPath({
 }) {
   return (
     <View style={styles.path}>
-      <Text style={[type.body, styles.cryptoIntro]}>
-        Scan with any Solana wallet, or copy your address to send funds.
-      </Text>
       <DepositAddressCard address={address} live={live} network="Solana" />
 
       {!live ? (
@@ -448,17 +456,18 @@ const styles = StyleSheet.create({
   methods: { gap: spacing.sm },
   methodsLabel: { color: colors.textMuted, marginBottom: spacing.xs },
   footer: { marginTop: spacing.xl, gap: spacing.sm },
-  legal: { color: colors.textFaint, textAlign: "center" },
-  cryptoIntro: {
-    color: colors.textMuted,
-    textAlign: "center",
-    paddingHorizontal: spacing.lg,
-  },
+  cardBlock: { gap: spacing.sm, alignItems: "center" },
   simulate: {
     alignItems: "center",
     gap: spacing.sm,
   },
   simulateHint: { color: colors.textFaint, textAlign: "center" },
+  trustProof: {
+    ...type.caption,
+    color: colors.cyan,
+    textAlign: "center",
+    marginTop: spacing.sm,
+  },
   okMsg: { color: colors.yes, textAlign: "center" },
   errMsg: { color: colors.no, textAlign: "center" },
   convertLink: { color: colors.cyan, textAlign: "center", textDecorationLine: "underline" },

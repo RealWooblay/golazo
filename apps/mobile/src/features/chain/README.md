@@ -88,7 +88,7 @@ Env (via `process.env.EXPO_PUBLIC_*`, or `app.json` → `expo.extra`):
 |---|---|---|---|
 | `EXPO_PUBLIC_CHAIN_ENABLED` | `1` / `true` / `yes` | *(off)* | Master switch — required to even *attempt* on-chain mode. |
 | `EXPO_PUBLIC_SOLANA_CLUSTER` | `devnet` / `testnet` / `mainnet-beta` / `localnet` | `devnet` | Picks the default RPC + gates the faucet. |
-| `EXPO_PUBLIC_SOLANA_RPC_URL` | any RPC URL | *(per cluster)* | Override the RPC (e.g. a Helius / QuickNode devnet endpoint). |
+| `EXPO_PUBLIC_SOLANA_RPC_URL` | any RPC URL (no API keys) | *(feed `/rpc` proxy)* | Dev override only. Production mainnet uses `https://<host>/rpc` — the feed proxies to Helius server-side. |
 | `EXPO_PUBLIC_GOLAZO_PROGRAM_ID` | base58 pubkey | *(placeholder)* | The deployed program id. Until set to a real key, `chainConfig.ok === false`. |
 
 Example `.env` for a devnet demo:

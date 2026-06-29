@@ -12,7 +12,7 @@
  *
  * ENV (via `expo-constants` → app.json `extra`, or `process.env.EXPO_PUBLIC_*`):
  *   EXPO_PUBLIC_SOLANA_CLUSTER    'devnet' | 'mainnet-beta' | 'testnet' | 'localnet'
- *   EXPO_PUBLIC_SOLANA_RPC_URL    full RPC URL override (wins over cluster)
+ *   EXPO_PUBLIC_SOLANA_RPC_URL    optional dev override (never put API keys here)
  *   EXPO_PUBLIC_GOLAZO_PROGRAM_ID base58 program id of the deployed program
  *   EXPO_PUBLIC_CHAIN_ENABLED     '1' | 'true' to allow on-chain mode at all
  *
@@ -22,6 +22,7 @@
  */
 
 import Constants from "expo-constants";
+import { defaultSolanaRpcUrl } from "@/lib/config";
 
 export type Cluster = "devnet" | "testnet" | "mainnet-beta" | "localnet";
 
@@ -49,21 +50,13 @@ export const DEPLOYED_PROGRAM_ID =
   "3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM";
 
 /**
- * RPC endpoint per cluster. mainnet-beta defaults to the Helius endpoint, NOT the
- * public api.mainnet-beta.solana.com — the public node rate-limits hard and would
- * choke the Jupiter swap (many getBalance/getTokenAccounts/sendRawTransaction
- * calls). This is the SOURCE OF TRUTH for the mainnet RPC: web reads config via
- * Constants.expoConfig.extra (the dynamic-key process.env path can't be inlined by
- * Metro), so the EXPO_PUBLIC_SOLANA_RPC_URL deploy override is unreliable — baking
- * Helius here guarantees mainnet uses it regardless of env/extra. (Client-exposed
- * RPC key by nature; rotate/domain-restrict for scale.)
+ * Public cluster RPC endpoints (no API keys). Mainnet uses the feed `/rpc`
+ * proxy via {@link defaultSolanaRpcUrl} so Helius/QuickNode keys stay server-side.
  */
-const MAINNET_RPC =
-  "https://mainnet.helius-rpc.com/?api-key=faccc8c2-7e65-4c16-bfc8-c493c721285e";
 const CLUSTER_RPC: Record<Cluster, string> = {
   devnet: "https://api.devnet.solana.com",
   testnet: "https://api.testnet.solana.com",
-  "mainnet-beta": MAINNET_RPC,
+  "mainnet-beta": "https://api.mainnet-beta.solana.com",
   localnet: "http://127.0.0.1:8899",
 };
 
@@ -172,9 +165,16 @@ export interface ChainConfig {
  * Resolve the chain config once at module load. Pure string/enum work — safe to
  * import anywhere. `ok` gates whether `useChain()` will even try to load web3.
  */
+function resolveRpcUrl(cluster: Cluster): string {
+  const explicit = readEnv("SOLANA_RPC_URL");
+  if (explicit && !explicit.includes("api-key=")) return explicit;
+  if (cluster === "mainnet-beta") return defaultSolanaRpcUrl();
+  return CLUSTER_RPC[cluster];
+}
+
 export function resolveChainConfig(): ChainConfig {
   const cluster = readCluster();
-  const rpcUrl = readEnv("SOLANA_RPC_URL") ?? CLUSTER_RPC[cluster];
+  const rpcUrl = resolveRpcUrl(cluster);
   const enabled = readEnabled();
   const programId = readEnv("GOLAZO_PROGRAM_ID") ?? DEPLOYED_PROGRAM_ID;
   const usxMint = readEnv("USX_MINT") ?? DEFAULT_USX_MINT;

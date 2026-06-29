@@ -122,6 +122,10 @@ export interface UseChain {
     swapped: SwapResult[];
     failures: { label: string; reason: string }[];
   }>;
+  /** Read non-USX balances (USDC, SOL, …) without swapping — for deposit detection. */
+  peekSwappable: () => Promise<
+    import("./swap").SwapCandidate[]
+  >;
 
   // betting
   placeBetOnChain: (args: PlaceBetArgs) => Promise<TxResult>;
@@ -476,6 +480,11 @@ export function ChainProvider({
         await refreshBalance();
         return res;
       },
+      peekSwappable: async () => {
+        const { ctx } = requireCtx();
+        const swap = await import("./swap");
+        return swap.findSwappableBalances(ctx);
+      },
 
       placeBetOnChain: async (args: PlaceBetArgs) => {
         const { ctx, client } = requireCtx();
@@ -587,6 +596,7 @@ const INERT_CHAIN: UseChain = {
   withdrawUsx: NOT_READY,
   withdrawSol: NOT_READY,
   convertToUsx: NOT_READY,
+  peekSwappable: NOT_READY,
   placeBetOnChain: NOT_READY,
   claim: NOT_READY,
   quoteBet: NOT_READY,

@@ -21,6 +21,7 @@ import type { ClientMessage, ServerMessage, GameState, Market, MarketEngine, Sid
 import { RoomManager, type RoomEffects } from './rooms';
 import { PointsManager, type PointsEffects } from './points';
 import { canAcceptBetNow } from './betDelay';
+import { handleRpcProxy } from './rpcProxy';
 
 /** Callback the orchestrator supplies to handle an authenticated user bet. */
 export type BetHandler = (msg: Extract<ClientMessage, { t: 'bet' }>) => void;
@@ -67,6 +68,8 @@ export interface ServerDeps {
   betDelayMs?: number;
   /** Disk path for play-money points persistence (balances survive restarts). */
   pointsStorePath?: string;
+  /** Upstream Solana JSON-RPC URL — proxied at POST /rpc (key stays server-side). */
+  solanaRpcUrl?: string;
 }
 
 /** What socket belongs to which room/player (cleaned up on close). */
@@ -510,13 +513,26 @@ export class FeedServer {
     }
   }
 
-  /** GET /health and GET /state; everything else is 404. */
+  /** GET /health, GET /state, POST /rpc (Solana proxy); everything else is 404. */
   private handleHttp(req: IncomingMessage, res: ServerResponse): void {
+    const url = req.url ?? '/';
+    const path = url.split('?')[0] ?? '/';
+
+    if (path === '/rpc' || path === '/rpc/') {
+      const upstream = this.deps.solanaRpcUrl?.trim();
+      if (!upstream) {
+        res.writeHead(503, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'rpc proxy not configured' }));
+        return;
+      }
+      void handleRpcProxy(req, res, upstream);
+      return;
+    }
+
     if (req.method !== 'GET') {
       res.writeHead(405).end();
       return;
     }
-    const url = req.url ?? '/';
     if (url === '/health' || url.startsWith('/health?')) {
       const ops = this.deps.getOps?.();
       res.writeHead(200, { 'content-type': 'application/json' });

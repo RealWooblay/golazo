@@ -1,20 +1,24 @@
 // WEB: Privy fiat on-ramps into the user's embedded Solana wallet.
-//   • method "card"   → MoonPay / Coinbase via useFundWallet (settles SOL/USDC to
-//                       the wallet; onUserExited fires when the widget closes).
-//   • method "stripe" → Privy fiat onramp via useFiatOnramp (delivers USDC).
-// Either payout is then auto-swapped to USX (useChain.convertToUsx / chain/swap).
 //
-// Requires the matching provider enabled in Privy Dashboard → Account Funding.
-// Settlement is async AFTER the flow closes, so callers poll the balance before
-// swapping. (useFiatOnramp is @experimental in @privy-io/react-auth 3.32.1.)
-import { useCallback, useRef } from "react";
+// Card funding goes through Privy's `useFiatOnramp` hook — Stripe Embedded
+// Components (when enabled in Privy Dashboard) plus MoonPay/Coinbase fallbacks.
+// Do NOT use the legacy `useFundWallet` MoonPay path for the primary button; that
+// always opens MoonPay directly.
+//
+// Payout (USDC on Solana) is auto-swapped to USX via useChain.convertToUsx.
+// Requires Account Funding enabled in Privy Dashboard + @stripe/crypto peer dep.
+// Ensure Stripe embedded onramp can dynamic-import its peer dep (Privy loads this at checkout).
+import "@stripe/crypto";
+import { useCallback } from "react";
 import { usePrivy, useFiatOnramp } from "@privy-io/react-auth";
-import { useFundWallet } from "@privy-io/react-auth/solana";
+
+/** Solana mainnet CAIP-2 — matches Privy `useFiatOnramp` docs (`solana:mainnet`). */
+const SOLANA_DEST_CHAIN = "solana:mainnet";
 
 export interface PrivyOnrampOpenOpts {
   address: string;
   amountUsd?: number;
-  /** "card" = MoonPay/Coinbase (useFundWallet); "stripe" = Privy fiat onramp. */
+  /** @deprecated All card flows use Privy fiat onramp now. */
   method?: "card" | "stripe";
   provider?: "moonpay" | "coinbase";
   onExit?: () => void;
@@ -22,59 +26,42 @@ export interface PrivyOnrampOpenOpts {
 
 export interface PrivyOnramp {
   supported: boolean;
-  /** True when the (experimental) Stripe path is present in this Privy build. */
+  /** True when Privy fiat onramp is available (Stripe embedded if dashboard-enabled). */
   stripeSupported: boolean;
   open: (opts: PrivyOnrampOpenOpts) => Promise<void>;
 }
 
 export function usePrivyOnramp(): PrivyOnramp {
   const { authenticated, ready } = usePrivy();
-  const onExitRef = useRef<(() => void) | undefined>(undefined);
-  const { fundWallet } = useFundWallet({
-    onUserExited: () => onExitRef.current?.(),
-  });
-  const fiat = useFiatOnramp();
+  const { fund } = useFiatOnramp();
 
   const open = useCallback(
     async (opts: PrivyOnrampOpenOpts) => {
-      onExitRef.current = opts.onExit;
-
-      if (opts.method === "stripe") {
-        // Stripe → USDC to the wallet. fund() resolves when the flow completes, so
-        // we trigger the swap after it resolves (no onUserExited on this surface).
-        await fiat.fund({
-          source: { assets: ["usd"] },
-          destination: { asset: "USDC", chain: "solana:mainnet", address: opts.address },
-          ...(opts.amountUsd && opts.amountUsd > 0
-            ? { defaultAmount: String(opts.amountUsd) }
-            : {}),
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any);
-        opts.onExit?.();
-        return;
-      }
-
-      // MoonPay / Coinbase straight to the embedded wallet (onUserExited → onExit).
-      await fundWallet({
-        address: opts.address,
-        options: {
-          cluster: { name: "mainnet-beta" },
-          ...(opts.amountUsd && opts.amountUsd > 0
-            ? { amount: String(opts.amountUsd) }
-            : {}),
-          defaultFundingMethod: "card",
-          card: { preferredProvider: opts.provider ?? "moonpay" },
-          uiConfig: { receiveFundsTitle: "Add funds to GOLAZO" },
+      await fund({
+        source: {
+          assets: ["usd"],
+          defaultAsset: "usd",
         },
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } as any);
+        destination: {
+          asset: "usdc",
+          chain: SOLANA_DEST_CHAIN,
+          address: opts.address,
+        },
+        environment: "production",
+        ...(opts.amountUsd && opts.amountUsd > 0
+          ? { defaultAmount: String(opts.amountUsd) }
+          : {}),
+      });
+
+      // Card payout (Stripe/MoonPay) settles USDC async — arm the Jupiter swap watcher.
+      opts.onExit?.();
     },
-    [fundWallet, fiat],
+    [fund],
   );
 
   return {
-    supported: ready && authenticated,
-    stripeSupported: typeof fiat?.fund === "function",
+    supported: ready && authenticated && typeof fund === "function",
+    stripeSupported: typeof fund === "function",
     open,
   };
 }

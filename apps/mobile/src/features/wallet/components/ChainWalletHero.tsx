@@ -47,7 +47,6 @@ export function ChainWalletHero({
       <Text style={styles.balance} allowFontScaling={false}>
         {money(balanceUsd)}
       </Text>
-      <Text style={styles.hint}>USX available for markets</Text>
 
       {/* Deposit address = the real on-ramp. Shown IN
           FULL (selectable, wrapping monospace) since this is the address the
@@ -61,9 +60,6 @@ export function ChainWalletHero({
         </View>
         <Text style={styles.copy}>{copied ? "copied ✓" : "copy"}</Text>
       </Pressable>
-      <Text style={styles.hint}>
-        Send SOL, USDC, or USX. Supported assets auto-convert to USX.
-      </Text>
 
       <View style={styles.actions}>
         {airdropEnabled ? (
@@ -113,7 +109,6 @@ const styles = StyleSheet.create({
   // Full base58 address: monospace, wraps across lines, selectable for copy.
   addr: { ...type.mono, fontSize: 13.5, lineHeight: 19, color: colors.textPrimary, marginTop: 3 },
   copy: { ...type.caption, fontSize: 12, color: colors.yes },
-  hint: { ...type.caption, fontSize: 11, color: colors.textMuted, marginTop: 4 },
   actions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.md },
   action: { flex: 1 },
 });

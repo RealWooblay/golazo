@@ -110,11 +110,7 @@ export function DepositAddressCard({
           title="Demo deposit"
           message="This is a demo address. Connect a wallet to deposit crypto."
         />
-      ) : (
-        <Text style={[type.caption, styles.hint]}>
-          Send SOL, USDC, or USX on {network}. Supported assets auto-convert to USX.
-        </Text>
-      )}
+      ) : null}
     </View>
   );
 }
@@ -144,5 +140,4 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.glow.cyanSoft,
   },
-  hint: { color: colors.textFaint, textAlign: "center" },
 });

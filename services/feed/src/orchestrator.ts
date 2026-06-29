@@ -404,6 +404,7 @@ export class Orchestrator {
       port: config.port,
       engine: this.engine,
       pointsStorePath: this.config.pointsStorePath,
+      solanaRpcUrl: config.solanaRpcUrl,
       getGame: () => this.feed.state(),
       onBet: (msg) => this.handleUserBet(msg),
       onPointsBet: (msg) => this.handlePointsBet(msg),

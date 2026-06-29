@@ -27,6 +27,7 @@ async function main(): Promise<void> {
   console.log(`[golazo/feed]   ws://localhost:${config.port}        (app connects here)`);
   console.log(`[golazo/feed]   http://localhost:${config.port}/health`);
   console.log(`[golazo/feed]   http://localhost:${config.port}/state`);
+  console.log(`[golazo/feed]   http://localhost:${config.port}/rpc   (Solana JSON-RPC proxy)`);
 
   // Graceful shutdown so timers/sockets are released on Ctrl-C / SIGTERM.
   const shutdown = (sig: string) => {
