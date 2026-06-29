@@ -404,7 +404,11 @@ export function useGameFeed(): GameFeedApi {
 
     let cancelled = false;
     const startAt = Date.now();
-    const sim = new SimMatch({ startAt });
+    // FRESH gameId per demo run. SimMatch defaults to the fixed 'sim-arg-fra', which made every
+    // demo reuse the SAME session history — so old bets (incl. voids from before the seed fix)
+    // and an ever-growing W/L count bled into each new session. A unique id scopes the "YOUR
+    // SESSION" rail to THIS run only: clean slate, correct record, no stale voids.
+    const sim = new SimMatch({ startAt, gameId: `sim-${startAt}` });
     const engine = new MarketEngine({ rake: RAKE, baseSeed: BASE_SEED });
     engineRef.current = engine;
     const ctx = {
