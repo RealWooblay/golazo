@@ -18,6 +18,7 @@ import {
 import { sideDisplayLabel } from "./marketMeta";
 import { useStore } from "@/state/store";
 import { usePointsIdentity } from "@/features/points/usePointsIdentity";
+import { rankOnLeaderboard } from "@/features/points/leaderboardRank";
 import { runBots, type BotRunner } from "@/lib/bots";
 import { connectFeed, type FeedSocket } from "@/lib/ws";
 import { BASE_SEED, RAKE, bettingClosesAt } from "@/lib/config";
@@ -891,6 +892,10 @@ export function useGameFeed(): GameFeedApi {
               break;
             case "points_leaderboard":
               store.setPointsLeaderboard(msg.players);
+              {
+                const rank = rankOnLeaderboard(msg.players, pointsId);
+                if (rank > 0) store.setPointsRank(rank);
+              }
               break;
             case "points_market_update":
               setPointsPools((prev) => ({

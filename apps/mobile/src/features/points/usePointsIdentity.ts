@@ -34,7 +34,7 @@ export interface PointsIdentity {
  * Real mode keeps the engine `USER_ID` (real bets settle under it), unchanged.
  */
 export function usePointsIdentity(): PointsIdentity {
-  const { session, wallet } = useStore();
+  const { session } = useStore();
   const account = useAccount();
   const playMode = session.moneyMode === "points";
 
@@ -57,16 +57,9 @@ export function usePointsIdentity(): PointsIdentity {
   }
 
   const userId = playMode ? pointsUserId : USER_ID;
-  const walletShort = wallet.address
-    ? `${wallet.address.slice(0, 4)}…${wallet.address.slice(-4)}`
-    : undefined;
-  // PUBLIC leaderboard name — NEVER the email/phone from `account.handle` (that doxxes the
-  // user). Use a chosen display name, else the truncated wallet address (public, non-PII),
-  // else a stable handle from the account id. The server also sanitizes as a backstop.
-  const idHandle = accountId
-    ? `Player ${accountId.replace(/[^a-zA-Z0-9]/g, "").slice(-4).toUpperCase()}`
-    : undefined;
-  const name = session.displayName || walletShort || idHandle || "Player";
+  // PUBLIC leaderboard name — chosen handle only; default is anonymous "Player".
+  // Never email, phone, or wallet fragments (server sanitizes too).
+  const name = session.displayName?.trim() || "Player";
 
   return {
     userId,

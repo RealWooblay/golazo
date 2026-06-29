@@ -4,24 +4,24 @@ import type { Market } from '@golazo/core';
 import { POINTS_START_BALANCE } from '@golazo/core';
 
 describe('safeDisplayName — leaderboard must never doxx a user', () => {
-  it('replaces an email with a stable anonymous handle', () => {
+  it('replaces an email with the anonymous Player label', () => {
     const out = safeDisplayName('player@example.com', 'acct_did:privy:abcd1234');
     expect(out).not.toContain('@');
-    expect(out).toBe('Player 1234');
+    expect(out).toBe('Player');
   });
   it('catches a long email that would survive truncation', () => {
-    expect(safeDisplayName('a-really-long-personal-email-address@example.com', 'acct_xZ9q')).toBe('Player XZ9Q');
+    expect(safeDisplayName('a-really-long-personal-email-address@example.com', 'acct_xZ9q')).toBe('Player');
   });
   it('replaces a phone number', () => {
-    expect(safeDisplayName('+1 (415) 555-0199', 'acct_wallet9999')).toBe('Player 9999');
+    expect(safeDisplayName('+1 (415) 555-0199', 'acct_wallet9999')).toBe('Player');
   });
   it('lets a real chosen handle through (trimmed, capped, hyphens/spaces kept)', () => {
     expect(safeDisplayName('  Goal-Machine 7  ', 'acct_x')).toBe('Goal-Machine 7');
     expect(safeDisplayName('x'.repeat(40), 'acct_x')).toHaveLength(24);
   });
-  it('derives a handle for empty or bare "Player"', () => {
-    expect(safeDisplayName('', 'acct_AAbb12cd')).toBe('Player 12CD');
-    expect(safeDisplayName('player', 'acct_AAbb12cd')).toBe('Player 12CD');
+  it('uses Player for empty or default handles', () => {
+    expect(safeDisplayName('', 'acct_AAbb12cd')).toBe('Player');
+    expect(safeDisplayName('player', 'acct_AAbb12cd')).toBe('Player');
   });
 });
 
@@ -54,7 +54,7 @@ describe('PointsManager — public leaderboard carries no PII', () => {
     const me = pm.leaderboard().find((p) => p.userId === 'acct_wallet_abcd');
     expect(me).toBeTruthy();
     expect(me!.name).not.toContain('@');
-    expect(me!.name).toBe('Player ABCD');
+    expect(me!.name).toBe('Player');
   });
 });
 

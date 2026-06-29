@@ -100,6 +100,7 @@ type Action =
   | { type: "setMode"; mode: FeedMode }
   | { type: "setMoneyMode"; moneyMode: MoneyMode }
   | { type: "setPointsState"; balance: number; rank: number }
+  | { type: "setPointsRank"; rank: number }
   | { type: "setPointsLeaderboard"; players: PointsPlayer[] }
   | { type: "setName"; name: string }
   | { type: "setWallet"; wallet: Partial<Wallet> }
@@ -151,6 +152,8 @@ function reducer(state: StoreState, action: Action): StoreState {
         pointsBalance: action.balance,
         pointsRank: action.rank,
       };
+    case "setPointsRank":
+      return { ...state, pointsRank: action.rank };
     case "setPointsLeaderboard":
       return { ...state, pointsLeaderboard: action.players };
     case "setName": {
@@ -275,6 +278,7 @@ export interface Store extends StoreState {
   setMode: (mode: FeedMode) => void;
   setMoneyMode: (moneyMode: MoneyMode) => void;
   setPointsState: (balance: number, rank: number) => void;
+  setPointsRank: (rank: number) => void;
   setPointsLeaderboard: (players: PointsPlayer[]) => void;
   setName: (name: string) => void;
   setSession: (session: Partial<Session>) => void;
@@ -419,6 +423,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "setPointsState", balance, rank }),
     [],
   );
+  const setPointsRank = useCallback(
+    (rank: number) => dispatch({ type: "setPointsRank", rank }),
+    [],
+  );
   const setPointsLeaderboard = useCallback(
     (players: PointsPlayer[]) =>
       dispatch({ type: "setPointsLeaderboard", players }),
@@ -472,6 +480,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setMode,
       setMoneyMode,
       setPointsState,
+      setPointsRank,
       setPointsLeaderboard,
       setName,
       setSession,
@@ -495,6 +504,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setMode,
       setMoneyMode,
       setPointsState,
+      setPointsRank,
       setPointsLeaderboard,
       setName,
       setSession,

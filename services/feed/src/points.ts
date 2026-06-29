@@ -29,20 +29,18 @@ import { dirname } from 'node:path';
 /**
  * PUBLIC-SAFE display name for the leaderboard. The board is public, so a name must NEVER
  * leak PII — no emails, no phone numbers, nothing that doxxes a user. A real chosen handle
- * passes through (control chars stripped, length-capped); anything email/phone-shaped, empty,
- * or the bare word "Player" is replaced with a stable, anonymous handle derived from the
- * (opaque) account id. Applied on register (input), on load, AND on leaderboard output, so
- * already-stored PII can never surface. The PII check runs on the FULL string before any
- * truncation — so a long email can't be trimmed past its "@" and slip through.
+ * passes through (control chars stripped, length-capped). Empty, bare "Player", email,
+ * or phone-shaped strings become the anonymous label `Player` — never PII, never wallet
+ * fragments. Applied on register (input), on load, AND on leaderboard output.
  */
-export function safeDisplayName(raw: string | undefined, userId: string): string {
+export function safeDisplayName(raw: string | undefined, _userId: string): string {
   const cleaned = (raw ?? '').replace(/[\x00-\x1f\x7f]/g, '').trim();
   const looksLikeEmail = cleaned.includes('@');
   const looksLikePhone = /(?:\+?\d[\s\-().]*){7,}/.test(cleaned);
-  const isGeneric = cleaned === '' || cleaned.toLowerCase() === 'player';
-  if (!looksLikeEmail && !looksLikePhone && !isGeneric) return cleaned.slice(0, 24);
-  const suffix = userId.replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase() || '0000';
-  return `Player ${suffix}`;
+  if (looksLikeEmail || looksLikePhone || cleaned === '' || cleaned.toLowerCase() === 'player') {
+    return 'Player';
+  }
+  return cleaned.slice(0, 24);
 }
 
 export interface PointsEffects {

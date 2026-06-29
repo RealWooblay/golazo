@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useStore } from "@/state/store";
 import { connectFeed } from "@/lib/ws";
+import { rankOnLeaderboard } from "./leaderboardRank";
 import { usePointsIdentity } from "./usePointsIdentity";
 
 /**
@@ -46,16 +47,16 @@ export function usePointsLeaderboardSync(enabled = true): void {
           if (cancelled) return;
           if (msg.t === "points_leaderboard") {
             store.setPointsLeaderboard(msg.players);
+            const rank = rankOnLeaderboard(msg.players, userId);
+            if (rank > 0) store.setPointsRank(rank);
           }
-          // Seed balance once on first connect; match feed owns live updates so
-          // reconnects here don't snap points back to the server register value.
-          if (
-            !balanceSynced &&
-            msg.t === "points_state" &&
-            msg.userId === userId
-          ) {
-            balanceSynced = true;
-            store.setPointsState(msg.balance, msg.rank);
+          if (msg.t === "points_state" && msg.userId === userId) {
+            if (!balanceSynced) {
+              balanceSynced = true;
+              store.setPointsState(msg.balance, msg.rank);
+            } else {
+              store.setPointsRank(msg.rank);
+            }
           }
         },
       });
