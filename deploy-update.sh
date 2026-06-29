@@ -99,10 +99,17 @@ cd /opt/golazo/apps/mobile
 # RAM for a cold metro build — this 3.8GB box OOMs on one, which is what took the site down).
 # EXPO_PUBLIC_* are baked at build time, so a shipped dist is served as-is. Only build here if
 # no dist was shipped.
-# If dist exists but index.html is missing (stale partial tree), treat as no bundle.
-if [ -f dist/index.html ] && [ -n "$(ls -A dist/_expo/static/js/web/entry-*.js 2>/dev/null)" ]; then
-  echo "[deploy] using prebuilt web bundle from tarball: $(ls dist/_expo/static/js/web/entry-*.js 2>/dev/null | head -1)"
-else
+USE_PREBUILT=0
+if [ -f dist/index.html ]; then
+  ENTRY=$(grep -oE 'entry-[a-f0-9]+\.js' dist/index.html | head -1)
+  if [ -n "$ENTRY" ] && [ -f "dist/_expo/static/js/web/$ENTRY" ]; then
+    USE_PREBUILT=1
+    echo "[deploy] using prebuilt web bundle from tarball: dist/_expo/static/js/web/$ENTRY"
+    # Drop stale hashed bundles from prior deploys (ls entry-*.js | head -1 picked the wrong file).
+    find dist/_expo/static/js/web -maxdepth 1 -name 'entry-*.js' ! -name "$ENTRY" -delete 2>/dev/null || true
+  fi
+fi
+if [ "$USE_PREBUILT" != 1 ]; then
   echo "[deploy] no prebuilt dist in tarball — building on the box"
   rm -rf dist .expo /opt/golazo/.expo
 # Wipe EVERY transform cache, or a redeploy reuses stale output and serves an OLD bundle even
