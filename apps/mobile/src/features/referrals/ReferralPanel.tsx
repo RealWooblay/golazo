@@ -17,12 +17,12 @@ function referralShareUrl(code: string): string {
   return path;
 }
 
-function usx(n: number): string {
-  if (!Number.isFinite(n)) return "0.00 USX";
-  return `${n.toLocaleString(undefined, {
+function usd(n: number): string {
+  if (!Number.isFinite(n)) return "$0.00";
+  return `$${n.toLocaleString(undefined, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
-  })} USX`;
+  })}`;
 }
 
 function compact(n: number): string {
@@ -34,9 +34,9 @@ function EarningsGrid({ summary }: { summary: ReferralSummary }) {
   return (
     <View style={styles.stats}>
       <Stat label="Referred" value={compact(summary.attributedUsers)} />
-      <Stat label="Volume" value={usx(summary.volume)} />
-      <Stat label="Unpaid" value={usx(summary.referrerUnpaid)} tone="gold" />
-      <Stat label="Paid" value={usx(summary.referrerPaid)} />
+      <Stat label="Volume" value={usd(summary.volume)} />
+      <Stat label="Unpaid" value={usd(summary.referrerUnpaid)} tone="gold" />
+      <Stat label="Paid" value={usd(summary.referrerPaid)} />
     </View>
   );
 }
