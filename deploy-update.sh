@@ -99,7 +99,8 @@ cd /opt/golazo/apps/mobile
 # RAM for a cold metro build — this 3.8GB box OOMs on one, which is what took the site down).
 # EXPO_PUBLIC_* are baked at build time, so a shipped dist is served as-is. Only build here if
 # no dist was shipped.
-if [ -d dist ] && [ -n "$(ls -A dist 2>/dev/null)" ]; then
+# If dist exists but index.html is missing (stale partial tree), treat as no bundle.
+if [ -f dist/index.html ] && [ -n "$(ls -A dist/_expo/static/js/web/entry-*.js 2>/dev/null)" ]; then
   echo "[deploy] using prebuilt web bundle from tarball: $(ls dist/_expo/static/js/web/entry-*.js 2>/dev/null | head -1)"
 else
   echo "[deploy] no prebuilt dist in tarball — building on the box"
