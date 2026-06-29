@@ -38,6 +38,7 @@ import { pts } from "@/lib/format";
 import { AccountCard } from "@/features/auth/AccountCard";
 import { useAccount } from "@/features/auth/useAccount";
 import type { LedgerRail } from "@/state/types";
+import { ReferralPanel } from "@/features/referrals/ReferralPanel";
 
 const FILTERS: { value: LedgerFilter; label: string }[] = [
   { value: "all", label: "All" },
@@ -160,6 +161,10 @@ export default function ProfileHub() {
 
       {/* Account — Privy sign-in (recoverable, cross-device wallet) */}
       <AccountCard />
+
+      <View style={styles.section}>
+        <ReferralPanel />
+      </View>
 
       {/* Wallet — on-chain wallet in real mode; add / cash-out in play mode. */}
       <View style={styles.section}>
@@ -293,7 +298,6 @@ export default function ProfileHub() {
           <LinkRow
             glyph=""
             title="Demo match"
-            sub="Demo match with paper points"
             onPress={loadDemo}
             hapticsEnabled={hx}
           />

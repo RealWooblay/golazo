@@ -1,4 +1,9 @@
 import { useAccount } from "@/features/auth/useAccount";
+import {
+  isWalletIdentityReady,
+  resolveAccountId,
+} from "@/features/auth/accountId";
+import { shouldMergeAccountIds } from "@golazo/core";
 import { useStore } from "@/state/store";
 import { USER_ID } from "@/lib/config";
 
@@ -11,6 +16,10 @@ export interface PointsIdentity {
   name: string;
   /** True when the id comes from a signed-in account (stable across devices). */
   fromAccount: boolean;
+  /** True when signed-in users can safely hit public APIs (wallet id ready). */
+  walletReady: boolean;
+  /** Legacy id to merge when upgrading pts_* / acct_did → acct_wallet (one-time). */
+  priorPointsUserId?: string;
 }
 
 /**
@@ -29,19 +38,24 @@ export function usePointsIdentity(): PointsIdentity {
   const account = useAccount();
   const playMode = session.moneyMode === "points";
 
-  // A LEADERBOARD identity (prefixed `acct_`) is anyone with a durable on-chain identity:
-  // a signed-in Privy account OR — since every user has an embedded Solana wallet — the
-  // embedded wallet ADDRESS. That's why the leaderboard wasn't showing anyone on native: the
-  // Privy account hook is a stub there, but the embedded wallet address is available, and it's
-  // a perfectly stable per-user key. Only a truly walletless, anonymous device stays `pts_*`.
-  const accountId =
-    account.enabled && account.authenticated && account.id
-      ? `acct_${account.id}`
-      : wallet.connected && wallet.address
-        ? `acct_${wallet.address}`
-        : null;
+  const accountId = resolveAccountId(account, session.pointsUserId);
+  const walletReady = isWalletIdentityReady(account, accountId);
 
   const pointsUserId = accountId ?? session.pointsUserId ?? "pts_anon";
+
+  let priorPointsUserId: string | undefined;
+  if (accountId && session.activeAccountKey && session.activeAccountKey !== accountId) {
+    if (shouldMergeAccountIds(session.activeAccountKey, accountId)) {
+      priorPointsUserId = session.activeAccountKey;
+    }
+  } else if (
+    accountId &&
+    session.pointsUserId?.startsWith("pts_") &&
+    session.pointsUserId !== accountId
+  ) {
+    priorPointsUserId = session.pointsUserId;
+  }
+
   const userId = playMode ? pointsUserId : USER_ID;
   const walletShort = wallet.address
     ? `${wallet.address.slice(0, 4)}…${wallet.address.slice(-4)}`
@@ -54,5 +68,12 @@ export function usePointsIdentity(): PointsIdentity {
     : undefined;
   const name = session.displayName || walletShort || idHandle || "Player";
 
-  return { userId, pointsUserId, name, fromAccount: accountId !== null };
+  return {
+    userId,
+    pointsUserId,
+    name,
+    fromAccount: accountId !== null && walletReady,
+    walletReady,
+    priorPointsUserId,
+  };
 }

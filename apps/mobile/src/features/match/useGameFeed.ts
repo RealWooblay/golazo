@@ -20,7 +20,7 @@ import { useStore } from "@/state/store";
 import { usePointsIdentity } from "@/features/points/usePointsIdentity";
 import { runBots, type BotRunner } from "@/lib/bots";
 import { connectFeed, type FeedSocket } from "@/lib/ws";
-import { BASE_SEED, RAKE, USER_ID, bettingClosesAt } from "@/lib/config";
+import { BASE_SEED, RAKE, bettingClosesAt } from "@/lib/config";
 import { multiple } from "@/lib/format";
 import type {
   BetRow,
@@ -138,15 +138,12 @@ export function useGameFeed(): GameFeedApi {
   const store = useStore();
   const { mode, liveUrl, session, pointsBalance, pointsRank } = store;
   const pointsMode = session.moneyMode === "points";
-  // Points are a SINGLE cross-mode score. In PAPER mode the points identity is
-  // the device's pointsUserId (its paper-pool player). In REAL mode the points
-  // are credited off the real settlement, which is keyed by the engine USER_ID —
-  // so we join the points system under USER_ID there, and both the leaderboard
-  // and points_settle line up with the real bet's payout userId.
-  // Account-stable points identity (one account = one leaderboard player on
-  // every device). Signed out, this is the device-local id. See usePointsIdentity.
-  const { pointsUserId, name: pointsName } = usePointsIdentity();
-  const pointsId = pointsMode ? pointsUserId : USER_ID;
+  // Account-stable identity: signed-in users key off Privy, wallet users key off
+  // their wallet, and anonymous paper users keep a local points id. Real-money
+  // bets use the same id so referrals, settlement payouts, and points all line up.
+  const { pointsUserId, name: pointsName, priorPointsUserId } = usePointsIdentity();
+  const bettorId = pointsUserId;
+  const pointsId = pointsUserId;
 
   // ---- view-model state (what the screen draws) ----
   const [game, setGame] = useState<GameState | null>(null);
@@ -304,7 +301,7 @@ export function useGameFeed(): GameFeedApi {
       if (!p || p.marketId !== m.id) return null; // user didn't bet this round
       const outcome: Outcome = settlement.outcome;
       const mine = settlement.payouts.find(
-        (x) => x.userId === USER_ID && x.side === p.side,
+        (x) => x.userId === bettorId && x.side === p.side,
       );
       const won = outcome !== "VOID" && !!mine?.won;
       const payout = outcome === "VOID" ? p.stake : (mine?.payout ?? 0);
@@ -321,7 +318,7 @@ export function useGameFeed(): GameFeedApi {
         payout,
       };
     },
-    [],
+    [bettorId],
   );
 
   const netBetDelta = useCallback(
@@ -749,13 +746,14 @@ export function useGameFeed(): GameFeedApi {
           setCatchingUp(true);
           catchingUpRef.current = true;
           setReveals([]);
-          socket.send({ t: "hello", userId: USER_ID });
+          socket.send({ t: "hello", userId: bettorId });
           // Join the points system in BOTH modes so real-mode bettors land on the
           // one global leaderboard and receive points_settle on every real bet.
           socket.send({
             t: "points_hello",
             userId: pointsId,
             name: pointsName,
+            ...(priorPointsUserId ? { priorUserId: priorPointsUserId } : {}),
           });
           setCommentary("Live — waiting for the next moment…");
         },
@@ -842,7 +840,6 @@ export function useGameFeed(): GameFeedApi {
               // in its payouts, so it would patch a WRONG userDelta (e.g. +0 on a win). Points
               // P/L is owned by the dedicated points_settle handler below.
               if (pending && settlement && !pointsMode) {
-                const bettorId = USER_ID;
                 const won =
                   settlement.outcome !== "VOID" &&
                   pending.side === settlement.outcome;
@@ -886,8 +883,8 @@ export function useGameFeed(): GameFeedApi {
               break;
             }
             case "points_state":
-              // Our cross-mode score — keyed by pointsId (pointsUserId in paper,
-              // USER_ID in real), so it updates in both modes.
+              // Our cross-mode score is keyed by the same account/wallet id in
+              // paper and real mode, so it updates in both modes.
               if (msg.userId === pointsId) {
                 store.setPointsState(msg.balance, msg.rank);
               }
@@ -959,7 +956,7 @@ export function useGameFeed(): GameFeedApi {
             }
             case "bet_rejected": {
               const p = pendingByMarketRef.current[msg.marketId];
-              if (msg.userId === USER_ID && p && p.marketId === msg.marketId) {
+              if (msg.userId === bettorId && p && p.marketId === msg.marketId) {
                 store.credit(msg.stake);
                 clearPendingForMarket(msg.marketId);
                 const reason = msg.reason ?? "";
@@ -1004,7 +1001,7 @@ export function useGameFeed(): GameFeedApi {
       liveSocketRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, liveUrl, pointsMode, pointsUserId, pointsName]);
+  }, [mode, liveUrl, pointsMode, pointsUserId, pointsName, priorPointsUserId]);
 
   // ================================================================
   // placeBet — shared by both modes. Odds shown here are indicative only.
@@ -1034,7 +1031,7 @@ export function useGameFeed(): GameFeedApi {
           RAKE,
         ).multiple;
         try {
-          engine.placeBet(m.id, USER_ID, side, stake);
+          engine.placeBet(m.id, bettorId, side, stake);
         } catch {
           return null; // locked between render and tap — reject cleanly
         }
@@ -1071,7 +1068,7 @@ export function useGameFeed(): GameFeedApi {
               marketId: m.id,
               side,
               stake,
-              userId: USER_ID,
+              userId: bettorId,
             }) ?? false);
         if (!sent) {
           clearPendingForMarket(m.id);

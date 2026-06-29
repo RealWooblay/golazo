@@ -14,11 +14,12 @@ export function usePointsLeaderboardSync(enabled = true): void {
   const store = useStore();
   const { liveUrl } = store;
   const identity = usePointsIdentity();
-  const { userId, name } = identity;
+  const { userId, name, priorPointsUserId, walletReady } = identity;
 
   useEffect(() => {
     if (!enabled) return;
     if (!userId) return;
+    if (!walletReady) return;
 
     let cancelled = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
@@ -34,6 +35,7 @@ export function usePointsLeaderboardSync(enabled = true): void {
             t: "points_hello",
             userId,
             name,
+            ...(priorPointsUserId ? { priorUserId: priorPointsUserId } : {}),
           });
         },
         onClose: () => {
@@ -67,5 +69,5 @@ export function usePointsLeaderboardSync(enabled = true): void {
       if (retry) clearTimeout(retry);
       socket?.close();
     };
-  }, [enabled, liveUrl, userId, name, store]);
+  }, [enabled, liveUrl, userId, name, priorPointsUserId, walletReady, store]);
 }

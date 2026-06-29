@@ -33,31 +33,28 @@ describe('tierOf — cost routing (set-piece rules only)', () => {
   });
 });
 
-describe('aiTriggerFromEvents — rules-only set-piece opener', () => {
-  it('SET-PIECE (penalty) opens via rules', async () => {
+describe('aiTriggerFromEvents — delayed-feed launch behavior', () => {
+  it('does not open set-piece markets while SET_PIECES_ENABLED is off', async () => {
     const t = await aiTriggerFromEvents([ev('penalty')], GAME, CTX);
-    expect(t).not.toBeNull();
-    expect(t!.kind).toBe('penalty_scored');
-    expect(t!.question).toMatch(/England/);
+    expect(t).toBeNull();
   });
 
-  it('STRUCTURED keyEvent free_kick in an attacking zone opens instantly', async () => {
+  it('does not open structured free_kick keyEvents while set pieces are disabled', async () => {
     const fk = {
       ...ev('free_kick', 'Free kick in the attacking third.'),
       meta: { source: 'espn.keyEvent' as const },
     };
     const t = await aiTriggerFromEvents([fk], GAME, CTX);
-    expect(t).not.toBeNull();
-    expect(t!.kind).toBe('goal_from_free_kick');
+    expect(t).toBeNull();
   });
 
-  it('STRUCTURED keyEvent corner opens instantly', async () => {
+  it('does not open structured corner keyEvents while set pieces are disabled', async () => {
     const corner = {
       ...ev('corner', 'Corner, England'),
       meta: { source: 'espn.keyEvent' as const },
     };
     const t = await aiTriggerFromEvents([corner], GAME, CTX);
-    expect(t!.kind).toBe('goal_from_corner');
+    expect(t).toBeNull();
   });
 
   it('IGNORE events never open (open-play is no longer an opener here)', async () => {
@@ -75,11 +72,10 @@ describe('aiTriggerFromEvents — rules-only set-piece opener', () => {
     expect(t).toBeNull();
   });
 
-  it('awarded free kick commentary opens instantly (a set piece, no model)', async () => {
+  it('does not open awarded free kick commentary while set pieces are disabled', async () => {
     const fk = ev('free_kick', 'Matheus Cunha (Brazil) wins a free kick in the attacking half.');
     const t = await aiTriggerFromEvents([fk], GAME, CTX);
-    expect(t).not.toBeNull();
-    expect(t!.kind).toBe('goal_from_free_kick');
+    expect(t).toBeNull();
   });
 
   it('post-shot lines never open', async () => {
@@ -97,7 +93,7 @@ describe('aiTriggerFromEvents — rules-only set-piece opener', () => {
     expect(t).toBeNull();
   });
 
-  it('VAR review opens a teamless review market', async () => {
+  it('does not open VAR review markets while set pieces are disabled', async () => {
     const varEv: FeedEvent = {
       gameId: 'g1',
       ts: 0,
@@ -105,7 +101,6 @@ describe('aiTriggerFromEvents — rules-only set-piece opener', () => {
       text: 'VAR check for a possible penalty, handball in the box.',
     };
     const t = await aiTriggerFromEvents([varEv], GAME, CTX);
-    expect(t).not.toBeNull();
-    expect(t!.kind).toBe('penalty_awarded');
+    expect(t).toBeNull();
   });
 });

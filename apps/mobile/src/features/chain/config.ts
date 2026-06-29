@@ -60,6 +60,14 @@ const CLUSTER_RPC: Record<Cluster, string> = {
   localnet: "http://127.0.0.1:8899",
 };
 
+/** Public cluster WebSocket endpoints (signature subscriptions / confirm only). */
+const CLUSTER_WS: Record<Cluster, string> = {
+  devnet: "wss://api.devnet.solana.com",
+  testnet: "wss://api.testnet.solana.com",
+  "mainnet-beta": "wss://api.mainnet-beta.solana.com",
+  localnet: "ws://127.0.0.1:8900",
+};
+
 /** 1 SOL = 1e9 lamports. The unit the program speaks in. */
 export const LAMPORTS_PER_SOL = 1_000_000_000;
 
@@ -170,6 +178,19 @@ function resolveRpcUrl(cluster: Cluster): string {
   if (explicit && !explicit.includes("api-key=")) return explicit;
   if (cluster === "mainnet-beta") return defaultSolanaRpcUrl();
   return CLUSTER_RPC[cluster];
+}
+
+/**
+ * Our feed `/rpc` proxy is HTTP POST only — no WebSocket upgrade. `@solana/web3.js`
+ * otherwise derives `wss://<host>/rpc` and tx confirmation (withdraw, bets) stalls.
+ * When using that proxy, point subscriptions at the public cluster WS instead.
+ */
+export function resolveWsEndpoint(
+  cluster: Cluster,
+  httpRpcUrl: string,
+): string | undefined {
+  if (!httpRpcUrl.includes("/rpc")) return undefined;
+  return CLUSTER_WS[cluster];
 }
 
 export function resolveChainConfig(): ChainConfig {

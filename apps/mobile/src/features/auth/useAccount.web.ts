@@ -14,26 +14,21 @@ function loginLabel(user: ReturnType<typeof usePrivy>["user"]): string | null {
 
 /**
  * WEB account hook — the Privy-backed identity + embedded Solana wallet.
- *
- * Privy gives us social/email/passkey login → a recoverable, self-custodial
- * Solana wallet (no seed phrase). This wraps the raw Privy hooks into the shape
- * the UI consumes. The matching `.ts` file is a disabled stub for native (which
- * would use @privy-io/expo) and for when no app id is configured.
  */
 export function useAccount() {
   const enabled = privyEnabled();
   const { ready, authenticated, user, logout } = usePrivy();
   const { login } = useLogin();
   const { wallets } = useSolanaWallets();
-  const solanaAddress: string | null = wallets?.[0]?.address ?? null;
+  const solanaAddress: string | null =
+    wallets?.find(
+      (w) => w.standardWallet?.features && "privy:" in w.standardWallet.features,
+    )?.address ?? null;
 
   return {
     enabled,
     ready,
     authenticated,
-    // Privy DID — a stable, cross-device account id (same on phone + laptop for
-    // the same login). Used to key the points identity so one account is ONE
-    // leaderboard player everywhere.
     id: user?.id ?? null,
     handle: loginLabel(user),
     solanaAddress,

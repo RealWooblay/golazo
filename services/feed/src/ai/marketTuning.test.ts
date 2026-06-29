@@ -164,12 +164,13 @@ describe('PHASE 6 which-side-next palette', () => {
 });
 
 describe('PHASE 4a HT/FT boundary guard (inWhistleZone)', () => {
-  it('suppresses short play markets ONLY in stoppage of a half', () => {
-    // Regulation play of either half — fine, play continues (no guard).
+  it('suppresses short play markets near the half/full-time whistle', () => {
+    // Normal regulation play — fine, there is enough runway to settle.
     expect(inWhistleZone(game("30'"))).toBe(false);
-    expect(inWhistleZone(game("44'"))).toBe(false);
     expect(inWhistleZone(game("80'"))).toBe(false);
-    // Stoppage of the 1st/2nd half — the whistle is imminent → guard ON.
+    // Late regulation and stoppage — the whistle can cut a short market off.
+    expect(inWhistleZone(game("44'"))).toBe(true);
+    expect(inWhistleZone(game("89'"))).toBe(true);
     expect(inWhistleZone(game("45+2'"))).toBe(true);
     expect(inWhistleZone(game("90+3'"))).toBe(true);
   });

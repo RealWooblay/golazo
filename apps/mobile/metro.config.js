@@ -9,6 +9,7 @@
 // also lets nested deps resolve their own copies correctly (e.g. viem's own ox),
 // which matters for the upcoming Privy integration.
 const path = require("path");
+const fs = require("fs");
 const { getDefaultConfig } = require("expo/metro-config");
 
 const config = getDefaultConfig(__dirname);
@@ -26,24 +27,64 @@ config.resolver.unstable_enablePackageExports = true;
 // tree-shake, so it would force-resolve all of them even though GOLAZO only uses
 // email/passkey login + a Solana embedded wallet.
 //
+// Solana external wallets (Phantom) need @walletconnect/universal-provider +
+// toSolanaWalletConnectors — do NOT stub the whole @walletconnect family. Stub
+// only the ETHEREUM provider + Reown AppKit (tslib/__extends + import.meta via
+// valtio). Force tslib + valtio to their CJS builds below.
+//
 // @stripe/crypto is NOT stubbed — Privy's useFiatOnramp Stripe onramp requires it
 // (peer dependency of @privy-io/react-auth).
 const PRIVY_EVM_STUBS = [
   "x402",
   "permissionless",
   "@coinbase/wallet-sdk",
-  // The whole WalletConnect / Reown (AppKit) stack — external-wallet connectors
-  // we never use (GOLAZO uses Privy's *embedded* Solana wallet). Stubbing the
-  // family also dodges a tslib `__extends` ESM-interop crash that @walletconnect/
-  // time + heartbeat hit under Metro package-exports.
-  "@walletconnect",
+  "@walletconnect/ethereum-provider",
   "@reown",
   "@abstract-foundation/agw-client",
   "@base-org/account",
 ];
 const emptyStub = path.resolve(__dirname, "metro-empty-stub.js");
+const valtioRoot = path.resolve(__dirname, "../../node_modules/valtio");
+
+/** Metro package-exports picks valtio's ESM build (import.meta) — force CJS for web. */
+function resolveValtioCjs(moduleName) {
+  if (moduleName === "valtio") {
+    return path.join(valtioRoot, "index.js");
+  }
+  if (moduleName.startsWith("valtio/")) {
+    const sub = moduleName.slice("valtio/".length);
+    const candidate = path.join(valtioRoot, `${sub}.js`);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** tslib ESM lacks default.__extends — WalletConnect CJS expects tslib.js. */
+function resolveTslibCjs(context, moduleName) {
+  if (moduleName !== "tslib" && !moduleName.startsWith("tslib/")) return null;
+  const originDir = context.originModulePath
+    ? path.dirname(context.originModulePath)
+    : path.resolve(__dirname, "../..");
+  const candidates = [
+    path.join(originDir, "node_modules/tslib/tslib.js"),
+    path.resolve(__dirname, "../../node_modules/tslib/tslib.js"),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
 const upstreamResolveRequest = config.resolver.resolveRequest;
 config.resolver.resolveRequest = (context, moduleName, platform) => {
+  const tslibPath = resolveTslibCjs(context, moduleName);
+  if (tslibPath) {
+    return { type: "sourceFile", filePath: tslibPath };
+  }
+  const valtioPath = resolveValtioCjs(moduleName);
+  if (valtioPath) {
+    return { type: "sourceFile", filePath: valtioPath };
+  }
   if (
     PRIVY_EVM_STUBS.some(
       (m) => moduleName === m || moduleName.startsWith(m + "/"),

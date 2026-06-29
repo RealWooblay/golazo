@@ -39,7 +39,7 @@ import {
   type Commitment,
 } from "@solana/web3.js";
 
-import { chainConfig, type ChainConfig } from "./config";
+import { chainConfig, type ChainConfig, resolveWsEndpoint } from "./config";
 import { IDL } from "./idl/golazo_parimutuel";
 import { EmbeddedWallet } from "./wallet";
 
@@ -200,8 +200,13 @@ export async function buildChainContext(
       ? buildPrivySigner(privySigner)
       : await EmbeddedWallet.loadOrCreate();
 
+    const wsEndpoint = resolveWsEndpoint(
+      chainConfig.cluster,
+      chainConfig.rpcUrl,
+    );
     const connection = new Connection(chainConfig.rpcUrl, {
       commitment: COMMITMENT,
+      ...(wsEndpoint ? { wsEndpoint } : {}),
     });
 
     // AnchorProvider binds the connection + our embedded signer. `skipPreflight`

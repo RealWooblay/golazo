@@ -107,7 +107,7 @@ const MOMENTUM_BET_WINDOW_MS = 8_000;
  * (momentum time-boxed markets are now the main opener path) — this just stops ONE
  * spell printing the same line back-to-back.
  */
-const MOMENTUM_OPEN_COOLDOWN_MS = 8_000;
+const MOMENTUM_OPEN_COOLDOWN_MS = 30_000;
 /**
  * After a team SCORES, suppress its momentum "to SCORE in N min?" market for this long.
  * A score market that pops right after a goal reads as an instant open+shut (and the
@@ -120,12 +120,6 @@ const SCORE_COOLOFF_MS = 25_000;
  * after Sweden scored). Hold all of the scoring team's momentum markets through the restart.
  */
 const GOAL_RESTART_MS = 45_000;
-/**
- * After a goal, a teamless "a goal in the next few minutes?" market reads as nonsense (the
- * game just restarted from the centre circle). Suppress the event-slot goal-window market
- * for this long after ANY goal — rotate to the booking market instead.
- */
-const GOAL_WINDOW_COOLOFF_MS = 60_000;
 /** Per-player FORM tracking (mirrors team momentum, keyed by ESPN athlete id). */
 const PLAYER_DECAY = 0.9; // gentler decay so a player's form survives intervening neutral events
 const PLAYER_HOT_THRESHOLD = 2.5; // a single tagged shot (weight 2.8) now makes a player "hot"
@@ -176,7 +170,17 @@ const SET_PIECE_FRESHNESS_MS = 15_000;
  * volume is unchanged (the slot/cooldown guards already cap concurrency); this only
  * staggers WHEN opens surface, which is most of the "feels clean" perception win.
  */
-const MIN_OPEN_SPACING_MS = 8_000;
+const MIN_OPEN_SPACING_MS = 30_000;
+/** If no new market has reached the board by this age, ask the director/floor for one. */
+const FRESH_BOARD_TARGET_MS = 45_000;
+/** Hard backstop when the AI director is enabled but has no usable proposal. */
+const FRESH_BOARD_FALLBACK_MS = 75_000;
+/** Per-kind cooling so the fallback cannot loop the same card. */
+const FRESH_KIND_COOLDOWN_MS = 150_000;
+/** Keep the match screen dense but not buried in locked strips. */
+const MAX_ACTIVE_MARKETS = 6;
+/** Fresh/director cards wait if this many markets are already bettable. */
+const MAX_OPEN_MARKETS = 2;
 /**
  * Clock-skew tolerance for the anti-arb resolver-taint check. We only treat an event as
  * "happened during betting" (tainted) when its wallclock is more than this before betting
@@ -192,11 +196,7 @@ const RESOLVER_SKEW_GRACE_MS = 1_500;
  */
 const EXPECTED_FEED_LAG_MS = 55_000;
 const MAX_LATE_GOAL_GRACE_MS = 45_000;
-/** EVENT-slot heartbeat: open one teamless card/goal-window market roughly this often. */
-const EVENT_SLOT_INTERVAL_MS = 180_000; // ~3 min
-/** COUNT-slot heartbeat: open one over_corners/over_shots market roughly this often. */
-const COUNT_SLOT_INTERVAL_MS = 240_000; // ~4 min
-/** VERSUS-slot heartbeat: open one which-side-next contest roughly this often. */
+/** Event-driven versus re-arm: do not print the same contest repeatedly inside one spell. */
 const VERSUS_SLOT_INTERVAL_MS = 150_000; // ~2.5 min
 /** Hydration/cooling break can't run longer than this — auto-resume so a missed ESPN
  *  "end delay" marker never freezes the board for the rest of the match. */
@@ -350,14 +350,13 @@ export class Orchestrator {
   private lastPlayerMarketAt = 0;
   /** Wall-clock of the last market that surfaced — drives the FLOW PACING min-gap. */
   private lastOpenReleaseAt = 0;
-  /** Heartbeat (event/count) lane cadence — seeded one interval into the match. */
-  private lastEventSlotOpenAt = 0;
-  private lastCountSlotOpenAt = 0;
-  private eventSlotCounter = 0;
-  private countSlotCounter = 0;
+  /** Per-kind release time — stops the fresh-board floor repeating one card. */
+  private readonly lastKindOpenAt = new Map<string, number>();
+  /** Rotates the fresh-board fallback across safe market families. */
+  private freshBoardCounter = 0;
+  /** Event-driven versus cadence. Timer heartbeats were removed; director controls variety. */
   private lastVersusOpenAt = 0;
   private versusCounter = 0;
-  private heartbeatSeeded = false;
   /** True during a hydration/cooling break — openers + the NO sweep pause. */
   private breakPaused = false;
   /** Wall-clock the current break started (for the MAX_BREAK_MS auto-resume). */
@@ -404,6 +403,9 @@ export class Orchestrator {
       port: config.port,
       engine: this.engine,
       pointsStorePath: this.config.pointsStorePath,
+      referralStorePath: this.config.referralStorePath,
+      referralPayoutBps: this.config.referralPayoutBps,
+      referralAdminToken: this.config.referralAdminToken,
       solanaRpcUrl: config.solanaRpcUrl,
       getGame: () => this.feed.state(),
       onBet: (msg) => this.handleUserBet(msg),
@@ -495,6 +497,7 @@ export class Orchestrator {
     // Director's SLOW proposal generator — its own timer, never on the open path. The opener
     // reads pre-validated proposals synchronously (proposeNext); this just refills the pool.
     if (this.director.active) {
+      void this.director.refresh(Date.now());
       this.directorTimer = setInterval(
         () => void this.director.refresh(Date.now()),
         this.config.aiRefreshMs,
@@ -519,6 +522,17 @@ export class Orchestrator {
   /** Sim/test hook: drive a real-money bet through the live handler (latency-arb guards et al). */
   simBet(marketId: string, userId: string, side: 'YES' | 'NO', stake: number): void {
     this.handleUserBet({ t: 'bet', marketId, userId, side, stake });
+  }
+
+  /** Sim/test hook: open a specific validated market without relying on director cadence. */
+  async simOpenMarket(trigger: MarketTrigger): Promise<Market | undefined> {
+    const before = new Set(this.engine.list().map((m) => m.id));
+    await this.openTriggeredMarket(trigger, {
+      slot: trigger.slot ?? marketSlot(trigger.kind),
+      ...(trigger.team ? { team: trigger.team } : {}),
+      logLabel: `sim kind=${trigger.kind}`,
+    });
+    return this.engine.list().find((m) => !before.has(m.id));
   }
 
   /** Sim/test hook: every momentum bar value broadcast this run (proves the bar fires + moves). */
@@ -593,37 +607,6 @@ export class Orchestrator {
     if (livePlay) this.momentum.decayTick();
     this.broadcastMomentum();
 
-    // CADENCE — the fix for the dead board: open the momentum (WINDOW) market on the
-    // HEARTBEAT, not only on sparse feed events. Real fixtures supply openable events
-    // 5–13 match-minutes apart, so an event-only opener left the board EMPTY 55–61% of
-    // the match (gaps up to ~10 min). Running it each tick off the standing read keeps a
-    // market basically always live WITHOUT spam: the single-slot lock (a window market
-    // stays LOCKED 90–120s after its 10s bet window) caps volume, not the cooldown. The
-    // per-tick decay above keeps it honest — it only fires while pressure is still real.
-    if (livePlay) await this.maybeOpenMomentumMarket(this.momentum.read());
-
-    // RULE-BASED HEARTBEAT OPENERS — the 'event' (booking / goal-window) and 'count'
-    // (over/under) lanes aren't tied to a single play, so they open on a clock (live,
-    // not on a break), respecting the flow pacer + single-occupancy per slot. This is
-    // what makes several varied markets show at once without one play having to fire them.
-    if (livePlay) {
-      // Seed the cadence at the first live tick so the first event/count market opens one
-      // interval into the match, never as a kickoff dump at t=0.
-      if (!this.heartbeatSeeded) {
-        this.heartbeatSeeded = true;
-        this.lastEventSlotOpenAt = Date.now();
-        this.lastCountSlotOpenAt = Date.now();
-        this.lastVersusOpenAt = Date.now();
-      }
-      // HT/FT BOUNDARY GUARD: don't open new booking/goal-window/over-under markets in
-      // stoppage — the whistle would cut their window short. The stoppage period market
-      // ("goal before the half?") is the right one for that moment.
-      if (!inWhistleZone(game)) {
-        await this.maybeOpenEventSlotMarket(game);
-        await this.maybeOpenCountSlotMarket(game);
-      }
-    }
-
     const ordered = sortFeedEvents(events);
     this.samePollResolverSeqs = new Set(
       ordered
@@ -662,6 +645,11 @@ export class Orchestrator {
     // THE ONE NO-WRITER: a single per-tick deadline sweep. Any locked market past
     // its resolveAt with no qualifying YES settles NO (after the late-goal rescue).
     this.settleExpired(Date.now());
+
+    // Fresh-board pass: ESPN can go quiet for stretches, but the app cannot feel dead.
+    // The AI director still chooses first from its validated palette; the deterministic
+    // floor only fires after a longer gap, and only into free open lanes.
+    await this.maybeOpenFreshBoardMarket(this.feed.state());
   }
 
   private async processEvent(ev: FeedEvent): Promise<void> {
@@ -783,13 +771,11 @@ export class Orchestrator {
       // The AI DIRECTOR gets FIRST pick of free slots (its proposals are mood/clock-aware);
       // whatever it doesn't fill, the deterministic rule openers below cover (fail-open floor).
       await this.maybeOpenDirectorMarket(liveGame);
+      // Give the cleanest side-vs-side contest first shot at pressure moments. It has its
+      // own lane + interval, and is more engaging than another generic shot-window card.
+      await this.maybeOpenVersusMarket(liveGame);
       await this.maybeOpenMomentumMarket(this.momentum.read());
       await this.maybeOpenPlayerMarket();
-      // WHICH-SIDE-NEXT contest — opened EVENT-DRIVEN off a build-up attacking move, so a
-      // decisive event (the next threat) is demonstrably imminent and the contest resolves
-      // YES/NO rather than voiding into a quiet spell. Its own slot/interval/pressure gates
-      // pace it; the opening event can't resolve it (open-boundary guard).
-      await this.maybeOpenVersusMarket(liveGame);
     }
     // Set-piece / VAR markets are event-driven (a free kick, a VAR review — which is
     // itself often the cause of a delay), so they open even during a break; the
@@ -873,6 +859,7 @@ export class Orchestrator {
       sequenceId: seqIdOf(ev),
       team: ev.team,
       slot,
+      ignoreBoardCaps: true,
       openClockMin: clockMinutes(ev),
       openerType: ev.type,
       logLabel: `type=${ev.type} team=${ev.team ?? 'n/a'} clock=${String(ev.meta?.clock ?? game.clock)}`,
@@ -903,7 +890,7 @@ export class Orchestrator {
     let n = 0;
     for (const t of this.tracked.values()) {
       const m = this.engine.get(t.marketId);
-      if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
+      if (!m || m.status !== 'open') continue;
       if ((m.slot ?? t.slot) !== 'window') continue;
       if (team !== undefined && t.team !== team) continue;
       n++;
@@ -976,6 +963,7 @@ export class Orchestrator {
     await this.openTriggeredMarket(trigger, {
       team,
       slot: 'window',
+      ignoreBoardCaps: true,
       openClockMin,
       logLabel: `momentum kind=${spec.kind} team=${team} intensity=${read.intensity.toFixed(1)}`,
     });
@@ -1053,6 +1041,7 @@ export class Orchestrator {
     await this.openTriggeredMarket(trigger, {
       team: best.team,
       slot: 'player',
+      ignoreBoardCaps: true,
       openClockMin,
       playerId: best.id,
       logLabel: `player who=${best.name} score=${best.score.toFixed(1)}`,
@@ -1189,16 +1178,39 @@ export class Orchestrator {
 
   /** True when another unsettled market already owns this slot. */
   private hasBlockingMarket(slot: MarketSlot): boolean {
-    // The 'window' (momentum) slot is MULTI-LANE: allow up to MOMENTUM_WINDOW_LANES
-    // concurrent momentum markets so the board stays populated (one per team). Every
-    // other slot stays strictly single-occupancy.
+    // A locked market is no longer bettable, so it should not freeze a lane for its whole
+    // resolve window. The UI keeps locked markets as thin strips while the next OPEN card can
+    // surface. We only block against currently-open bet windows.
     if (slot === 'window') return this.countOpenMomentumMarkets() >= MOMENTUM_WINDOW_LANES;
     for (const t of this.tracked.values()) {
       const m = this.engine.get(t.marketId);
-      if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
+      if (!m || m.status !== 'open') continue;
       if ((m.slot ?? t.slot) === slot) return true;
     }
     return false;
+  }
+
+  private activeMarketCount(): number {
+    let n = 0;
+    for (const t of this.tracked.values()) {
+      const m = this.engine.get(t.marketId);
+      if (m && (m.status === 'open' || m.status === 'locked')) n++;
+    }
+    return n;
+  }
+
+  private openMarketCount(): number {
+    let n = 0;
+    for (const t of this.tracked.values()) {
+      const m = this.engine.get(t.marketId);
+      if (m?.status === 'open') n++;
+    }
+    return n;
+  }
+
+  private kindIsCooling(kind: string, ms = FRESH_KIND_COOLDOWN_MS): boolean {
+    const last = this.lastKindOpenAt.get(kind) ?? 0;
+    return last > 0 && Date.now() - last < ms;
   }
 
   /** Open a market from a validated trigger — shared by moment + period paths. */
@@ -1270,71 +1282,23 @@ export class Orchestrator {
   }
 
   /**
-   * EVENT-slot heartbeat — a teamless "a booking in the next few minutes?" /
-   * "a goal in the next few minutes? (either team)" market opened on a clock, alternating
-   * the two kinds. Single-occupancy ('event' slot), flow-paced; resolves cleanly (YES on
-   * the matching event, NO at deadline).
-   */
-  private async maybeOpenEventSlotMarket(game: GameState): Promise<void> {
-    if (this.hasBlockingMarket('event')) return;
-    if (Date.now() - this.lastEventSlotOpenAt < EVENT_SLOT_INTERVAL_MS) return;
-    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
-
-    let trigger = buildEventSlotTrigger(game.gameId, this.eventSlotCounter);
-    // POST-GOAL: don't open "a goal in the next few minutes?" right after a goal (the game
-    // just kicked off again) — rotate to the booking market instead.
-    if (trigger.kind === 'goal_in_window' && this.recentGoalCooloff(GOAL_WINDOW_COOLOFF_MS)) {
-      this.eventSlotCounter++;
-      trigger = buildEventSlotTrigger(game.gameId, this.eventSlotCounter);
-    }
-
-    const beforeOpened = this.metrics.marketsOpened;
-    await this.openTriggeredMarket(trigger, { slot: 'event', logLabel: `heartbeat kind=${trigger.kind}` });
-    if (this.metrics.marketsOpened > beforeOpened) {
-      this.lastEventSlotOpenAt = Date.now();
-      this.eventSlotCounter++;
-    }
-  }
-
-  /**
-   * COUNT-slot heartbeat — an over/under "more than N corners / shots in the next few
-   * minutes?" market opened on a clock, alternating the two kinds. Single-occupancy
-   * ('count' slot), flow-paced. Settled by the running event counter (YES on crossing,
-   * NO at deadline) — never a single YES event.
-   */
-  private async maybeOpenCountSlotMarket(game: GameState): Promise<void> {
-    if (this.hasBlockingMarket('count')) return;
-    if (Date.now() - this.lastCountSlotOpenAt < COUNT_SLOT_INTERVAL_MS) return;
-    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
-
-    const trigger = buildCountSlotTrigger(game.gameId, this.countSlotCounter);
-
-    const beforeOpened = this.metrics.marketsOpened;
-    await this.openTriggeredMarket(trigger, {
-      slot: 'count',
-      logLabel: `heartbeat kind=${trigger.kind} line=${countLine(trigger.kind)}`,
-    });
-    if (this.metrics.marketsOpened > beforeOpened) {
-      this.lastCountSlotOpenAt = Date.now();
-      this.countSlotCounter++;
-    }
-  }
-
-  /**
    * AI DIRECTOR open path — SYNCHRONOUSLY read one pre-validated proposal for a FREE slot and
    * open it. Never awaits the model (the proposal pool is filled off-timer); fails open to the
    * rule openers when the director is off/empty. Respects the same single-occupancy slots and
    * the global flow pacer, so the AI can never burst or double-fill. The proposal already
    * passed the palette validation wall, so kind/slot/deadline/team/question are all sound.
    */
-  private async maybeOpenDirectorMarket(game: GameState): Promise<void> {
-    if (!this.director.active) return;
-    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return; // global flow pacer
+  private async maybeOpenDirectorMarket(game: GameState): Promise<boolean> {
+    if (!this.director.active) return false;
+    if (Date.now() - this.lastOpenReleaseAt < MIN_OPEN_SPACING_MS) return false; // global flow pacer
+    if (this.activeMarketCount() >= MAX_ACTIVE_MARKETS) return false;
+    if (this.openMarketCount() >= MAX_OPEN_MARKETS) return false;
     const proposal: MarketProposal | undefined = this.director.proposeNext(
       Date.now(),
       (slot) => !this.hasBlockingMarket(slot),
     );
-    if (!proposal) return;
+    if (!proposal) return false;
+    if (this.kindIsCooling(proposal.kind)) return false;
 
     const trigger: MarketTrigger = {
       gameId: game.gameId,
@@ -1350,6 +1314,87 @@ export class Orchestrator {
       ...(proposal.team ? { team: proposal.team } : {}),
       logLabel: `director kind=${proposal.kind}${proposal.team ? ' team=' + proposal.team : ''} rel=${proposal.relevance.toFixed(2)}`,
     });
+    return true;
+  }
+
+  private async maybeOpenFreshBoardMarket(game: GameState): Promise<void> {
+    if (game.status !== 'live' || this.breakPaused || inWhistleZone(game)) return;
+    const gap = Date.now() - this.lastOpenReleaseAt;
+    if (gap < FRESH_BOARD_TARGET_MS) return;
+    if (this.activeMarketCount() >= MAX_ACTIVE_MARKETS) return;
+    if (this.openMarketCount() >= MAX_OPEN_MARKETS) return;
+
+    if (await this.maybeOpenDirectorMarket(game)) return;
+    // If the AI director is configured, give it the normal target window first. A deterministic
+    // floor is still necessary after a longer gap so a model/API miss never leaves users waiting.
+    if (this.director.active && gap < FRESH_BOARD_FALLBACK_MS) return;
+
+    const trigger = this.buildFreshBoardFloorTrigger(game);
+    if (!trigger) return;
+    await this.openTriggeredMarket(trigger, {
+      slot: trigger.slot ?? marketSlot(trigger.kind),
+      ...(trigger.team ? { team: trigger.team } : {}),
+      logLabel: `fresh_board_floor kind=${trigger.kind}${trigger.team ? ' team=' + trigger.team : ''}`,
+    });
+  }
+
+  private buildFreshBoardFloorTrigger(game: GameState): MarketTrigger | null {
+    const mood = this.momentum.read();
+    const preferredTeam: Team = mood.leader ?? (this.freshBoardCounter % 2 === 0 ? 'home' : 'away');
+    const variants: Array<() => MarketTrigger | null> = [
+      () => this.buildShotWindowFloor(game),
+      () => this.buildShotCornerWindowFloor(game),
+      () => buildVersusTrigger(game, preferredTeam, this.freshBoardCounter),
+      () => buildCountSlotTrigger(game.gameId, this.freshBoardCounter + 1), // shots first
+      () => buildEventSlotTrigger(game.gameId, this.freshBoardCounter + 1), // goal first
+      () => buildCountSlotTrigger(game.gameId, this.freshBoardCounter),
+      () => buildEventSlotTrigger(game.gameId, this.freshBoardCounter),
+    ];
+
+    for (let i = 0; i < variants.length; i++) {
+      const idx = (this.freshBoardCounter + i) % variants.length;
+      const trigger = variants[idx]?.();
+      if (!trigger) continue;
+      const slot = trigger.slot ?? marketSlot(trigger.kind);
+      if (this.hasBlockingMarket(slot)) continue;
+      if (this.kindIsCooling(trigger.kind)) continue;
+      if (!this.hasClockRunway(game, trigger.kind, trigger.windowMs)) continue;
+      this.freshBoardCounter++;
+      return trigger;
+    }
+    return null;
+  }
+
+  private hasClockRunway(game: GameState, kind: string, windowMs: number): boolean {
+    const { base, stopp } = parseClockKey(game.clock);
+    if (base <= 0) return true;
+    const minute = base + stopp / 100;
+    const periodEnd = minute < 45.5 ? 45 : minute < 90.5 ? 90 : 120;
+    const runwayMs = Math.max(0, (periodEnd - minute) * 60_000);
+    const requiredMs = Math.max(6 * 60_000, windowMs + resolveDeadlineMs(kind) + 20_000);
+    return runwayMs >= requiredMs;
+  }
+
+  private buildShotWindowFloor(game: GameState): MarketTrigger {
+    return {
+      gameId: game.gameId,
+      question: 'A shot coming soon?',
+      kind: 'shot_in_window',
+      slot: 'window',
+      windowMs: MOMENTUM_BET_WINDOW_MS,
+      trueProb: 0.42,
+    };
+  }
+
+  private buildShotCornerWindowFloor(game: GameState): MarketTrigger {
+    return {
+      gameId: game.gameId,
+      question: 'A shot or corner soon?',
+      kind: 'shot_or_corner_in_window',
+      slot: 'window',
+      windowMs: MOMENTUM_BET_WINDOW_MS,
+      trueProb: 0.55,
+    };
   }
 
   /**
@@ -1385,6 +1430,7 @@ export class Orchestrator {
     await this.openTriggeredMarket(trigger, {
       slot: 'versus',
       team,
+      ignoreBoardCaps: true,
       logLabel: `versus kind=${trigger.kind} team=${team}`,
     });
     if (this.metrics.marketsOpened > beforeOpened) {
@@ -1403,17 +1449,15 @@ export class Orchestrator {
       openClockMin?: number;
       openerType?: FeedEvent['type'];
       playerId?: string;
+      ignoreBoardCaps?: boolean;
       logLabel: string;
     },
   ): Promise<void> {
     const slot = opts.slot ?? trigger.slot ?? marketSlot(trigger.kind);
     if (this.hasBlockingMarket(slot)) return;
-
-    // FLOW PACING: this market is committing to the board — stamp the release time so the
-    // paced (momentum/player) openers hold off for MIN_OPEN_SPACING_MS and nothing lands
-    // right on top of it. (Set-pieces reach here un-gated but still stamp, so a momentum
-    // market won't surface in the same beat as a corner.)
-    this.lastOpenReleaseAt = Date.now();
+    if (!opts.isPeriod && !opts.ignoreBoardCaps && this.activeMarketCount() >= MAX_ACTIVE_MARKETS) return;
+    if (!opts.isPeriod && !opts.ignoreBoardCaps && this.openMarketCount() >= MAX_OPEN_MARKETS) return;
+    if (!opts.isPeriod && !this.hasClockRunway(this.feed.state(), trigger.kind, trigger.windowMs)) return;
 
     const deadline = resolveDeadlineMs(trigger.kind);
     const armed: MarketTrigger = { ...trigger, slot, resolveWindowMs: deadline };
@@ -1428,6 +1472,10 @@ export class Orchestrator {
       console.warn(`[golazo/feed] market_rejected_wording ${wordingIssue}`);
       return;
     }
+
+    // FLOW PACING: this market is committing to the board — stamp the release time so the
+    // paced openers hold off for MIN_OPEN_SPACING_MS and nothing lands right on top of it.
+    this.lastOpenReleaseAt = Date.now();
 
     console.log(
       `[golazo/feed] market_open ${opts.logLabel} resolve=${Math.round(deadline / 1000)}s ` +
@@ -1458,6 +1506,7 @@ export class Orchestrator {
     }
 
     const market = this.engine.openMarket(armed);
+    this.lastKindOpenAt.set(armed.kind, Date.now());
     this.metrics.marketsOpened++;
     this.audit.record('market_open', { question: armed.question, kind: armed.kind }, market.id);
 
@@ -1537,10 +1586,11 @@ export class Orchestrator {
    * FULL TIME — settle EVERY still-open market so the match ends cleanly. Without this, only
    * period markets resolve at the whistle; window/momentum/event/count/player/versus/set-piece
    * markets hang unresolved, the feed goes quiet, and the client greys out waiting for
-   * resolutions that never come. Period markets settle NO (no stoppage goal); every other
-   * market had its window cut short by full-time, so it VOIDs + refunds — fair, and it avoids
-   * dumping a wall of NOs at the whistle. Runs exactly once, then pushes a final game snapshot
-   * so the client renders the full-time result instead of falling back to the offline screen.
+   * resolutions that never come. Period/timer/count/event markets settle NO at the whistle
+   * when their event did not happen; which-side contests refund because no team produced the
+   * deciding event; set-piece goal markets refund if the whistle cuts off their attribution.
+   * Runs exactly once, then pushes a final game snapshot so the client renders the full-time
+   * result instead of falling back to the offline screen.
    */
   private finalizeMatch(): void {
     if (this.matchFinalized) return;
@@ -1549,7 +1599,8 @@ export class Orchestrator {
       const m = this.engine.get(t.marketId);
       if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
       if (t.isPeriod) this.finalizeMarket(t, 'NO');
-      else this.voidMarket(t, 'full_time');
+      else if (isWhichSideNextKind(m.kind) || isSetPieceGoalKind(m.kind)) this.voidMarket(t, 'full_time');
+      else this.finalizeMarket(t, 'NO');
     }
     this.periodMarketPending = false;
     this.server.broadcast({ t: 'game', game: this.feed.state() });
@@ -1873,13 +1924,6 @@ export class Orchestrator {
     for (const goalMin of this.lastResolverByTeam.values()) {
       if (goalMin >= t.openClockMin) return true;
     }
-    return false;
-  }
-
-  /** True if ANY team scored within the given window — drives post-goal market suppression. */
-  private recentGoalCooloff(ms: number): boolean {
-    const now = Date.now();
-    for (const t of this.lastGoalAt.values()) if (now - t < ms) return true;
     return false;
   }
 
@@ -2289,13 +2333,10 @@ export class Orchestrator {
     this.lastGoalAt.clear();
     this.momentum.reset();
     this.lastOpenReleaseAt = 0;
-    this.lastEventSlotOpenAt = 0;
-    this.lastCountSlotOpenAt = 0;
-    this.eventSlotCounter = 0;
-    this.countSlotCounter = 0;
+    this.lastKindOpenAt.clear();
+    this.freshBoardCounter = 0;
     this.lastVersusOpenAt = 0;
     this.versusCounter = 0;
-    this.heartbeatSeeded = false;
     this.commentary.clear();
     this.director.resetForMatch(); // drop a prior fixture's pooled proposals
     this.matchFinalized = false;
@@ -2384,10 +2425,17 @@ export class Orchestrator {
       if (m.settlement && m.settlement.outcome !== 'VOID') {
         this.feesCollected += m.settlement.rakeTaken;
         this.marketsSettled += 1;
+        const referral = this.server.referralManager.recordMarketSettlement(m);
         console.log(
           `[golazo/feed] fee +${m.settlement.rakeTaken.toFixed(2)} → ${this.config.feeRecipient} ` +
             `(total ${this.feesCollected.toFixed(2)} over ${this.marketsSettled} markets)`,
         );
+        if (referral.totalOwed > 0) {
+          console.log(
+            `[golazo/referrals] owed +${referral.totalOwed.toFixed(2)} ` +
+              `across ${referral.entries.length} ledger rows`,
+          );
+        }
       }
       this.server.broadcast({ t: 'market_resolve', market: m });
       // Paper pool settles its own bets; real bets ALSO move the bettor's

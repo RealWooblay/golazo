@@ -59,6 +59,9 @@ export function simConfig(overrides: Partial<Config> = {}): Config {
     espnPollMs: 2_500,
     rake: 0.06,
     pointsStorePath: undefined, // sims/tests are pure in-memory — never touch disk
+    referralStorePath: undefined,
+    referralPayoutBps: 100,
+    referralAdminToken: undefined,
     feeRecipient: 'sim',
     baseSeed: 0,
     // Bots are OFF in production (the live points/real multiple must move on real

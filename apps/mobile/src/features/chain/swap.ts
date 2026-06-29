@@ -40,6 +40,10 @@ const JUPITER_BASE = "https://lite-api.jup.ag/swap/v1";
  *  ~hundreds of tx fees; the rest of a SOL deposit still converts to USX. (Previously 0 — which
  *  swapped away ALL SOL and left no gas, so bets failed when sponsorship didn't cover them.) */
 const SOL_FEE_RESERVE_LAMPORTS = Math.round(0.01 * LAMPORTS_PER_SOL);
+/** Keep USDC back so we can buy SOL for gas after the USX conversion (card deposits are USDC-only). */
+const USDC_GAS_RESERVE_RAW = 2_000_000; // 2 USDC
+/** Max USDC to spend topping up SOL when the wallet has none after deposit. */
+const USDC_SOL_TOPUP_RAW = 2_000_000;
 /** Below this, a token/SOL balance is dust — not worth a swap's fees. */
 const MIN_SWAP_LAMPORTS = 0.003 * LAMPORTS_PER_SOL;
 /** Reject a swap whose price impact exceeds this (USX depeg / thin-route protection). */
@@ -107,7 +111,14 @@ export async function findSwappableBalances(
     const raw: string | undefined = info?.tokenAmount?.amount;
     if (!mint || !raw || mint === usxMint) continue;
     const amount = Number(raw);
-    if (amount > 0) out.push({ mint, amount, label: labelFor(mint) });
+    if (amount <= 0) continue;
+    const swappable =
+      mint === USDC_MINT && amount > USDC_GAS_RESERVE_RAW
+        ? amount - USDC_GAS_RESERVE_RAW
+        : mint === USDC_MINT
+          ? 0
+          : amount;
+    if (swappable > 0) out.push({ mint, amount: swappable, label: labelFor(mint) });
   }
   return out;
 }
@@ -189,6 +200,54 @@ async function sendSwapTx(
   return ctx.provider.sendAndConfirm(vtx);
 }
 
+async function swapExactIn(
+  ctx: ChainContext,
+  inputMint: string,
+  outputMint: string,
+  amount: number,
+  slippageBps = DEFAULT_SLIPPAGE_BPS,
+): Promise<SwapResult> {
+  if (inputMint === outputMint) throw new Error("Same mint — nothing to swap.");
+  const quote = await getQuote(inputMint, outputMint, amount, slippageBps);
+  const swapB64 = await buildSwapTx(quote, ctx.wallet.address);
+  const vtx = VersionedTransaction.deserialize(
+    Uint8Array.from(Buffer.from(swapB64, "base64")),
+  );
+  const signature = await sendSwapTx(ctx, vtx);
+  return {
+    signature,
+    explorerUrl: explorerTxUrl(signature, ctx.config.cluster),
+    outUsd: usdFromBaseUnits(Number(quote.outAmount)),
+    inputMint,
+  };
+}
+
+/**
+ * Card/crypto deposits often leave 0 SOL (USDC-only). Keep ~0.01 SOL so bets and
+ * withdrawals still work when Privy gas sponsorship is off or flaky.
+ */
+export async function ensureSolGasReserve(ctx: ChainContext): Promise<void> {
+  const owner = ctx.wallet.publicKey;
+  const lamports = await ctx.connection.getBalance(owner, "confirmed");
+  if (lamports >= SOL_FEE_RESERVE_LAMPORTS) return;
+
+  const accounts = await ctx.connection.getParsedTokenAccountsByOwner(
+    owner,
+    { programId: TOKEN_PROGRAM_ID },
+    "confirmed",
+  );
+  let usdcRaw = 0;
+  for (const { account } of accounts.value) {
+    const mint: string | undefined = account.data.parsed?.info?.mint;
+    const raw: string | undefined = account.data.parsed?.info?.tokenAmount?.amount;
+    if (mint === USDC_MINT && raw) usdcRaw = Number(raw);
+  }
+  if (usdcRaw < 100_000) return;
+
+  const amount = Math.min(usdcRaw, USDC_SOL_TOPUP_RAW);
+  await swapExactIn(ctx, USDC_MINT, WSOL_MINT, amount);
+}
+
 /**
  * Swap `amount` raw base units of `inputMint` into USX. Quotes (guarding route +
  * price impact), builds, signs with the embedded wallet, sends + confirms.
@@ -200,22 +259,7 @@ export async function swapToUsx(
   slippageBps = DEFAULT_SLIPPAGE_BPS,
 ): Promise<SwapResult> {
   const outputMint = ctx.config.usxMint;
-  if (inputMint === outputMint) throw new Error("Already USX — nothing to swap.");
-
-  const quote = await getQuote(inputMint, outputMint, amount, slippageBps);
-  const swapB64 = await buildSwapTx(quote, ctx.wallet.address);
-
-  const vtx = VersionedTransaction.deserialize(
-    Uint8Array.from(Buffer.from(swapB64, "base64")),
-  );
-  const signature = await sendSwapTx(ctx, vtx);
-
-  return {
-    signature,
-    explorerUrl: explorerTxUrl(signature, ctx.config.cluster),
-    outUsd: usdFromBaseUnits(Number(quote.outAmount)),
-    inputMint,
-  };
+  return swapExactIn(ctx, inputMint, outputMint, amount, slippageBps);
 }
 
 /**
@@ -239,6 +283,14 @@ export async function swapAllToUsx(
     } catch (e) {
       failures.push({ label: c.label, reason: e instanceof Error ? e.message : "swap failed" });
     }
+  }
+  try {
+    await ensureSolGasReserve(ctx);
+  } catch (e) {
+    failures.push({
+      label: "SOL gas",
+      reason: e instanceof Error ? e.message : "could not reserve SOL for fees",
+    });
   }
   return { swapped, failures };
 }

@@ -48,7 +48,7 @@ export type ClientMessage =
   | { t: 'hello'; userId: string }
   | { t: 'bet'; marketId: string; side: Side; stake: number; userId: string }
   // ── Play mode (points) ────────────────────────────────────────────────────
-  | { t: 'points_hello'; userId: string; name: string }
+  | { t: 'points_hello'; userId: string; name: string; priorUserId?: string }
   | { t: 'points_bet'; marketId: string; side: Side; stake: number; userId: string }
   | { t: 'points_refill'; userId: string }
   // ── Friends mode (rooms) ──────────────────────────────────────────────────

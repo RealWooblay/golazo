@@ -215,9 +215,6 @@ export function PracticeCard({
       <View style={styles.practiceText}>
         <Text style={styles.practiceEyebrow}>PRACTICE WHILE YOU WAIT</Text>
         <Text preset="bodyStrong">Run a demo match</Text>
-        <Text preset="caption" muted>
-          Demo match with paper points.
-        </Text>
       </View>
       <Text preset="bodyStrong" color={colors.yes} style={styles.practiceCta}>
         Play ›

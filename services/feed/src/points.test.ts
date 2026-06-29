@@ -66,6 +66,25 @@ describe('PointsManager', () => {
     expect(fx.leaderboard?.[0]!.name).toBe('Alice');
   });
 
+  it('merges a legacy pts_* session into acct_* on upgrade', () => {
+    const pm = new PointsManager();
+    const wallet = '11111111111111111111111111111112';
+    pm.register('pts_device42', 'Guest');
+    pm.onMarketOpen(fakeMarket('m1'));
+    pm.placeBet('pts_device42', 'm1', 'YES', 400);
+    pm.register(`acct_${wallet}`, 'Alice', 'pts_device42');
+    expect(pm.leaderboard().map((p) => p.userId)).toEqual([`acct_${wallet}`]);
+    expect(pm.leaderboard()[0]?.balance).toBe(POINTS_START_BALANCE - 400);
+  });
+
+  it('merges a legacy acct_did into acct_wallet on upgrade', () => {
+    const pm = new PointsManager();
+    const wallet = '11111111111111111111111111111112';
+    pm.register(`acct_did:privy:abc`, 'Ghost');
+    pm.register(`acct_${wallet}`, 'Alice', `acct_did:privy:abc`);
+    expect(pm.leaderboard().map((p) => p.userId)).toEqual([`acct_${wallet}`]);
+  });
+
   it('leaderboard shows ONLY logged-in (acct_) players, never anonymous device users', () => {
     const pm = new PointsManager();
     pm.register('acct_alice', 'Alice'); // logged in

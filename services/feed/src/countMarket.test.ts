@@ -6,7 +6,7 @@ import { simConfig } from './sim/harness';
 
 /**
  * OVER/UNDER COUNT MARKET test — proves the generic per-market event COUNTER:
- *   • a count market ('over_corners') opens on the heartbeat,
+ *   • a count market ('over_corners') can be opened by the director/test hook,
  *   • each qualifying event since open bumps its running counter,
  *   • it settles YES the moment the count EXCEEDS the line (over),
  *   • and if the line is never crossed it stays open until the deadline NO (under).
@@ -60,20 +60,17 @@ const corner = (team: Team): FeedEvent => ({
   meta: { clock: "30'" },
 });
 
-/**
- * Tick until an over_corners market is open+locked. The heartbeat lanes are seeded at
- * the first live tick, so the first count market opens ~COUNT_SLOT_INTERVAL_MS (4 min)
- * in — advance generously past that, then lock the open market.
- */
 async function openAndLockCountMarket(orch: Orchestrator): Promise<void> {
-  for (let i = 0; i < 40; i++) {
-    await orch.simTick();
-    const m = orch.simMarkets().find((mk) => mk.kind === 'over_corners');
-    if (m && (m.status === 'open' || m.status === 'locked')) break;
-    await vi.advanceTimersByTimeAsync(15_000); // advance the clock between empty polls
-  }
-  // Lock the open market so a crossing settles immediately (not just held for the window).
+  await orch.simOpenMarket({
+    gameId: 'g1',
+    question: 'Over 1 corners in 5 min?',
+    kind: 'over_corners',
+    slot: 'count',
+    windowMs: 8_000,
+    trueProb: 0.45,
+  });
   await vi.advanceTimersByTimeAsync(15_000);
+  await orch.simTick();
 }
 
 describe('over/under COUNT market — the per-market event counter', () => {
@@ -90,7 +87,7 @@ describe('over/under COUNT market — the per-market event counter', () => {
 
     await openAndLockCountMarket(orch);
     const opened = orch.simMarkets().find((m) => m.kind === 'over_corners');
-    expect(opened, 'an over_corners market should open on the heartbeat').toBeTruthy();
+    expect(opened, 'an over_corners market should open via the sim hook').toBeTruthy();
     expect(opened!.status).toBe('locked');
 
     // First corner → count = 1 (== the line of 1, NOT over yet → no settle).

@@ -11,7 +11,7 @@ tar -xzf /opt/golazo.tgz -C /opt/golazo
 BUNDLE_ENV=/opt/golazo/services/feed/.env
 SECRETS_TMP=$(mktemp)
 if [ -f "$BUNDLE_ENV" ]; then
-  grep -E '^(ANTHROPIC_API_KEY|SOLANA_RPC_URL|AI_MODEL|AI_TIMEOUT_MS|AI_RESOLVE_TIMEOUT_MS|MIN_CONFIDENCE)=' "$BUNDLE_ENV" \
+  grep -E '^(ANTHROPIC_API_KEY|SOLANA_RPC_URL|AI_MODEL|AI_TIMEOUT_MS|AI_RESOLVE_TIMEOUT_MS|MIN_CONFIDENCE|REFERRAL_ADMIN_TOKEN)=' "$BUNDLE_ENV" \
     >>"$SECRETS_TMP" 2>/dev/null || true
 fi
 
@@ -42,6 +42,9 @@ else
   WEB_PORT=80
 fi
 
+mkdir -p /var/lib/golazo
+chmod 700 /var/lib/golazo
+
 cat >/opt/golazo/services/feed/.env <<ENV
 PORT=8787
 FEED_MODE=espn
@@ -65,6 +68,9 @@ AI_RESOLVE_TIMEOUT_MS=6000
 MIN_CONFIDENCE=0.6
 BET_DELAY_MS=5000
 BET_SAFETY_BUFFER_MS=2000
+REFERRAL_STORE_PATH=/var/lib/golazo/referrals.snapshot.json
+REFERRAL_PAYOUT_BPS=100
+POINTS_STORE_PATH=/var/lib/golazo/points.json
 # Enhancer OFF: market titles come from the curated, clean templates only (no AI re-wording /
 # "slop"). The director stays ON — AI still chooses WHICH market to open, not its wording.
 AI_ENHANCER=0
@@ -170,7 +176,7 @@ const types = new Map([
 
 const server = createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
-  if (url.pathname === '/health' || url.pathname === '/metrics' || url.pathname === '/audit' || url.pathname.startsWith('/state') || url.pathname === '/rpc' || url.pathname === '/rpc/') {
+  if (url.pathname === '/health' || url.pathname === '/metrics' || url.pathname === '/audit' || url.pathname.startsWith('/state') || url.pathname.startsWith('/referrals') || url.pathname === '/rpc' || url.pathname === '/rpc/') {
     proxy.web(req, res, { target: `http://127.0.0.1:${FEED_PORT}` });
     return;
   }

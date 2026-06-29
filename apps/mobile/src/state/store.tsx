@@ -52,6 +52,10 @@ const HISTORY_CAP = 200; // bound the persisted ledger
 export interface Session {
   firstRun: boolean;
   displayName?: string;
+  /** Leaderboard names keyed by acct_* / pts_* id — survives account switches. */
+  displayNamesByAccount?: Record<string, string>;
+  /** Which account session.displayName currently belongs to. */
+  activeAccountKey?: string;
   mode: FeedMode;
   /** Real SOL/play-$ vs live-feed play points (separate pool + leaderboard). */
   moneyMode: MoneyMode;
@@ -149,11 +153,21 @@ function reducer(state: StoreState, action: Action): StoreState {
       };
     case "setPointsLeaderboard":
       return { ...state, pointsLeaderboard: action.players };
-    case "setName":
+    case "setName": {
+      const key = state.session.activeAccountKey;
+      const trimmed = action.name.trim();
+      const map = { ...(state.session.displayNamesByAccount ?? {}) };
+      if (key && trimmed) map[key] = trimmed;
+      else if (key && !trimmed) delete map[key];
       return {
         ...state,
-        session: { ...state.session, displayName: action.name },
+        session: {
+          ...state.session,
+          displayName: trimmed,
+          displayNamesByAccount: map,
+        },
       };
+    }
     case "setSession":
       return { ...state, session: { ...state.session, ...action.session } };
     case "setWallet":
@@ -170,6 +184,8 @@ function reducer(state: StoreState, action: Action): StoreState {
           ...initialState().session,
           firstRun: false,
           displayName: state.session.displayName,
+          displayNamesByAccount: state.session.displayNamesByAccount,
+          activeAccountKey: state.session.activeAccountKey,
           pointsUserId: state.session.pointsUserId,
           moneyMode: state.session.moneyMode,
         },

@@ -271,15 +271,11 @@ const NEXT_CARD_PHRASES: readonly VersusPhrase[] = [
   (a, b) => `Next card: ${a} or ${b}?`,
 ];
 
-/** The which-side-next CONTESTS the heartbeat rotates through — kind + phrasing bank. */
-const VERSUS_CONTESTS = [
-  { kind: 'next_shot', bank: NEXT_SHOT_PHRASES },
-  { kind: 'next_corner', bank: NEXT_CORNER_PHRASES },
-  { kind: 'next_goal', bank: NEXT_GOAL_PHRASES },
-  { kind: 'next_card', bank: NEXT_CARD_PHRASES },
-] as const;
-
-/** Rotating which-side-next contest — shot / corner / goal / card, varied phrasing each cycle. */
+/**
+ * Deterministic fallback contest. Keep it broad: "next shot" resolves fastest and
+ * cleanest from ESPN. Narrow next_corner/next_goal/next_card stay available to the
+ * AI director, but the fallback must not print long, void-prone contests by itself.
+ */
 export function buildVersusTrigger(
   game: GameState,
   team: Team,
@@ -288,12 +284,11 @@ export function buildVersusTrigger(
   const teamName = team === 'home' ? game.home.name : game.away.name;
   const otherName = team === 'home' ? game.away.name : game.home.name;
   if (!teamName || !otherName) return null;
-  const contest = VERSUS_CONTESTS[Math.abs(variant) % VERSUS_CONTESTS.length]!;
-  const phrase = pickRotated(contest.bank, Math.floor(Math.abs(variant) / VERSUS_CONTESTS.length));
+  const phrase = pickRotated(NEXT_SHOT_PHRASES, variant);
   return {
     gameId: game.gameId,
     question: phrase(teamName, otherName),
-    kind: contest.kind,
+    kind: 'next_shot',
     slot: 'versus',
     team,
     windowMs: HEARTBEAT_BET_WINDOW_MS,
@@ -726,21 +721,15 @@ export function parseGameContext(game: GameState): GameContext {
 
 /**
  * THE HT/FT BOUNDARY GUARD (deterministic — works with or without the AI director).
- * True when the half is in STOPPAGE time, where the whistle is imminent and
- * unpredictable. A short play-dependent market opened now ("a shot this spell?", "who
- * threatens next?", "2+ corners in the next 4 min?") would just be cut off by the whistle
- * → an unfair VOID/NO. Near the whistle the market that makes sense is "a goal before the
- * half?" (goal_in_stoppage), which the period logic opens — so we SUPPRESS new short
- * play/window/count/versus opens here. This is exactly the user's example: don't open a
- * "shot in 10s" market as the half dies, alongside the added-time goal market.
- *
- * Regulation play is NOT guarded — it continues into stoppage, so a 90s window opened at
- * 44' is fine. Only the stoppage zone itself (where the whistle can land any moment) is
- * guarded. Extra time is left to the ET period markets.
+ * True when the half is close enough to the whistle that a short play-dependent
+ * market can be cut off by half/full-time before it has a fair chance to settle.
+ * Near that boundary, period markets are the right shape; normal window/count/
+ * versus markets are suppressed.
  */
 export function inWhistleZone(game: GameState): boolean {
   const ctx = parseGameContext(game);
-  return ctx.isStoppage && (ctx.period === '1H' || ctx.period === '2H');
+  if (ctx.period !== '1H' && ctx.period !== '2H') return false;
+  return ctx.isStoppage || ctx.minutesLeft <= 2;
 }
 
 /**

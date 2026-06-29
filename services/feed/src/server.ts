@@ -22,6 +22,7 @@ import { RoomManager, type RoomEffects } from './rooms';
 import { PointsManager, type PointsEffects } from './points';
 import { canAcceptBetNow } from './betDelay';
 import { handleRpcProxy } from './rpcProxy';
+import { ReferralManager } from './referrals';
 
 /** Callback the orchestrator supplies to handle an authenticated user bet. */
 export type BetHandler = (msg: Extract<ClientMessage, { t: 'bet' }>) => void;
@@ -68,6 +69,12 @@ export interface ServerDeps {
   betDelayMs?: number;
   /** Disk path for play-money points persistence (balances survive restarts). */
   pointsStorePath?: string;
+  /** Disk path for referral code attribution + owed-partner ledger. */
+  referralStorePath?: string;
+  /** Partner share of referred volume, in bps. 100 = 1 percentage point. */
+  referralPayoutBps?: number;
+  /** Optional bearer token for referral admin writes. */
+  referralAdminToken?: string;
   /** Upstream Solana JSON-RPC URL — proxied at POST /rpc (key stays server-side). */
   solanaRpcUrl?: string;
 }
@@ -110,6 +117,8 @@ export class FeedServer {
   readonly roomManager: RoomManager;
   /** Authoritative play-mode points + leaderboard (persisted across restarts). */
   readonly pointsManager: PointsManager;
+  /** Referral code attribution + manual-payout ledger. */
+  readonly referralManager: ReferralManager;
 
   /** Reverse index: points player on this socket (for targeted state on hello). */
   private readonly socketPoints = new WeakMap<WebSocket, SocketPoints>();
@@ -119,6 +128,12 @@ export class FeedServer {
 
   constructor(private readonly deps: ServerDeps) {
     this.pointsManager = new PointsManager(deps.pointsStorePath);
+    this.referralManager = new ReferralManager({
+      storePath: deps.referralStorePath,
+      rakeBps: Math.round(deps.engine.rake * 10_000),
+      defaultPayoutBps: deps.referralPayoutBps ?? 100,
+      asset: 'USX',
+    });
     this.roomManager = new RoomManager({
       emit: (code, msg) => this.broadcastRoom(code, msg),
       matchId: () => this.deps.getGame().gameId,
@@ -313,7 +328,11 @@ export class FeedServer {
         if (!isValidPointsHello(msg)) return;
         this.socketPoints.set(ws, { userId: msg.userId });
         {
-          const effects = this.pointsManager.register(msg.userId, msg.name);
+          const effects = this.pointsManager.register(
+            msg.userId,
+            msg.name,
+            typeof msg.priorUserId === 'string' ? msg.priorUserId : undefined,
+          );
           const gameId = this.deps.getGame().gameId;
           for (const m of this.deps.engine.list()) {
             if (m.gameId !== gameId) continue;
@@ -518,6 +537,11 @@ export class FeedServer {
     const url = req.url ?? '/';
     const path = url.split('?')[0] ?? '/';
 
+    if (path === '/referrals' || path.startsWith('/referrals/')) {
+      void this.handleReferralHttp(req, res);
+      return;
+    }
+
     if (path === '/rpc' || path === '/rpc/') {
       const upstream = this.deps.solanaRpcUrl?.trim();
       if (!upstream) {
@@ -576,6 +600,150 @@ export class FeedServer {
     }
     res.writeHead(404).end();
   }
+
+  private async handleReferralHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const path = url.pathname.replace(/\/+$/, '') || '/';
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, referralHeaders());
+      res.end();
+      return;
+    }
+
+    try {
+      if (req.method === 'GET' && path === '/referrals/estimate') {
+        const volume = Number(url.searchParams.get('volume') ?? '0');
+        const code = url.searchParams.get('code') ?? undefined;
+        this.sendReferralJson(res, 200, this.referralManager.estimate(volume, code));
+        return;
+      }
+
+      if (req.method === 'GET' && path === '/referrals/summary') {
+        const code = url.searchParams.get('code') ?? undefined;
+        const ownerId = url.searchParams.get('ownerId') ?? undefined;
+        this.sendReferralJson(res, 200, this.referralManager.summary({ code, ownerId }));
+        return;
+      }
+
+      if (req.method === 'GET' && path === '/referrals/attribution') {
+        const userId = url.searchParams.get('userId')?.trim() ?? '';
+        this.sendReferralJson(res, 200, {
+          attribution: userId ? (this.referralManager.attributionFor(userId) ?? null) : null,
+        });
+        return;
+      }
+
+      if (req.method === 'GET' && path === '/referrals/profile') {
+        const userId = url.searchParams.get('userId')?.trim() ?? '';
+        if (!userId) {
+          this.sendReferralJson(res, 400, { error: 'userId required' });
+          return;
+        }
+        this.sendReferralJson(res, 200, this.referralManager.profile(userId));
+        return;
+      }
+
+      if (req.method === 'GET' && path === '/referrals/codes') {
+        if (!this.referralAdminAllowed(req)) {
+          this.sendReferralJson(res, 401, { error: 'unauthorized' });
+          return;
+        }
+        this.sendReferralJson(res, 200, {
+          codes: this.referralManager.snapshot().codes,
+        });
+        return;
+      }
+
+      if (req.method === 'POST' && path === '/referrals/attribute') {
+        const body = await readJsonBody(req);
+        const o = isObject(body) ? body : {};
+        const result = this.referralManager.attribute({
+          userId: typeof o.userId === 'string' ? o.userId : '',
+          code: typeof o.code === 'string' ? o.code : '',
+          source: typeof o.source === 'string' ? o.source : undefined,
+        });
+        this.sendReferralJson(res, result.ok ? 200 : 400, result);
+        return;
+      }
+
+      if (req.method === 'POST' && path === '/referrals/codes') {
+        if (!this.referralAdminAllowed(req)) {
+          this.sendReferralJson(res, 401, { error: 'unauthorized' });
+          return;
+        }
+        const body = await readJsonBody(req);
+        const o = isObject(body) ? body : {};
+        const code = this.referralManager.createCode({
+          code: typeof o.code === 'string' ? o.code : undefined,
+          ownerId: typeof o.ownerId === 'string' ? o.ownerId : '',
+          ownerLabel: typeof o.ownerLabel === 'string' ? o.ownerLabel : undefined,
+          payoutBps: typeof o.payoutBps === 'number' ? o.payoutBps : undefined,
+        });
+        this.sendReferralJson(res, 201, code);
+        return;
+      }
+
+      if (req.method === 'POST' && path === '/referrals/payout') {
+        if (!this.referralAdminAllowed(req)) {
+          this.sendReferralJson(res, 401, { error: 'unauthorized' });
+          return;
+        }
+        const body = await readJsonBody(req);
+        const o = isObject(body) ? body : {};
+        const result = this.referralManager.markPaid({
+          code: typeof o.code === 'string' ? o.code : undefined,
+          ownerId: typeof o.ownerId === 'string' ? o.ownerId : undefined,
+          payoutTx: typeof o.payoutTx === 'string' ? o.payoutTx : undefined,
+        });
+        this.sendReferralJson(res, 200, result);
+        return;
+      }
+
+      this.sendReferralJson(res, 404, { error: 'not found' });
+    } catch (err) {
+      this.sendReferralJson(res, 400, { error: (err as Error).message });
+    }
+  }
+
+  private referralAdminAllowed(req: IncomingMessage): boolean {
+    const token = this.deps.referralAdminToken;
+    if (!token) return false;
+    const auth = req.headers.authorization ?? '';
+    return auth === `Bearer ${token}`;
+  }
+
+  private sendReferralJson(res: ServerResponse, status: number, body: unknown): void {
+    res.writeHead(status, referralHeaders());
+    res.end(JSON.stringify(body));
+  }
+}
+
+function referralHeaders(): Record<string, string> {
+  return {
+    'content-type': 'application/json',
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET,POST,OPTIONS',
+    'access-control-allow-headers': 'content-type,authorization',
+  };
+}
+
+function isObject(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === 'object' && !Array.isArray(v);
+}
+
+async function readJsonBody(req: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+    total += buf.length;
+    if (total > 64_000) throw new Error('body too large');
+    chunks.push(buf);
+  }
+  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  if (!raw) return {};
+  return JSON.parse(raw);
 }
 
 /** Structural validation of an incoming bet (the WS boundary trusts nothing). */

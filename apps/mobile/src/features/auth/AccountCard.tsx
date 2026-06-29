@@ -35,10 +35,6 @@ export function AccountCard({ noTopMargin }: { noTopMargin?: boolean } = {}) {
             ACCOUNT
           </Text>
           <Text preset="subtitle">Save your wallet</Text>
-          <Text preset="body" muted style={styles.body}>
-            Sign in with email or a passkey. Your Solana wallet follows
-            you to any device. No seed phrase to write down or lose.
-          </Text>
           <Button
             label="Sign in"
             onPress={account.login}

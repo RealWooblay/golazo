@@ -14,6 +14,7 @@ import {
   realBetPointsDelta,
   settlePointsMarket,
   snapshotPointsMarket,
+  shouldMergeAccountIds,
   type Market,
   type Outcome,
   type PointsMarket,
@@ -163,23 +164,63 @@ export class PointsManager {
     return undefined;
   }
 
-  register(userId: string, name: string): PointsEffects {
-    // Sanitize at the door: a public leaderboard must never store a raw email/phone.
+  register(userId: string, name: string, priorUserId?: string): PointsEffects {
     const safe = safeDisplayName(name, userId);
-    const existing = this.players.get(userId);
+    if (priorUserId && shouldMergeAccountIds(priorUserId, userId)) {
+      this.mergePlayer(priorUserId, userId, safe);
+    } else {
+      const existing = this.players.get(userId);
+      if (existing) {
+        existing.name = safe;
+        existing.connected = true;
+      } else {
+        this.players.set(userId, {
+          userId,
+          name: safe,
+          balance: POINTS_START_BALANCE,
+          connected: true,
+          joinedAt: Date.now(),
+        });
+      }
+    }
+    return this.effectsFor(userId, true);
+  }
+
+  /** Fold a legacy anonymous session into the durable account id (one row on the board). */
+  private mergePlayer(fromUserId: string, toUserId: string, name: string): void {
+    const from = this.players.get(fromUserId);
+    const to = this.players.get(toUserId);
+    const safe = safeDisplayName(name, toUserId);
+    if (from && to) {
+      to.balance += from.balance;
+      to.name = safe;
+      to.connected = true;
+      this.players.delete(fromUserId);
+      return;
+    }
+    if (from && !to) {
+      this.players.set(toUserId, {
+        ...from,
+        userId: toUserId,
+        name: safe,
+        connected: true,
+      });
+      this.players.delete(fromUserId);
+      return;
+    }
+    const existing = this.players.get(toUserId);
     if (existing) {
       existing.name = safe;
       existing.connected = true;
     } else {
-      this.players.set(userId, {
-        userId,
+      this.players.set(toUserId, {
+        userId: toUserId,
         name: safe,
         balance: POINTS_START_BALANCE,
         connected: true,
         joinedAt: Date.now(),
       });
     }
-    return this.effectsFor(userId, true);
   }
 
   disconnect(userId: string): PointsEffects {

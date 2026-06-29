@@ -91,6 +91,19 @@ export function readFeedUrl(): string | undefined {
   return typeof v === "string" && v.trim().length > 0 ? v.trim() : undefined;
 }
 
+/** HTTP base for feed-side utility endpoints that sit next to the websocket. */
+export function feedHttpBase(liveUrl = defaultLiveUrl()): string {
+  try {
+    const u = new URL(liveUrl.replace(/^ws/i, "http"));
+    u.pathname = "";
+    u.search = "";
+    u.hash = "";
+    return u.toString().replace(/\/$/, "");
+  } catch {
+    return "http://localhost:8787";
+  }
+}
+
 /**
  * Solana JSON-RPC URL for the client. Never embeds a private API key — production
  * web/native use the feed's `/rpc` proxy on the same host as the WebSocket feed.

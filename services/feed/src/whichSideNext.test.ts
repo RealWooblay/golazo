@@ -165,21 +165,20 @@ describe('which-side-next contest — the scoped decisive-event NO', () => {
       await orch.stop();
     });
 
-    // TEAM ATTRIBUTION FIX — the dominant cause of "every market voids / goes NO". ESPN
-    // frequently reports an open-play shot with NO team. With a clear pressing side, attribute
-    // the loose event to it so the contest RESOLVES instead of starving to the deadline VOID.
-    it('attributes a TEAMLESS threat to the pressing side (no more starve-to-VOID)', async () => {
+    // Teamless shots may be attributed to the pressing side for TEAMLESS window markets, but a
+    // "which team acts first?" contest pays a side. Do not settle that on an inferred team.
+    it('does NOT settle a which-side contest on an inferred teamless threat', async () => {
       const feed = new StubFeed();
       const orch = new Orchestrator(simConfig(), feed);
       const m = await openAndLockVersus(orch, feed); // momentum built on 'home'; contest team='home'
       expect(m.team).toBe('home');
 
-      // A shot with NO team tag; 'home' is clearly pressing (the attack keeps the bar on home)
-      // → inferred to home → the home contest resolves YES instead of voiding.
+      // A shot with NO team tag; even if the momentum bar can infer a pressing side, that is
+      // not ESPN attribution and must not decide a team-versus-team money market.
       feed.push([mk('attack', 'home'), mk('shot')]);
       await orch.simTick();
       const after = orch.simMarkets().find((x) => x.id === m.id)!;
-      expect(after.settlement?.outcome).toBe('YES');
+      expect(after.settlement).toBeUndefined();
       await orch.stop();
     });
 
@@ -275,9 +274,15 @@ describe('full-time sweep', () => {
     expect(stuck, 'no market may be left hanging at full time').toEqual([]);
     for (const m of liveBefore) {
       const after = orch.simMarkets().find((x) => x.id === m.id)!;
-      // None of these are period markets, so full-time refunds them (VOID), never a wall of NO.
-      expect(after.status).toBe('void');
-      expect(after.settlement?.outcome).toBe('VOID');
+      if (isWhichSideNextKind(m.kind)) {
+        expect(after.status).toBe('void');
+        expect(after.settlement?.outcome).toBe('VOID');
+      } else {
+        // Timer/count cards asked whether something happened before the deadline/whistle.
+        // At full time, with no qualifying event, they settle NO so nothing hangs.
+        expect(after.status).toBe('resolved');
+        expect(after.settlement?.outcome).toBe('NO');
+      }
     }
     await orch.stop();
   });

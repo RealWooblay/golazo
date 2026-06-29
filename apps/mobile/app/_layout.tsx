@@ -9,6 +9,8 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { StoreProvider, useStore } from "@/state/store";
 import { ChainProvider } from "@/features/chain/useChain";
 import { PrivyAuthProvider } from "@/features/auth/PrivyAuthProvider";
+import { useReferralAttribution } from "@/features/referrals/useReferralAttribution";
+import { AccountDisplayNameSync } from "@/features/auth/AccountDisplayNameSync";
 import { GestureHandlerRootViewSafe } from "@/ui/GestureRoot";
 import { BottomSheetProviderSafe } from "@/ui/BottomSheetProvider";
 import { useAppFonts } from "@/ui/useAppFonts";
@@ -65,6 +67,7 @@ export default function RootLayout() {
 function BootGate() {
   const [fontsReady, fontError] = useAppFonts();
   const { hydrated } = useStore();
+  useReferralAttribution();
   const ready = (fontsReady || !!fontError) && hydrated;
 
   useEffect(() => {
@@ -80,6 +83,7 @@ function BootGate() {
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }} onLayout={onLayout}>
+      <AccountDisplayNameSync />
       <StatusBar style="light" />
         <Stack
         screenOptions={{

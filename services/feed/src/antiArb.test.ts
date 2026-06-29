@@ -67,14 +67,16 @@ const commentary = (type: FeedEvent['type'], team: Team): FeedEvent => ({
   meta: { clock: "30'" },
 });
 
-/** Tick until a goal_in_window market is open, then advance past its bet window so it's locked. */
 async function openAndLockGoalWindow(orch: Orchestrator): Promise<Market> {
-  for (let i = 0; i < 60; i++) {
-    await orch.simTick();
-    const m = orch.simMarkets().find((x) => x.kind === 'goal_in_window');
-    if (m && (m.status === 'open' || m.status === 'locked')) break;
-    await vi.advanceTimersByTimeAsync(15_000);
-  }
+  const opened = await orch.simOpenMarket({
+    gameId: 'g1',
+    question: 'Any goal in 5 min?',
+    kind: 'goal_in_window',
+    slot: 'event',
+    windowMs: 8_000,
+    trueProb: 0.3,
+  });
+  expect(opened, 'goal_in_window should open via the sim hook').toBeTruthy();
   await vi.advanceTimersByTimeAsync(15_000); // past the bet window → locked
   await orch.simTick();
   return orch.simMarkets().find((x) => x.kind === 'goal_in_window')!;

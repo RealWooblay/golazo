@@ -92,6 +92,20 @@ export interface Config {
    */
   pointsStorePath: string | undefined;
 
+  /**
+   * Disk path for the compact referral snapshot. Every mutation is also appended to
+   * `${REFERRAL_STORE_PATH}.journal`, so a crash does not depend on one rewritten JSON file.
+   * Defaults outside the deploy bundle so a redeploy does not wipe partner balances.
+   * Set empty to disable disk persistence for local tests only.
+   */
+  referralStorePath: string | undefined;
+
+  /** Partner share of referred volume, in basis points. 100 = 1 percentage point. */
+  referralPayoutBps: number;
+
+  /** Optional bearer token for referral admin writes (create code / mark paid). */
+  referralAdminToken: string | undefined;
+
   /** Operator rake (house edge) handed to the MarketEngine. Default 6%. This IS the trade fee. */
   rake: number;
 
@@ -235,6 +249,12 @@ export const config: Config = {
     process.env.POINTS_STORE_PATH === ''
       ? undefined
       : process.env.POINTS_STORE_PATH?.trim() || join(homedir(), '.golazo', 'points.json'),
+  referralStorePath:
+    process.env.REFERRAL_STORE_PATH === ''
+      ? undefined
+      : process.env.REFERRAL_STORE_PATH?.trim() || join(homedir(), '.golazo', 'referrals.snapshot.json'),
+  referralPayoutBps: num('REFERRAL_PAYOUT_BPS', 100),
+  referralAdminToken: process.env.REFERRAL_ADMIN_TOKEN?.trim() || undefined,
   rake: num('RAKE', 0.06),
   feeRecipient: process.env.FEE_RECIPIENT?.trim() || '5kBBKSV2EUyLsa2sXoK9E1VVzmDXCaHnQiMfz8B8yJtP',
   // No house seed by default: a seeded pool has no Bet PDA, so its net share is paid to nobody
