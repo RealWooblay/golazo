@@ -6,6 +6,7 @@ import {
   triggerFromEvent,
   outcomeFromEvent,
   isGoalQuestionKind,
+  userBetFromSettlement,
   POINTS_RAKE,
   type FeedEvent,
   type GameState,
@@ -135,35 +136,6 @@ function offlineOutcomeForEvent(
 let _betSeq = 0;
 const betRowId = () =>
   `bet_${Date.now().toString(36)}_${(_betSeq++).toString(36)}`;
-
-/**
- * Derive the user's win / payout / net from a settlement.
- * Win is side===outcome (not payout>stake). If the user isn't in payouts[] the
- * bet never entered the pool (anti-snipe delay or reject) — net 0 (refund), not −stake.
- */
-function userBetFromSettlement(
-  settlement: Settlement,
-  bettorId: string,
-  stake: number,
-  side: Side,
-): { won: boolean; payout: number; delta: number; inPool: boolean } {
-  const outcome = settlement.outcome;
-  const mine = settlement.payouts.find((x) => x.userId === bettorId);
-  if (outcome === "VOID") {
-    return { won: false, payout: stake, delta: 0, inPool: !!mine };
-  }
-  if (!mine) {
-    return { won: false, payout: stake, delta: 0, inPool: false };
-  }
-  const won = side === outcome;
-  const payout = mine.payout;
-  return {
-    won,
-    payout,
-    delta: won ? payout - stake : -stake,
-    inPool: true,
-  };
-}
 
 export function useGameFeed(): GameFeedApi {
   const store = useStore();

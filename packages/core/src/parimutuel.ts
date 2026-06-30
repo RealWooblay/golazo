@@ -154,3 +154,40 @@ export function settle(
     payouts,
   };
 }
+
+/** One bettor's resolved result, derived from a settlement. */
+export interface UserBetResult {
+  /** True only when the bettor's side matched the outcome (NOT payout>stake). */
+  won: boolean;
+  /** Gross credit owed: full payout on a win, the stake back on VOID/refund, 0 on a loss. */
+  payout: number;
+  /** Signed net for P&L: payout−stake on a win, −stake on a loss, 0 on VOID/refund. */
+  delta: number;
+  /** False when the bettor isn't in payouts[] — the bet never entered the pool (anti-snipe
+   *  delay / reject), so it's a refund (net 0), never a −stake loss. */
+  inPool: boolean;
+}
+
+/**
+ * Derive a single bettor's win/payout/net from a market settlement — the ONE place that
+ * decides "what happened to my bet". Win is `side === outcome` (never payout>stake). A VOID,
+ * or a bet that never made the pool, is a clean stake refund (net 0), not a loss.
+ *
+ * Shared by the client (reveal + session P&L) and the E2E money sim so they can never drift.
+ */
+export function userBetFromSettlement(
+  settlement: Settlement,
+  bettorId: string,
+  stake: number,
+  side: Side,
+): UserBetResult {
+  const mine = settlement.payouts.find((x) => x.userId === bettorId);
+  if (settlement.outcome === 'VOID') {
+    return { won: false, payout: stake, delta: 0, inPool: !!mine };
+  }
+  if (!mine) {
+    return { won: false, payout: stake, delta: 0, inPool: false };
+  }
+  const won = side === settlement.outcome;
+  return { won, payout: mine.payout, delta: won ? mine.payout - stake : -stake, inPool: true };
+}
