@@ -29,13 +29,21 @@ function sessionNet(
   result: ReturnType<typeof userResult>,
 ): number | undefined {
   if (result === "none") return undefined;
-  if (m.userDelta !== undefined) return m.userDelta;
-  if (result === "void") return 0;
   const stake = m.userStake ?? bet?.stake;
+  if (m.userDelta !== undefined) {
+    // Win badge uses side===outcome; a stale negative userDelta (payout row missing from
+    // settlement) must not read as −stake when the user picked the winner.
+    if (result === "won" && m.userDelta < 0 && bet && bet.delta > m.userDelta) {
+      return bet.delta;
+    }
+    if (result === "won" && m.userDelta < 0 && stake != null) {
+      return undefined;
+    }
+    return m.userDelta;
+  }
+  if (result === "void") return 0;
   if (result === "lost") return stake != null ? -stake : bet?.delta;
   // bet.delta is ALREADY the signed net (won ? payout - stake : -stake), so trust it directly.
-  // (Previously this re-subtracted the stake whenever bet.delta > bet.stake — i.e. any win above
-  // 2.0x — making the row read one stake short of the balance credit and the session P&L pill.)
   if (bet) return bet.delta;
   return undefined;
 }

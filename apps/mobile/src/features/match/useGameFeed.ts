@@ -136,6 +136,35 @@ let _betSeq = 0;
 const betRowId = () =>
   `bet_${Date.now().toString(36)}_${(_betSeq++).toString(36)}`;
 
+/**
+ * Derive the user's win / payout / net from a settlement.
+ * Win is side===outcome (not payout>stake). If the user isn't in payouts[] the
+ * bet never entered the pool (anti-snipe delay or reject) — net 0 (refund), not −stake.
+ */
+function userBetFromSettlement(
+  settlement: Settlement,
+  bettorId: string,
+  stake: number,
+  side: Side,
+): { won: boolean; payout: number; delta: number; inPool: boolean } {
+  const outcome = settlement.outcome;
+  const mine = settlement.payouts.find((x) => x.userId === bettorId);
+  if (outcome === "VOID") {
+    return { won: false, payout: stake, delta: 0, inPool: !!mine };
+  }
+  if (!mine) {
+    return { won: false, payout: stake, delta: 0, inPool: false };
+  }
+  const won = side === outcome;
+  const payout = mine.payout;
+  return {
+    won,
+    payout,
+    delta: won ? payout - stake : -stake,
+    inPool: true,
+  };
+}
+
 export function useGameFeed(): GameFeedApi {
   const store = useStore();
   const { mode, liveUrl, session, pointsBalance, pointsRank } = store;
@@ -147,6 +176,8 @@ export function useGameFeed(): GameFeedApi {
   const { pointsUserId, name: pointsName, priorPointsUserId } = usePointsIdentity();
   const bettorId = pointsUserId;
   const pointsId = pointsUserId;
+  const bettorIdRef = useRef(bettorId);
+  bettorIdRef.current = bettorId;
 
   // ---- view-model state (what the screen draws) ----
   const [game, setGame] = useState<GameState | null>(null);
@@ -313,12 +344,13 @@ export function useGameFeed(): GameFeedApi {
     (m: Market, settlement: Settlement): RevealVM | null => {
       const p = pendingByMarketRef.current[m.id];
       if (!p || p.marketId !== m.id) return null; // user didn't bet this round
-      const outcome: Outcome = settlement.outcome;
-      const mine = settlement.payouts.find(
-        (x) => x.userId === bettorId && x.side === p.side,
+      const line = userBetFromSettlement(
+        settlement,
+        bettorIdRef.current,
+        p.stake,
+        p.side,
       );
-      const won = outcome !== "VOID" && !!mine?.won;
-      const payout = outcome === "VOID" ? p.stake : (mine?.payout ?? 0);
+      const outcome: Outcome = line.inPool ? settlement.outcome : "VOID";
       return {
         marketId: m.id,
         question: m.question,
@@ -326,13 +358,13 @@ export function useGameFeed(): GameFeedApi {
         team: m.team,
         side: p.side,
         stake: p.stake,
-        payoutMult: p.stake > 0 ? payout / p.stake : 0,
+        payoutMult: p.stake > 0 ? line.payout / p.stake : 0,
         outcome,
-        won,
-        payout,
+        won: line.won,
+        payout: line.payout,
       };
     },
-    [bettorId],
+    [bettorIdRef],
   );
 
   const netBetDelta = useCallback(
@@ -490,6 +522,20 @@ export function useGameFeed(): GameFeedApi {
       if (cancelled || !m.settlement) return;
       clearDeadlineTimer();
       recordClosedMarket(m);
+      const pending = pendingByMarketRef.current[m.id];
+      if (pending && pending.marketId === m.id) {
+        const line = userBetFromSettlement(
+          m.settlement,
+          bettorIdRef.current,
+          pending.stake,
+          pending.side,
+        );
+        patchClosedMarket(m.id, {
+          userSide: pending.side,
+          userStake: pending.stake,
+          userDelta: line.delta,
+        });
+      }
       bots?.stop();
       const r = buildReveal(m, m.settlement);
       if (r) enqueueReveal(r);
@@ -857,27 +903,17 @@ export function useGameFeed(): GameFeedApi {
               // in its payouts, so it would patch a WRONG userDelta (e.g. +0 on a win). Points
               // P/L is owned by the dedicated points_settle handler below.
               if (pending && settlement && !pointsMode) {
-                const won =
-                  settlement.outcome !== "VOID" &&
-                  pending.side === settlement.outcome;
-                const mine = settlement.payouts.find(
-                  (x) => x.userId === bettorId && x.side === pending.side,
+                const line = userBetFromSettlement(
+                  settlement,
+                  bettorId,
+                  pending.stake,
+                  pending.side,
                 );
-                const payout =
-                  settlement.outcome === "VOID"
-                    ? pending.stake
-                    : (mine?.payout ?? 0);
                 patchClosedMarket(msg.market.id, {
                   userStake: pending.stake,
                   userSide: pending.side,
                   kind: msg.market.kind,
-                  userDelta: netBetDelta(
-                    settlement.outcome,
-                    pending.side,
-                    pending.stake,
-                    payout,
-                    won,
-                  ),
+                  userDelta: line.delta,
                 });
               }
               if (settlement && !catchingUpRef.current && !pointsMode) {
@@ -1055,7 +1091,7 @@ export function useGameFeed(): GameFeedApi {
           RAKE,
         ).multiple;
         try {
-          engine.placeBet(m.id, bettorId, side, stake);
+          engine.placeBet(m.id, bettorIdRef.current, side, stake);
         } catch {
           return null; // locked between render and tap — reject cleanly
         }
@@ -1065,6 +1101,13 @@ export function useGameFeed(): GameFeedApi {
           stake,
           estimatedMult,
         });
+        // Demo sim: local wallet — debit stake now, credit on reveal tap (live defers to server).
+        // adjustPoints is atomic in the reducer, so rapid bets don't desync off a stale balance.
+        if (pointsMode) {
+          store.adjustPoints(-stake);
+        } else {
+          store.debit(stake);
+        }
       } else {
         // LIVE: the server owns the pool. The multiple the user sees is only an
         // estimate; authoritative payout comes back in market_resolve.
@@ -1118,6 +1161,8 @@ export function useGameFeed(): GameFeedApi {
       store,
       pointsMode,
       pointsUserId,
+      pointsBalance,
+      pointsRank,
       setPendingForMarket,
       clearPendingForMarket,
     ],
@@ -1134,6 +1179,15 @@ export function useGameFeed(): GameFeedApi {
       // so points land exactly when you tap, just like claiming a real-money payout.
       if (reveal.claimBalance !== undefined) {
         store.setPointsState(reveal.claimBalance, pointsRank);
+      } else if (mode === "offline") {
+        const credit =
+          reveal.outcome === "VOID"
+            ? reveal.stake
+            : reveal.won
+              ? reveal.payout
+              : 0;
+        // Atomic credit — two reveals tapped back-to-back can't lose points to a stale balance.
+        if (credit > 0) store.adjustPoints(credit);
       }
     } else if (reveal.won || reveal.outcome === "VOID") {
       store.credit(reveal.payout);
@@ -1166,12 +1220,22 @@ export function useGameFeed(): GameFeedApi {
     setClosedMarkets((prev) => {
       const idx = prev.findIndex((m) => m.marketId === marketId);
       if (idx < 0) return prev;
-      const item = { ...prev[idx], revealedAt: Date.now() };
+      const item = {
+        ...prev[idx],
+        revealedAt: Date.now(),
+        userDelta: netBetDelta(
+          reveal.outcome,
+          reveal.side,
+          reveal.stake,
+          reveal.payout,
+          reveal.won,
+        ),
+      };
       return [item, ...prev.filter((_, i) => i !== idx)];
     });
     setReveals((prev) => prev.filter((item) => item.marketId !== marketId));
     clearPendingForMarket(reveal.marketId);
-  }, [reveals, store, teamWord, game, pointsMode, pointsRank, clearPendingForMarket]);
+  }, [reveals, store, teamWord, game, mode, pointsMode, pointsBalance, pointsRank, clearPendingForMarket, netBetDelta]);
 
   const activeReveal = catchingUp ? null : (reveals[0] ?? null);
   const historicMarkets = closedMarkets

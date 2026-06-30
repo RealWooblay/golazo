@@ -210,7 +210,7 @@ export default function MatchScreen() {
     for (const cb of chainBets.bets) {
       const r = cb.resolvedOutcome;
       const stake = cb.stakeUsd;
-      const won = cb.won === true;
+      const won = !!r && r !== "VOID" && cb.side === r;
       const delta = !r
         ? undefined
         : r === "VOID"

@@ -103,6 +103,7 @@ type Action =
   | { type: "setMode"; mode: FeedMode }
   | { type: "setMoneyMode"; moneyMode: MoneyMode }
   | { type: "setPointsState"; balance: number; rank: number }
+  | { type: "adjustPoints"; delta: number }
   | { type: "setPointsRank"; rank: number }
   | { type: "setPointsLeaderboard"; players: PointsPlayer[] }
   | { type: "setName"; name: string }
@@ -157,6 +158,10 @@ function reducer(state: StoreState, action: Action): StoreState {
         pointsBalance: action.balance,
         pointsRank: action.rank,
       };
+    case "adjustPoints":
+      // Atomic in the reducer so back-to-back demo debits/credits can't read a stale
+      // closure balance (each settles against the live value, not the captured one).
+      return { ...state, pointsBalance: clamp0(state.pointsBalance + action.delta) };
     case "setPointsRank":
       return { ...state, pointsRank: action.rank };
     case "setPointsLeaderboard":
@@ -298,6 +303,8 @@ export interface Store extends StoreState {
   setMode: (mode: FeedMode) => void;
   setMoneyMode: (moneyMode: MoneyMode) => void;
   setPointsState: (balance: number, rank: number) => void;
+  /** Atomic points delta (+credit / −debit), clamped at 0 — safe for back-to-back demo bets/reveals. */
+  adjustPoints: (delta: number) => void;
   setPointsRank: (rank: number) => void;
   setPointsLeaderboard: (players: PointsPlayer[]) => void;
   setName: (name: string) => void;
@@ -446,6 +453,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "setPointsState", balance, rank }),
     [],
   );
+  const adjustPoints = useCallback(
+    (delta: number) => dispatch({ type: "adjustPoints", delta }),
+    [],
+  );
   const setPointsRank = useCallback(
     (rank: number) => dispatch({ type: "setPointsRank", rank }),
     [],
@@ -511,6 +522,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setMode,
       setMoneyMode,
       setPointsState,
+      adjustPoints,
       setPointsRank,
       setPointsLeaderboard,
       setName,
@@ -537,6 +549,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setMode,
       setMoneyMode,
       setPointsState,
+      adjustPoints,
       setPointsRank,
       setPointsLeaderboard,
       setName,
