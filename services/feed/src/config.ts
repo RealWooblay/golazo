@@ -174,6 +174,16 @@ export interface Config {
   chainSeedLamports: number;
 
   /**
+   * COUNTERPARTY FILL cap, USX base units (0 = OFF). When a real market is about to be
+   * one-sided (would void), just before lock the operator places ONE bet on the EMPTY side
+   * sized min(this, the funded side's real stake) — so the book is two-sided and RESOLVES
+   * instead of voiding. The operator is a genuine blind counterparty (place_bet requires the
+   * market be Open, so the outcome isn't known yet) and can win or lose, bounded per market.
+   * Start small for a live test (1_000_000 = $1), then raise (20_000_000 = $20).
+   */
+  counterpartyFillBaseUnits: number;
+
+  /**
    * Grace (ms) the ON-CHAIN market lock is deferred PAST the off-chain engine lock.
    *
    * WHY: the off-chain engine + UI lock at `windowMs` (anti-snipe, unchanged), but a
@@ -275,6 +285,7 @@ export const config: Config = {
   solanaRpcUrl: string('SOLANA_RPC_URL', 'http://127.0.0.1:8899'),
   golazoProgramId: string('GOLAZO_PROGRAM_ID', '3Ej5xzfeW9LFMK55JA1gZ7ew5hqkL8S7zh2tHabGmYYM'),
   chainSeedLamports: num('CHAIN_SEED_LAMPORTS', 0),
+  counterpartyFillBaseUnits: num('COUNTERPARTY_FILL_BASE_UNITS', 0),
   // ANTI-SNIPE: 0 by default so the on-chain twin locks AT lockAt (the same instant the engine
   // locks), leaving NO window in which a known/held outcome can be bet with real USX. (It was 10s
   // to let an in-flight place_bet confirm, but the program has no on-chain betting-close check, so

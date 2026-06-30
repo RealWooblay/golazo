@@ -79,10 +79,12 @@ const GAS_CHECK_THROTTLE_MS = 30_000;
 
 /** MarketStatus discriminant for `Locked` (state.rs enum order: Open=0, Locked=1, …). */
 const MARKET_STATUS_LOCKED = 1;
+const MARKET_STATUS_OPEN = 0;
 
 /** PDA seed prefixes — mirror `instructions::seeds` in the program. */
 const SEED_MARKET = Buffer.from('market');
 const SEED_VAULT = Buffer.from('vault');
+const SEED_BET = Buffer.from('bet');
 
 /**
  * On-chain `Outcome` enum (state.rs): `None=0, Yes=1, No=2`.
@@ -548,6 +550,83 @@ export class FeedChainOperator {
       return this.voidMarket(marketSeed);
     }
     return this.resolveMarket(marketSeed, outcome);
+  }
+
+  /**
+   * COUNTERPARTY FILL: just before a real market locks, if it's one-sided (would void), the
+   * operator places ONE blind bet on the EMPTY side — sized min(cap, the funded side's REAL
+   * stake) — so the book is two-sided and RESOLVES instead of voiding. `place_bet` requires the
+   * market be OPEN, so this can only run pre-lock (outcome unknown) → a genuine counterparty
+   * that can win or lose, never picking a known result. Best-effort: ANY failure (no USX, race,
+   * rpc) returns false and the market voids as before (safe fallback, no regression). Bounded
+   * per market by `cap`. Returns true only once a fill bet has confirmed.
+   */
+  async operatorFillThinSide(
+    marketSeed: number | bigint,
+    capBaseUnits: number | bigint,
+  ): Promise<boolean> {
+    const cap = BigInt(capBaseUnits);
+    if (cap <= 0n) return false; // feature off
+    if (!this.active || !this.operator || !this.programId || !this.connection || !this.usxMint) {
+      return false;
+    }
+    const pools = await this.readMarketPools(marketSeed);
+    if (!pools || pools.status !== MARKET_STATUS_OPEN) return false; // place_bet needs Open
+    const realYes = pools.poolYes > pools.seedYes ? pools.poolYes - pools.seedYes : 0n;
+    const realNo = pools.poolNo > pools.seedNo ? pools.poolNo - pools.seedNo : 0n;
+    const dust = ONE_SIDED_DUST_BASE_UNITS;
+    // side: 0 = Yes, 1 = No (state.rs Side order). Fill the EMPTY side; skip if BOTH empty (no
+    // user to counter — an empty market voids harmlessly) or already two-sided (no fill needed).
+    let side: number;
+    let funded: bigint;
+    if (realYes > dust && realNo <= dust) {
+      side = 1; // users on YES → fill NO
+      funded = realYes;
+    } else if (realNo > dust && realYes <= dust) {
+      side = 0; // users on NO → fill YES
+      funded = realNo;
+    } else {
+      return false;
+    }
+    const stake = funded < cap ? funded : cap; // min(cap, funded real stake)
+    if (stake <= dust) return false;
+    try {
+      const authority = this.operator.publicKey;
+      const mint = this.usxMint;
+      const { marketPda, vaultPda } = this.derive(marketSeed, authority, this.programId);
+      const [betPda] = PublicKey.findProgramAddressSync(
+        [SEED_BET, marketPda.toBuffer(), authority.toBuffer()],
+        this.programId,
+      );
+      const operatorUsx = this.ata(authority, mint);
+      // place_bet data: 8-byte disc + side(u8) + stake(u64). Accounts mirror place_bet.rs.
+      const data = Buffer.concat([disc('place_bet'), Buffer.from([side]), u64(stake)]);
+      const ix = new TransactionInstruction({
+        programId: this.programId,
+        keys: [
+          { pubkey: authority, isSigner: true, isWritable: true },
+          { pubkey: marketPda, isSigner: false, isWritable: true },
+          { pubkey: vaultPda, isSigner: false, isWritable: true },
+          { pubkey: operatorUsx, isSigner: false, isWritable: true },
+          { pubkey: betPda, isSigner: false, isWritable: true },
+          { pubkey: TOKEN_PROGRAM, isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        ],
+        data,
+      });
+      await this.send(
+        [this.createAtaIdempotentIx(authority, authority, mint), ix],
+        'operatorFillThinSide',
+      );
+      console.log(
+        `[chain] counterparty fill seed=${marketSeed} side=${side === 0 ? 'YES' : 'NO'} ` +
+          `stake=${stake} (was one-sided; book now two-sided → resolves)`,
+      );
+      return true;
+    } catch (err) {
+      this.warn('operatorFillThinSide', err);
+      return false; // → caller voids as before (safe)
+    }
   }
 
   /**

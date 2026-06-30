@@ -79,6 +79,7 @@ export function simConfig(overrides: Partial<Config> = {}): Config {
     solanaRpcUrl: 'http://localhost:8899',
     golazoProgramId: 'sim',
     chainSeedLamports: 0,
+    counterpartyFillBaseUnits: 0,
     chainLockGraceMs: 10_000,
     ...overrides,
   };

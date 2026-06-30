@@ -1936,7 +1936,19 @@ export class Orchestrator {
       t.chainLockTimer = undefined;
       if (t.chainLocked) return;
       t.chainLocked = true;
-      void this.chain.lockMarket(seed);
+      // COUNTERPARTY FILL — blind, while the market is still Open (outcome not yet known, and
+      // off-chain betting has just closed). Fills the empty side of a would-be one-sided book so
+      // it RESOLVES (real bettor gets paid) instead of voiding; isOneSidedRealBook then sees a
+      // real two-sided pool at settle. Only when the cap is on — otherwise lock synchronously
+      // exactly as before (no behaviour change when off). Best-effort; lock always follows.
+      // NOT done in flushChainLock (that runs at resolve-time, when filling would not be blind).
+      if (this.config.counterpartyFillBaseUnits > 0) {
+        void this.chain
+          .operatorFillThinSide(seed, this.config.counterpartyFillBaseUnits)
+          .finally(() => void this.chain.lockMarket(seed));
+      } else {
+        void this.chain.lockMarket(seed);
+      }
     }, this.config.chainLockGraceMs);
   }
 
