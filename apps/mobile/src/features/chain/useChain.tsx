@@ -150,6 +150,8 @@ export interface UseChain {
     marketSeed: bigint | number,
     bettor?: string,
   ) => Promise<BetAccount | null>;
+  /** Scan the chain for EVERY unclaimed, settled bet this wallet holds (money recovery). */
+  scanUnclaimed: (bettor?: string) => Promise<ClientModule.ClaimableBet[]>;
   derivePdas: (
     authority: string,
     marketSeed: bigint | number,
@@ -511,6 +513,10 @@ export function ChainProvider({
         const { ctx, client } = requireCtx();
         return client.fetchBet(ctx, authority, marketSeed, bettor);
       },
+      scanUnclaimed: async (bettor) => {
+        const { ctx, client } = requireCtx();
+        return client.scanUnclaimedBets(ctx, bettor);
+      },
       derivePdas: (authority, marketSeed, bettor) => {
         const { ctx, client } = requireCtx();
         return client.deriveMarketPdas(ctx, authority, marketSeed, bettor);
@@ -602,6 +608,7 @@ const INERT_CHAIN: UseChain = {
   quoteBet: NOT_READY,
   fetchMarket: NOT_READY,
   fetchBet: NOT_READY,
+  scanUnclaimed: async () => [],
   derivePdas: NOT_READY,
   explorerAddressUrl: (addr: string) =>
     `https://explorer.solana.com/address/${addr}`,

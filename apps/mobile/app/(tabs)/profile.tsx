@@ -210,7 +210,9 @@ export default function ProfileHub() {
               label={
                 profileClaims.claiming
                   ? `Claiming ${profileClaims.claimableCount}…`
-                  : `Claim ${profileClaims.claimableCount} pending payout${profileClaims.claimableCount === 1 ? "" : "s"}`
+                  : profileClaims.claimableUsd >= 0.01
+                    ? `Claim $${profileClaims.claimableUsd.toFixed(2)} · ${profileClaims.claimableCount} payout${profileClaims.claimableCount === 1 ? "" : "s"}`
+                    : `Claim ${profileClaims.claimableCount} pending payout${profileClaims.claimableCount === 1 ? "" : "s"}`
               }
               onPress={() => void profileClaims.claimAll()}
               variant="primary"

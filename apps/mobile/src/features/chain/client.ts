@@ -398,6 +398,131 @@ export async function fetchBet(
   };
 }
 
+/** A settled, still-unclaimed bet found by scanning the wallet's on-chain Bet PDAs. */
+export interface ClaimableBet {
+  betAddress: string;
+  marketAddress: string;
+  authority: string;
+  marketSeed: bigint;
+  side: "Yes" | "No";
+  stakeLamports: bigint;
+  status: "Resolved" | "Void";
+  outcome: string;
+  /** Best-effort claimable value (base units): VOID = exact stake refund; win = parimutuel
+   *  estimate; loss = 0 (still worth claiming to recover the PDA rent). The claim tx pays the
+   *  exact program-computed amount — this is only for the UI's "$X waiting" prompt. */
+  estPayoutLamports: bigint;
+}
+
+/** Decode the market fields the recovery scan needs (offsets mirror fetchMarket). */
+function decodeMarketFields(d: Buffer): {
+  authority: string;
+  marketSeed: bigint;
+  rakeBps: number;
+  status: string;
+  outcome: string;
+  poolYes: bigint;
+  poolNo: bigint;
+  seedYes: bigint;
+  seedNo: bigint;
+} {
+  return {
+    authority: new PublicKey(d.subarray(8, 40)).toBase58(),
+    marketSeed: d.readBigUInt64LE(40),
+    rakeBps: d.readUInt16LE(80),
+    status: STATUS[d[82]] ?? "Open",
+    outcome: OUTCOME[d[83]] ?? "None",
+    poolYes: d.readBigUInt64LE(84),
+    poolNo: d.readBigUInt64LE(92),
+    seedYes: d.readBigUInt64LE(100),
+    seedNo: d.readBigUInt64LE(108),
+  };
+}
+
+/**
+ * MONEY RECOVERY: scan the chain for EVERY bet this wallet ever placed and return the ones whose
+ * market has SETTLED (Resolved/Void) but haven't been claimed yet. A Bet PDA holds the user's USX
+ * until they claim, claim is bettor-only, and the app otherwise only knows about bets from the
+ * current device's local state — so without this scan a bet placed on another device (or after a
+ * storage clear) is invisible and the USX looks gone. It isn't: it's here, claimable forever.
+ *
+ * Filters server-side by Bet size (83) + the bettor pubkey at offset 40, so the RPC returns ONLY
+ * this wallet's bets (not the whole program). One getProgramAccounts + one batched market fetch.
+ */
+export async function scanUnclaimedBets(
+  ctx: ChainContext,
+  bettor?: string,
+): Promise<ClaimableBet[]> {
+  const bettorPk = bettor ? new PublicKey(bettor) : ctx.wallet.publicKey;
+  const accts = await ctx.connection.getProgramAccounts(ctx.programId, {
+    commitment: "confirmed",
+    filters: [
+      { dataSize: 83 }, // Bet::SIZE = 8 + 32 + 32 + 1 + 8 + 1 + 1
+      { memcmp: { offset: 40, bytes: bettorPk.toBase58() } }, // bettor
+    ],
+  });
+  const bets = accts
+    .map(({ pubkey, account }) => {
+      const d = Buffer.from(account.data);
+      return {
+        betAddress: pubkey.toBase58(),
+        market: new PublicKey(d.subarray(8, 40)),
+        side: (d[72] === 1 ? "No" : "Yes") as "Yes" | "No",
+        stakeLamports: d.readBigUInt64LE(73),
+        claimed: d[81] === 1,
+      };
+    })
+    .filter((b) => !b.claimed);
+  if (bets.length === 0) return [];
+
+  const marketPks = [...new Set(bets.map((b) => b.market.toBase58()))];
+  const infos = await ctx.connection.getMultipleAccountsInfo(
+    marketPks.map((m) => new PublicKey(m)),
+    "confirmed",
+  );
+  const markets = new Map<string, ReturnType<typeof decodeMarketFields>>();
+  marketPks.forEach((pk, i) => {
+    const info = infos[i];
+    if (info) markets.set(pk, decodeMarketFields(Buffer.from(info.data)));
+  });
+
+  const out: ClaimableBet[] = [];
+  for (const b of bets) {
+    const m = markets.get(b.market.toBase58());
+    if (!m || (m.status !== "Resolved" && m.status !== "Void")) continue; // not settled yet
+    out.push({
+      betAddress: b.betAddress,
+      marketAddress: b.market.toBase58(),
+      authority: m.authority,
+      marketSeed: m.marketSeed,
+      side: b.side,
+      stakeLamports: b.stakeLamports,
+      status: m.status as "Resolved" | "Void",
+      outcome: m.outcome,
+      estPayoutLamports: estimateClaimLamports(b.side, b.stakeLamports, m),
+    });
+  }
+  return out;
+}
+
+/** Best-effort claim value for the UI prompt (exact for VOID; estimate for a win). */
+function estimateClaimLamports(
+  side: "Yes" | "No",
+  stake: bigint,
+  m: ReturnType<typeof decodeMarketFields>,
+): bigint {
+  if (m.status === "Void") return stake; // exact refund
+  const won = (side === "Yes" && m.outcome === "Yes") || (side === "No" && m.outcome === "No");
+  if (!won) return 0n;
+  const poolYes = m.poolYes + m.seedYes;
+  const poolNo = m.poolNo + m.seedNo;
+  const gross = poolYes + poolNo;
+  const winningPool = m.outcome === "Yes" ? poolYes : poolNo;
+  if (winningPool <= 0n) return stake; // settled one-sided safety
+  const net = gross - (gross * BigInt(m.rakeBps)) / 10000n;
+  return (stake * net) / winningPool;
+}
+
 // ── preview (no network for the math; mirrors the program exactly) ──────────────
 
 /**
