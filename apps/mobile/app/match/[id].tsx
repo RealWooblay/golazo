@@ -14,7 +14,7 @@ import { colors, spacing, type } from "@/theme";
 import { AnimatedNumber, Banner, Button, Chip, Confetti, MonoStat, Overline, Screen, Text, Toast } from "@/ui";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useStore } from "@/state/store";
-import type { BetRow, ClosedMarketVM, RevealVM } from "@/state/types";
+import type { BetRow, ClosedMarketVM, PendingBet, RevealVM } from "@/state/types";
 import { bettingClosesAt, bettingSafetyBufferMs, RAKE } from "@/lib/config";
 import { multiple } from "@/lib/format";
 import { useTick } from "@/hooks";
@@ -138,10 +138,19 @@ export default function MatchScreen() {
     store.mode === "live" && store.session.moneyMode === "real";
   const chainMode = chain.ready && realMoneyLive;
   const chainBets = useChainBets(chain, store.stake, realMoneyLive, markets);
-  // Money is real SOL in chain mode, play $ in sandbox — for the header balance
-  // AND the stake chips / over-balance check (so nothing reads "$" while you bet SOL).
+  // Money is real USX in chain mode, paper points or sandbox cash elsewhere.
   const bal = useDisplayBalance();
   const stakeFormat = makeStakeFormatter(bal.points);
+  const [chainPlacingPreview, setChainPlacingPreview] =
+    useState<PendingBet | null>(null);
+  useEffect(() => {
+    if (
+      chainPlacingPreview &&
+      chainBets.bets.some((b) => b.offChainMarketId === chainPlacingPreview.marketId)
+    ) {
+      setChainPlacingPreview(null);
+    }
+  }, [chainPlacingPreview, chainBets.bets]);
   const resolvedMarketOutcomes = useMemo(
     () =>
       new Map(
@@ -220,7 +229,7 @@ export default function MatchScreen() {
         poolNo: 0,
         poolTotal: 0,
         yesShare: 50,
-        settledAt: Date.now(),
+        settledAt: cb.placedAt,
         userSide: cb.side,
         userStake: stake,
         userDelta: delta,
@@ -231,7 +240,7 @@ export default function MatchScreen() {
         claiming: !!cb.claiming,
         pending: !r,
         userLiveMult: !r ? cb.estimatedMultiple : undefined,
-        revealedAt: Date.now(),
+        revealedAt: cb.placedAt,
       });
     }
     return Array.from(byId.values()).sort(
@@ -326,7 +335,18 @@ export default function MatchScreen() {
         return;
       }
       if (!m.onChain) return;
-      await chainBets.placeBet(m, side, store.stake);
+      const liveOdds = chainBets.getLiveOdds(m.id, store.stake);
+      setChainPlacingPreview({
+        marketId: m.id,
+        side,
+        stake: store.stake,
+        estimatedMult:
+          side === "YES"
+            ? (liveOdds?.oddsYes ?? m.oddsYes)
+            : (liveOdds?.oddsNo ?? m.oddsNo),
+      });
+      const ok = await chainBets.placeBet(m, side, store.stake);
+      if (!ok) setChainPlacingPreview(null);
       return;
     }
     placeBet(side, store.stake, m.id);
@@ -483,6 +503,8 @@ export default function MatchScreen() {
                       stake: chainBet.stakeUsd,
                       estimatedMult: heldMult ?? chainBet.estimatedMultiple,
                     }
+                  : realMoneyLive && chainPlacingPreview?.marketId === m.id
+                    ? chainPlacingPreview
                   : !realMoneyLive
                     ? (pendingByMarket[m.id] ?? null)
                     : null;

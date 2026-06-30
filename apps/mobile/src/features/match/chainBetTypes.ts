@@ -9,6 +9,8 @@ export interface ChainBetVM {
   side: "YES" | "NO";
   /** stake in USX (human units; mint is 6dp) — the on-chain bet amount. */
   stakeUsd: number;
+  /** Stable client timestamp used to keep receipt/history ordering from jittering. */
+  placedAt: number;
   estimatedMultiple: number;
   betSignature: string;
   betUrl: string;

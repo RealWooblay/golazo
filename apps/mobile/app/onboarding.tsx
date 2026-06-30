@@ -2,10 +2,9 @@
 //
 // Shown once on first run ((tabs)/_layout redirects here while session.firstRun).
 // A short, gorgeous story that sells the hook — "bet the play, get paid in
-// seconds" — then a frictionless finish: an optional handle, a starter play-money
-// stack, and a "Start playing" CTA that saves the name, clears firstRun, and
-// drops the player straight into the lobby. Fully skippable; the loop is the
-// product. Web-safe (SVG/reanimated only, ScrollView paging — no new deps).
+// seconds" — then a frictionless finish that clears firstRun and drops the
+// player straight into the lobby. Fully skippable; the loop is the product.
+// Web-safe (SVG/reanimated only, ScrollView paging — no new deps).
 import React, { useRef, useState } from "react";
 import {
   Dimensions,
@@ -18,7 +17,6 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import { useStore } from "@/state/store";
-import { POINTS_START_BALANCE } from "@golazo/core";
 import { colors, MAX_WIDTH, spacing } from "@/theme";
 import { Button, GrainOverlay, Text, Vignette } from "@/ui";
 import { haptics } from "@/ui/haptics";
@@ -67,7 +65,6 @@ export default function Onboarding() {
   const scrollRef = useRef<ScrollView>(null);
 
   const [index, setIndex] = useState(0);
-  const [name, setName] = useState(store.session.displayName ?? "");
   const isLast = index === SLIDES.length - 1;
   const hx = store.session.hapticsOn;
 
@@ -88,8 +85,6 @@ export default function Onboarding() {
 
   const finish = () => {
     if (hx) haptics.win();
-    const trimmed = name.trim();
-    if (trimmed) store.setName(trimmed);
     store.setMoneyMode("points");
     store.completeFirstRun();
     router.replace("/(tabs)");
@@ -159,8 +154,6 @@ export default function Onboarding() {
             <View style={styles.footerInner}>
               {isLast ? (
                 <StartPanel
-                  name={name}
-                  onChangeName={setName}
                   onStart={finish}
                 />
               ) : (

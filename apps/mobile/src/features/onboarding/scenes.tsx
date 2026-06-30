@@ -21,8 +21,7 @@ import Svg, {
   Stop,
 } from "react-native-svg";
 import { colors, motion, radius, spacing, type } from "@/theme";
-import { POINTS_START_BALANCE } from "@golazo/core";
-import { pts } from "@/lib/format";
+import { money } from "@/lib/format";
 import { Text } from "@/ui";
 import { GradientFill, Vignette } from "../_shared/primitives";
 
@@ -32,7 +31,7 @@ import { GradientFill, Vignette } from "../_shared/primitives";
  *
  *   1. SceneMarketPop  — a market card springs in, a countdown ring sweeps, a
  *                        YES tap lands. ("Bet the play.")
- *   2. SceneInstantPay — a balance number counts up with a coin/confetti pop.
+ *   2. SceneInstantPay — a payout number counts up with a coin/confetti pop.
  *                        ("Get paid in seconds.")
  *   3. SceneLiveSlate  — pulsing live dots over a tiny fixture stack.
  *                        ("Every match, every moment.")
@@ -198,12 +197,12 @@ export function SceneMarketPop() {
   );
 }
 
-/** Slide 2 — the payout: points count up with a coin burst. */
+/** Slide 2 — the payout: money count-up with a coin burst. */
 export function SceneInstantPay() {
   const v = useSharedValue(0);
-  const [n, setN] = React.useState(POINTS_START_BALANCE);
-  const from = POINTS_START_BALANCE;
-  const to = POINTS_START_BALANCE + 242;
+  const [n, setN] = React.useState(0);
+  const from = 0;
+  const to = 242;
 
   useEffect(() => {
     const loop = () => {
@@ -241,10 +240,10 @@ export function SceneInstantPay() {
       <View style={styles.payWrap}>
         <Text style={styles.payLabel}>YOU WON</Text>
         <Text style={styles.payValue} allowFontScaling={false}>
-          {pts(n)}
+          {money(n)}
         </Text>
         <View style={styles.payDelta}>
-          <Text style={styles.payDeltaText}>+242 pts · 3.4x</Text>
+          <Text style={styles.payDeltaText}>+$242 · 3.40x</Text>
         </View>
       </View>
       {/* coin burst */}

@@ -55,8 +55,12 @@ const goal = (team: 'home' | 'away'): FeedEvent => ({
 });
 
 describe('goes_to_penalties market', () => {
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   it('opens when level in early ET', async () => {
     const feed = new StubFeed();

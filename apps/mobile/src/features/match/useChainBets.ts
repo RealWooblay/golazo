@@ -114,7 +114,18 @@ export function useChainBets(
   const claimDrainRef = useRef<Promise<void> | null>(null);
 
   const persistOpenBet = useCallback(
-    (bet: Pick<ChainBetVM, "offChainMarketId" | "authority" | "marketSeed" | "question" | "side" | "stakeUsd">) => {
+    (
+      bet: Pick<
+        ChainBetVM,
+        | "offChainMarketId"
+        | "authority"
+        | "marketSeed"
+        | "question"
+        | "side"
+        | "stakeUsd"
+        | "placedAt"
+      >,
+    ) => {
       store.upsertOpenChainBet({
         marketId: bet.offChainMarketId,
         authority: bet.authority,
@@ -122,7 +133,7 @@ export function useChainBets(
         question: bet.question,
         side: bet.side,
         stakeUsd: bet.stakeUsd,
-        placedAt: Date.now(),
+        placedAt: bet.placedAt,
       });
     },
     [store],
@@ -186,6 +197,9 @@ export function useChainBets(
             onChainSide,
             onChainBet.stakeLamports,
           );
+          const placedAt =
+            store.openChainBets.find((rec) => rec.marketId === m.id)?.placedAt ??
+            Date.now();
           applyMarketPool(m.id, om);
           patches.push({
             marketSeed,
@@ -194,6 +208,7 @@ export function useChainBets(
             question: m.question,
             side,
             stakeUsd,
+            placedAt,
             estimatedMultiple,
             betSignature: `hydrated-${onChainBet.address}`,
             betUrl: chain.explorerAddressUrl(onChainBet.address),
@@ -207,6 +222,7 @@ export function useChainBets(
             question: m.question,
             side,
             stakeUsd,
+            placedAt,
           });
         } catch {
           /* rpc blip */
@@ -501,6 +517,7 @@ export function useChainBets(
           side: onChainSide,
           stakeLamports: stakeBaseUnits,
         });
+        const placedAt = Date.now();
 
         setBets((prev) => [
           ...prev,
@@ -511,6 +528,7 @@ export function useChainBets(
             question: market.question,
             side,
             stakeUsd: stakeUnits,
+            placedAt,
             estimatedMultiple: quote.estimatedMultiple,
             betSignature: res.signature,
             betUrl: res.explorerUrl,
@@ -525,6 +543,7 @@ export function useChainBets(
           question: market.question,
           side,
           stakeUsd: stakeUnits,
+          placedAt,
         });
         void refreshMarketPool(market.id, authority, marketSeed);
         return true;
@@ -537,6 +556,7 @@ export function useChainBets(
             if (om) {
               const onChainSide: OnChainSide = side === "YES" ? "Yes" : "No";
               const quote = chain.quoteBet(om, onChainSide, stakeBaseUnits);
+              const placedAt = Date.now();
               setBets((prev) => {
                 if (prev.some((b) => b.offChainMarketId === market.id)) return prev;
                 return [
@@ -548,6 +568,7 @@ export function useChainBets(
                     question: market.question,
                     side,
                     stakeUsd: stakeUnits,
+                    placedAt,
                     estimatedMultiple: quote.estimatedMultiple,
                     // Recovery path: the bet account exists but the original confirm path did
                     // not return a signature. Link the recovered bet PDA instead of inventing
@@ -566,6 +587,7 @@ export function useChainBets(
                 question: market.question,
                 side,
                 stakeUsd: stakeUnits,
+                placedAt,
               });
               await chain.refreshBalance();
               return true;
