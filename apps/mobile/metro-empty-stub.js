@@ -5,7 +5,7 @@
 // (permissionless, @coinbase/wallet-sdk, @walletconnect/ethereum-provider,
 // @abstract-foundation/agw-client) and payment rails (x402, @stripe/crypto).
 // Metro does NOT tree-shake, so it must resolve every one of those imports even
-// though GOLAZO only uses email/passkey login + a Solana embedded wallet.
+// though GOLAZO only uses email/wallet login + a Solana embedded wallet.
 //
 // Rather than install (and ship) the entire EVM ecosystem, we resolve those
 // modules to this no-op proxy. It answers any property access with a callable

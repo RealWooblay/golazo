@@ -71,20 +71,22 @@ BET_SAFETY_BUFFER_MS=2000
 REFERRAL_STORE_PATH=/var/lib/golazo/referrals.snapshot.json
 REFERRAL_PAYOUT_BPS=100
 POINTS_STORE_PATH=/var/lib/golazo/points.json
-# Enhancer OFF: market titles come from the curated, clean templates only (no AI re-wording /
-# "slop"). The director stays ON — AI still chooses WHICH market to open, not its wording.
+# Enhancer OFF (titles come from the curated palette). Director ON for in-game feel —
+# anti-spam is enforced server-side (kind cooldown, spacing, slot caps), not by disabling AI.
 AI_ENHANCER=0
 AI_DIRECTOR=1
+AI_REFRESH_MS=5000
 ENV
 if [ -s "$SECRETS_TMP" ]; then cat "$SECRETS_TMP" >>/opt/golazo/services/feed/.env; fi
 rm -f "$SECRETS_TMP"
 if [ -f /opt/golazo/services/feed/.env.deploy ]; then
   cat /opt/golazo/services/feed/.env.deploy >>/opt/golazo/services/feed/.env
 fi
-# FINAL authority: the enhancer stays OFF no matter what a box-local .env.deploy says.
-# Curated clean titles only — the director (which market to open) still respects .env.deploy.
+# FINAL authority: enhancer stays OFF; director stays ON (needs ANTHROPIC_API_KEY).
 sed -i '/^AI_ENHANCER=/d' /opt/golazo/services/feed/.env
+sed -i '/^AI_DIRECTOR=/d' /opt/golazo/services/feed/.env
 echo 'AI_ENHANCER=0' >>/opt/golazo/services/feed/.env
+echo 'AI_DIRECTOR=1' >>/opt/golazo/services/feed/.env
 
 # Log AI layer state (never print the key).
 HAS_KEY=0

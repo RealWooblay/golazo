@@ -84,6 +84,22 @@ export interface RevealVM {
   /** POINTS mode only: the new balance to apply WHEN this reveal is tapped (reveal = claim,
    *  matching real money). Undefined for real-money reveals (those credit via `payout`). */
   claimBalance?: number;
+  /** On-chain USX: claim tx in flight after reveal tap. */
+  claiming?: boolean;
+  /** On-chain USX: claim landed — payout/refund is in the wallet. */
+  claimed?: boolean;
+  claimUrl?: string;
+}
+
+/** Persisted open on-chain bet — used to claim after leaving the match screen. */
+export interface OpenChainBetRecord {
+  marketId: string;
+  authority: string;
+  marketSeed: number;
+  question: string;
+  side: Side;
+  stakeUsd: number;
+  placedAt: number;
 }
 
 /** A settled market in this session — final pool + odds, whether or not you bet. */
@@ -120,6 +136,8 @@ export interface ClosedMarketVM {
   claiming?: boolean;
   /** On-chain bet placed but not yet resolved → render a "waiting" row, no net. */
   pending?: boolean;
+  /** Live indicative multiple for an open on-chain bet (updates as the pool moves). */
+  userLiveMult?: number;
 }
 
 // ── Persisted ledger (Profile screen + history) ──────────────────────────────

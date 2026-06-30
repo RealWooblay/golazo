@@ -1,6 +1,6 @@
 {
   "name": "@golazo/core",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Framework-agnostic domain core: pure parimutuel pool math, market state machine, feed types, match simulator.",
   "type": "module",
   "main": "./dist/index.js",

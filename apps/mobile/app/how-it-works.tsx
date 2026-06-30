@@ -11,7 +11,7 @@ const STEPS: { n: string; title: string; body: string }[] = [
   {
     n: "1",
     title: "A moment kicks off",
-    body: "The feed catches a live moment and pops a 10-second YES/NO market.",
+    body: "The feed catches a live moment and opens a short YES/NO market. Betting closes early to stop late snipes.",
   },
   {
     n: "2",

@@ -96,6 +96,7 @@ describe('marketSlot', () => {
     expect(marketSlot('shot_in_window')).toBe('window');
     expect(marketSlot('goal_in_stoppage')).toBe('period');
     expect(marketSlot('goal_in_extra_time')).toBe('period');
+    expect(marketSlot('goes_to_penalties')).toBe('period');
   });
 
   it('classifies the PHASE 2 window/event/count kinds', () => {
@@ -163,7 +164,7 @@ describe('PHASE 6 which-side-next palette', () => {
   });
 });
 
-describe('PHASE 4a HT/FT boundary guard (inWhistleZone)', () => {
+describe('PHASE 4a HT/FT/ET boundary guard (inWhistleZone)', () => {
   it('suppresses short play markets near the half/full-time whistle', () => {
     // Normal regulation play — fine, there is enough runway to settle.
     expect(inWhistleZone(game("30'"))).toBe(false);
@@ -173,6 +174,15 @@ describe('PHASE 4a HT/FT boundary guard (inWhistleZone)', () => {
     expect(inWhistleZone(game("89'"))).toBe(true);
     expect(inWhistleZone(game("45+2'"))).toBe(true);
     expect(inWhistleZone(game("90+3'"))).toBe(true);
+  });
+
+  it('suppresses short play markets near ET half-time and ET full-time', () => {
+    expect(inWhistleZone(game("98'"))).toBe(false);
+    expect(inWhistleZone(game("104'"))).toBe(true);
+    expect(inWhistleZone(game("105+1'"))).toBe(true);
+    expect(inWhistleZone(game("112'"))).toBe(false);
+    expect(inWhistleZone(game("119'"))).toBe(true);
+    expect(inWhistleZone(game("120+2'"))).toBe(true);
   });
 });
 

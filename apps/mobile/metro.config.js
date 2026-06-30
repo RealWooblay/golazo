@@ -25,7 +25,7 @@ config.resolver.unstable_enablePackageExports = true;
 // @privy-io/react-auth statically imports a wide surface of Ethereum-wallet SDKs
 // (x402, permissionless, Coinbase, WalletConnect, Abstract, Base). Metro doesn't
 // tree-shake, so it would force-resolve all of them even though GOLAZO only uses
-// email/passkey login + a Solana embedded wallet.
+// email/wallet login + a Solana embedded wallet.
 //
 // Solana external wallets (Phantom) need @walletconnect/universal-provider +
 // toSolanaWalletConnectors — do NOT stub the whole @walletconnect family. Stub

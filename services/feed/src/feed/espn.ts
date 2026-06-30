@@ -100,6 +100,8 @@ export interface EspnStatus {
   };
   displayClock?: string;
   clock?: number;
+  /** ESPN period index — shootouts are typically period ≥ 5 in soccer. */
+  period?: number;
 }
 export interface EspnEvent {
   id?: string;
@@ -124,6 +126,8 @@ export interface EspnKeyEvent {
   /** Structured actors — participants[0].athlete is the scorer (goal) / shooter (shot). */
   participants?: Array<{ athlete?: { id?: string | number; displayName?: string } }>;
   scoringPlay?: boolean;
+  /** True when the keyEvent belongs to the post-ET penalty shootout, not open/extra time. */
+  shootout?: boolean;
   /** ISO wall-clock when ESPN received the play — used for timing, not keywords. */
   wallclock?: string;
 }
@@ -414,8 +418,8 @@ export class EspnFeed implements FeedSource {
     }
 
     let team = this.teamSide(ke.team?.id);
-    if (!team && (mapped === 'goal' || mapped === 'miss')) {
-      team = this.teamFromText(ke.text || ke.type?.text || '');
+    if (!team && (mapped === 'goal' || mapped === 'miss' || mapped === 'shot')) {
+      team = this.shooterTeamFromText(ke.text || ke.type?.text || '');
     }
 
     this.seen.add(seqId);
@@ -432,6 +436,7 @@ export class EspnFeed implements FeedSource {
         clock: ke.clock?.displayValue,
         ...(ke.wallclock ? { wallclock: ke.wallclock } : {}),
         ...(player ? { player } : {}),
+        ...(ke.shootout ? { shootout: true } : {}),
       },
     };
   }
@@ -456,7 +461,17 @@ export class EspnFeed implements FeedSource {
       this.game!.state.home.abbr,
       this.game!.state.away.abbr,
     );
-    const team = awarded ?? this.teamFromText(text);
+    const team =
+      awarded ??
+      (type === 'goal' || type === 'miss' || type === 'shot'
+        ? attributeShooterTeamFromText(
+            text,
+            this.game!.state.home.name,
+            this.game!.state.away.name,
+            this.game!.state.home.abbr,
+            this.game!.state.away.abbr,
+          )
+        : this.teamFromText(text));
     return {
       gameId: this.game!.eventId,
       ts: Date.now(),
@@ -486,12 +501,25 @@ export class EspnFeed implements FeedSource {
    */
   private teamFromText(text: string): Team | undefined {
     if (!this.game) return undefined;
-    const t = text.toLowerCase();
-    const h = this.game.state.home.name.toLowerCase();
-    const a = this.game.state.away.name.toLowerCase();
-    if (h && t.includes(h)) return 'home';
-    if (a && t.includes(a)) return 'away';
-    return undefined;
+    return attributeShooterTeamFromText(
+      text,
+      this.game.state.home.name,
+      this.game.state.away.name,
+      this.game.state.home.abbr,
+      this.game.state.away.abbr,
+    );
+  }
+
+  /** Shot/goal/miss attribution — parenthetical scorer first, never home-first when both sides named. */
+  private shooterTeamFromText(text: string): Team | undefined {
+    if (!this.game) return undefined;
+    return attributeShooterTeamFromText(
+      text,
+      this.game.state.home.name,
+      this.game.state.away.name,
+      this.game.state.home.abbr,
+      this.game.state.away.abbr,
+    );
   }
 
   /** Stable per-event id; synthesise a monotonic one if ESPN omits sequence. */
@@ -586,6 +614,36 @@ const OPENER_TYPES: ReadonlySet<FeedEvent['type']> = new Set([
   'var_check',
 ]);
 
+/**
+ * True when the match is in a penalty shootout (after ET). Used to settle
+ * `goal_in_extra_time` at the PK whistle and ignore shootout goals for that market.
+ */
+export function detectPenaltyShootout(
+  status: EspnStatus | undefined,
+  clock: string,
+): boolean {
+  const text = [
+    status?.displayClock,
+    status?.type?.detail,
+    status?.type?.shortDetail,
+    status?.type?.description,
+    status?.type?.name,
+    clock,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  if (
+    /\b(penalty shootout|penalty-shootout|penalties\b|shootout|shoot-out|tanda de penales|penaltis)\b/.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  if (typeof status?.period === 'number' && status.period >= 5) return true;
+  return parseClockKey(clock).base > 120;
+}
+
 /** Parse an ESPN clock ("45'" or "45+2'") into {base, stopp} for chronological sort. */
 export function parseClockKey(display: string | undefined): { base: number; stopp: number } {
   if (!display) return { base: 0, stopp: 0 };
@@ -621,6 +679,7 @@ export function parseGameState(
     scoreAway: toInt(away.score),
     clock: ev.status?.displayClock ?? "0'",
     status: mapStatus(ev.status),
+    penaltyShootout: detectPenaltyShootout(ev.status, ev.status?.displayClock ?? "0'"),
   };
   return { state, homeTeamId: home.team?.id, awayTeamId: away.team?.id };
 }
@@ -794,6 +853,59 @@ export function parseAwardedTeamFromCommentary(
   if (m) return matchTeamFragment(m[1]!, homeName, awayName, homeAbbr, awayAbbr);
   m = /\(([^)]+)\)\s+ha recibido una falta/i.exec(raw);
   if (m) return matchTeamFragment(m[1]!, homeName, awayName, homeAbbr, awayAbbr);
+  return undefined;
+}
+
+/**
+ * Attribute a shot/goal/miss to the SHOOTING side when ESPN omits team id.
+ * Parenthetical "(Morocco)" wins; when BOTH team names appear (keeper + shooter),
+ * pick the side closest to shot vocabulary — never naive home-first substring match.
+ */
+export function attributeShooterTeamFromText(
+  text: string,
+  homeName: string,
+  awayName: string,
+  homeAbbr?: string,
+  awayAbbr?: string,
+): Team | undefined {
+  const raw = text.trim();
+  if (!raw) return undefined;
+
+  let m = /\(([^)]+)\)[^.]*(?:shot|header|attempt|effort|remate|disparo)/i.exec(raw);
+  if (m) return matchTeamFragment(m[1]!, homeName, awayName, homeAbbr, awayAbbr);
+
+  const t = raw.toLowerCase();
+  const hl = homeName.trim().toLowerCase();
+  const al = awayName.trim().toLowerCase();
+  if (hl && al) {
+    const subjectM = new RegExp(
+      `^(${hl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}|${al.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})\\s+(?:effort|shot|attempt|header|remate|disparo)`,
+      'i',
+    ).exec(t);
+    if (subjectM) return subjectM[1]!.toLowerCase() === hl ? 'home' : 'away';
+  }
+
+  if (!/\b(saved|blocked)\s+by\b/i.test(t)) {
+    m = /(?:shot|header|attempt|remate|disparo)[^.]*?(?:by|from)\s+([^.!?,]+)/i.exec(raw);
+    if (m) return matchTeamFragment(m[1]!.trim(), homeName, awayName, homeAbbr, awayAbbr);
+  }
+  m = /^([^.!?,]+?)\s+(?:shot|header|attempt)/i.exec(raw);
+  if (m) return matchTeamFragment(m[1]!.trim(), homeName, awayName, homeAbbr, awayAbbr);
+  m = /goal[!]?[^.]*\(([^)]+)\)/i.exec(raw);
+  if (m) return matchTeamFragment(m[1]!, homeName, awayName, homeAbbr, awayAbbr);
+
+  if (!hl || !al) return undefined;
+  const hIdx = t.indexOf(hl);
+  const aIdx = t.indexOf(al);
+  if (hIdx < 0 && aIdx < 0) return undefined;
+  if (hIdx >= 0 && aIdx < 0) return 'home';
+  if (aIdx >= 0 && hIdx < 0) return 'away';
+  const shotKw = /(shot|header|attempt|remate|disparo|effort)/i;
+  const sm = shotKw.exec(t);
+  if (sm) {
+    const pos = sm.index;
+    return Math.abs(hIdx - pos) <= Math.abs(aIdx - pos) ? 'home' : 'away';
+  }
   return undefined;
 }
 

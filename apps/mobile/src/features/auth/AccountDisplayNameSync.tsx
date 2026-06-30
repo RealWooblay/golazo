@@ -32,7 +32,7 @@ export function AccountDisplayNameSync() {
       map[prev] = currentName;
     }
 
-    if (accountKey && isWalletIdentityUpgrade(prev, accountKey) && map[prev] && !map[accountKey]) {
+    if (prev && accountKey && isWalletIdentityUpgrade(prev, accountKey) && map[prev] && !map[accountKey]) {
       map[accountKey] = map[prev]!;
     }
 

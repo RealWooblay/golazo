@@ -45,6 +45,8 @@ export interface GameState {
   /** Human label for the active break: "Hydration break" | "Cooling break" | "Injury delay" |
    *  "VAR check" | "Break". Set only while breakPaused; the client renders it (no hardcoding). */
   breakLabel?: string;
+  /** True once a penalty shootout has started (after ET). Goals here are NOT extra-time goals. */
+  penaltyShootout?: boolean;
 }
 
 /**

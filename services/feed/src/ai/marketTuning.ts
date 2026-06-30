@@ -168,8 +168,8 @@ export const MOMENTUM_OPEN_THRESHOLD = 0.15;
 export const COUNT_WINDOW_MS = 240_000; // 4-minute counting window
 export const COUNT_LAG_MS = 60_000; // + ~55–60s feed lag before NO
 
-/** Bet window for heartbeat-opened event/count/versus markets. */
-export const HEARTBEAT_BET_WINDOW_MS = 8_000;
+/** Bet window for fallback event/count/versus markets. UI closes ~2s early for anti-snipe. */
+export const HEARTBEAT_BET_WINDOW_MS = 10_000;
 
 function pickRotated<T>(variants: readonly T[], seed: number): T {
   return variants[Math.abs(seed) % variants.length]!;
@@ -178,7 +178,7 @@ function pickRotated<T>(variants: readonly T[], seed: number): T {
 const CARD_WINDOW_QUESTIONS: ((mins: number) => string)[] = [
   (mins) => `A booking in ${mins} min?`,
   (mins) => `Any card in ${mins} min?`,
-  (mins) => `A yellow in the next ${mins} min?`,
+  (mins) => `A card in the next ${mins} min?`,
   (mins) => `Card shown in ${mins} min?`,
 ];
 
@@ -217,16 +217,16 @@ export function buildEventSlotTrigger(gameId: string, counter: number): MarketTr
 // `mins` = the real counting window (COUNT_WINDOW_MS) so the title states the exact window
 // it settles on. Count markets are TEAM-AGNOSTIC (either team's corners/shots count).
 const CORNER_COUNT_QUESTIONS: ((line: number, mins: number) => string)[] = [
-  (line, mins) => `Over ${line} corners in ${mins} min?`,
   (line, mins) => `${line + 1}+ corners in ${mins} min?`,
-  (line, mins) => `More than ${line} corners in ${mins} min?`,
+  (line, mins) => `At least ${line + 1} corners in ${mins} min?`,
+  (line, mins) => `${line + 1} or more corners in ${mins} min?`,
   (line, mins) => `${line + 1}+ corners in ${mins} min?`,
 ];
 
 const SHOT_COUNT_QUESTIONS: ((line: number, mins: number) => string)[] = [
-  (line, mins) => `Over ${line} shots in ${mins} min?`,
-  (line, mins) => `${line + 1}+ shots in ${mins} min?`,
-  (line, mins) => `More than ${line} shots in ${mins} min?`,
+  (line, mins) => `${line + 1}+ shot attempts in ${mins} min?`,
+  (line, mins) => `At least ${line + 1} shots in ${mins} min?`,
+  (line, mins) => `${line + 1} or more efforts in ${mins} min?`,
   (line, mins) => `${line + 1}+ shots in ${mins} min?`,
 ];
 
@@ -347,7 +347,7 @@ export function triggerWordingProblem(kind: string, question: string, isPeriod =
     /final whistle|to the whistle|beat the whistle|before (?:the )?full[- ]?time|before (?:the )?half[- ]?time|before the whistle|before the break|final sprint|final dash|dying (?:minutes|seconds|embers)|last kick|in stoppage|added time|in extra[- ]?time|\bin et\b|equali[sz]er in et/.test(
       q,
     );
-  const isPeriodKind = isPeriod || kind === 'goal_in_stoppage' || kind === 'goal_in_extra_time';
+  const isPeriodKind = isPeriod || kind === 'goal_in_stoppage' || kind === 'goal_in_extra_time' || kind === 'goes_to_penalties';
   if (periodWorded && !isPeriodKind) {
     return `period/whistle wording on non-period kind '${kind}': "${question}"`;
   }
@@ -469,6 +469,8 @@ export function resolveDeadlineMs(kind: string): number {
       return STOPPAGE_EXTEND_MS;
     case 'goal_in_extra_time':
       return 25 * 60_000;
+    case 'goes_to_penalties':
+      return 25 * 60_000;
     default:
       return 75_000;
   }
@@ -494,7 +496,7 @@ export function marketSlot(kind: string): MarketSlot {
   ) {
     return 'window';
   }
-  if (kind === 'goal_in_stoppage' || kind === 'goal_in_extra_time') return 'period';
+  if (kind === 'goal_in_stoppage' || kind === 'goal_in_extra_time' || kind === 'goes_to_penalties') return 'period';
   if (kind === 'player_to_score') return 'player';
   // PHASE 2 — teamless "event" lane (a booking / a goal in the next few minutes) and
   // the over/under "count" lane (more than N corners / shots). Each single-occupancy.
@@ -686,12 +688,30 @@ export interface GameContext {
   isStoppage: boolean;
   /** True in extra time (after 90'). */
   isExtraTime: boolean;
-  /** Rough minutes of regulation left in the current half (0 in stoppage/ET). */
+  /** True once a penalty shootout has started — ET goal markets must not pay here. */
+  isPenaltyShootout: boolean;
+  /** End minute of the current half (45, 90, 105, or 120). */
+  halfEndMinute: number;
+  /** Rough minutes left in the current half (0 in stoppage). */
   minutesLeft: number;
   /** scoreHome - scoreAway. */
   scoreMargin: number;
   /** True when one goal or fewer separates the teams (the tense, bettable kind). */
   isClose: boolean;
+}
+
+/** True when the match is in a penalty shootout (after ET). */
+export function isPenaltyShootoutPhase(game: GameState): boolean {
+  if (game.penaltyShootout) return true;
+  const raw = (game.clock ?? '').toLowerCase();
+  if (
+    /\b(penalty shootout|penalty-shootout|penalties\b|shootout|shoot-out|tanda de penales|penaltis)\b/.test(
+      raw,
+    )
+  ) {
+    return true;
+  }
+  return parseClockKey(game.clock).base > 120;
 }
 
 /** Parse "45'", "45+2'", "45'+1'", "90+3'", "HT", etc. into structured context. */
@@ -705,30 +725,66 @@ export function parseGameContext(game: GameState): GameContext {
     else if (base <= 120) period = 'ET';
     else period = 'PK';
   }
-  const isExtraTime = base > 90 && base <= 120;
-  const halfEnd = period === '1H' ? 45 : period === '2H' ? 90 : 120;
-  const minutesLeft = period === 'unknown' || isStoppage ? 0 : Math.max(0, halfEnd - base);
+  const isExtraTime = base > 90 && base <= 120 && !isPenaltyShootoutPhase(game);
+  let halfEndMinute = 0;
+  if (period === '1H') halfEndMinute = 45;
+  else if (period === '2H') halfEndMinute = 90;
+  else if (period === 'ET') halfEndMinute = base <= 105 ? 105 : 120;
+  else if (period === 'PK') halfEndMinute = 120;
+  const minutesLeft =
+    period === 'unknown' || isStoppage ? 0 : Math.max(0, halfEndMinute - base);
   const scoreMargin = game.scoreHome - game.scoreAway;
   return {
     period,
     isStoppage,
     isExtraTime,
+    isPenaltyShootout: isPenaltyShootoutPhase(game),
+    halfEndMinute,
     minutesLeft,
     scoreMargin,
     isClose: Math.abs(scoreMargin) <= 1,
   };
 }
 
+/** End minute of the half the clock is currently in (45 / 90 / 105 / 120). */
+export function currentHalfEndMinute(game: GameState): number {
+  return parseGameContext(game).halfEndMinute;
+}
+
 /**
- * THE HT/FT BOUNDARY GUARD (deterministic — works with or without the AI director).
+ * True in the first ~2′ after a period restarts (ET kickoff, ET second half) — too chaotic
+ * for a fair short market; period markets wait too.
+ */
+export function inEarlyPeriodRestart(game: GameState): boolean {
+  const ctx = parseGameContext(game);
+  if (ctx.isStoppage || ctx.period !== 'ET') return false;
+  const { base } = parseClockKey(game.clock);
+  if (base > 90 && base <= 105 && base - 90 <= 2) return true; // 91′–92′ ET1
+  if (base > 105 && base - 105 <= 2) return true; // 106′–107′ ET2
+  return false;
+}
+
+/**
+ * Milliseconds of match clock left before the current half whistle (stoppage → 0).
+ */
+export function halfRunwayMs(game: GameState): number {
+  const { base, stopp } = parseClockKey(game.clock);
+  if (base <= 0) return Number.POSITIVE_INFINITY;
+  const minute = base + stopp / 100;
+  const end = currentHalfEndMinute(game);
+  return Math.max(0, (end - minute) * 60_000);
+}
+
+/**
+ * THE HT/FT/ET BOUNDARY GUARD (deterministic — works with or without the AI director).
  * True when the half is close enough to the whistle that a short play-dependent
- * market can be cut off by half/full-time before it has a fair chance to settle.
- * Near that boundary, period markets are the right shape; normal window/count/
- * versus markets are suppressed.
+ * market can be cut off before it has a fair chance to settle.
+ * Covers regulation (1H/2H), extra-time halves (105′ / 120′), and all stoppage.
+ * Period markets (before HT/FT/ET whistle) are opened separately — not suppressed here.
  */
 export function inWhistleZone(game: GameState): boolean {
   const ctx = parseGameContext(game);
-  if (ctx.period !== '1H' && ctx.period !== '2H') return false;
+  if (ctx.period !== '1H' && ctx.period !== '2H' && ctx.period !== 'ET') return false;
   return ctx.isStoppage || ctx.minutesLeft <= 2;
 }
 
@@ -767,6 +823,35 @@ export const PERIOD_MARKET = {
   maxMargin: 1,
 };
 
+/**
+ * Coarse match period from a match-minute (openClockMin format: 45+2 → 45.02).
+ * Half-time splits at 45, full time at 90, ET ends at 120.
+ */
+export function matchPeriodBucket(min: number): 'first' | 'second' | 'extra' | 'pk' {
+  if (min < 45.5) return 'first';
+  if (min < 90.5) return 'second';
+  if (min < 120.5) return 'extra';
+  return 'pk';
+}
+
+/** `goal_in_stoppage` opened in 2H added time — resolves at the FT whistle (ET start). */
+export function isSecondHalfStoppageMarket(kind: string, openClockMin?: number): boolean {
+  return (
+    kind === 'goal_in_stoppage' &&
+    openClockMin !== undefined &&
+    matchPeriodBucket(openClockMin) === 'second'
+  );
+}
+
+/** `goal_in_stoppage` opened in 1H added time — resolves at half-time. */
+export function isFirstHalfStoppageMarket(kind: string, openClockMin?: number): boolean {
+  return (
+    kind === 'goal_in_stoppage' &&
+    openClockMin !== undefined &&
+    matchPeriodBucket(openClockMin) === 'first'
+  );
+}
+
 export type PeriodMarketPhase = 'stoppage_1h' | 'stoppage_2h' | 'extra_time';
 
 /** Dedupe key so a feed restart does not open a second before-whistle market. */
@@ -781,6 +866,7 @@ export function periodMarketKeyForGame(game: GameState): string | undefined {
 
 export function periodMarketPhase(game: GameState): PeriodMarketPhase | undefined {
   const ctx = parseGameContext(game);
+  if (ctx.isPenaltyShootout) return undefined;
   if (ctx.isExtraTime) return 'extra_time';
   if (!ctx.isStoppage) return undefined;
   if (ctx.period === '1H') return 'stoppage_1h';
@@ -814,9 +900,58 @@ const FT_STOPPAGE_QUESTIONS = [
 const ET_LEVEL_QUESTIONS = [
   'A goal in extra time?',
   'Either team to score in extra time?',
+  'Who scores in extra time?',
+  'Another goal in extra time?',
   'A goal coming in extra time?',
   'Goal in ET?',
 ];
+
+export function isGoesToPenaltiesKind(kind: string): boolean {
+  return kind === 'goes_to_penalties';
+}
+
+/**
+ * Early/mid ET window — after each half's restart, before the whistle zone. Good for
+ * "will it go to penalties?" while the tie is still live.
+ */
+export function isEarlyExtraTimeWindow(game: GameState): boolean {
+  const ctx = parseGameContext(game);
+  if (!ctx.isExtraTime || ctx.isPenaltyShootout) return false;
+  if (inWhistleZone(game) || inEarlyPeriodRestart(game)) return false;
+  const base = parseClockKey(game.clock).base;
+  if (base > 90 && base <= 104) return true;
+  if (base > 105 && base <= 117) return true;
+  return false;
+}
+
+const GOES_TO_PENALTIES_QUESTIONS = [
+  'Penalty shootout after extra time?',
+  'Will it go to penalties?',
+  'Still level — penalties after ET?',
+  'Going to a shootout?',
+  'Penalties if still tied?',
+  'Shootout after extra time?',
+];
+
+/**
+ * Level in early ET — "will this go to a penalty shootout?" Opens once per match.
+ * YES when ET ends level and PK begins; NO when the match ends without a shootout.
+ */
+export function buildGoesToPenaltiesTrigger(game: GameState): MarketTrigger | null {
+  if (!PERIOD_MARKET.enabled) return null;
+  const ctx = parseGameContext(game);
+  if (!ctx.isExtraTime || ctx.isPenaltyShootout) return null;
+  if (!isEarlyExtraTimeWindow(game)) return null;
+  if (game.scoreHome !== game.scoreAway) return null;
+  return {
+    gameId: game.gameId,
+    question: pickPeriodQuestion(GOES_TO_PENALTIES_QUESTIONS, `${game.gameId}:goes_to_pk`),
+    kind: 'goes_to_penalties',
+    slot: 'period',
+    windowMs: PERIOD_MARKET.betWindowMs,
+    trueProb: 0.38,
+  };
+}
 
 /**
  * Build the before-whistle period market trigger when conditions are met, or null.
@@ -853,6 +988,9 @@ export function buildPeriodMarketTrigger(game: GameState): MarketTrigger | null 
   }
 
   if (!ctx.isExtraTime) return null;
+  if (ctx.isPenaltyShootout) return null;
+  // No ET period markets right on the whistle or the restart after a break.
+  if (inWhistleZone(game) || inEarlyPeriodRestart(game)) return null;
   if (!ctx.isClose) return null;
   if (Math.abs(margin) > PERIOD_MARKET.maxMargin) return null;
 
@@ -892,11 +1030,23 @@ export function buildPeriodMarketTrigger(game: GameState): MarketTrigger | null 
       trueProb: 0.32,
     };
   }
+  const levelTeam =
+    pickPeriodQuestion(['home', 'away'], `${game.gameId}:et_level_team`) === 'home'
+      ? 'home'
+      : 'away';
+  const levelName = levelTeam === 'home' ? game.home.name : game.away.name;
+  const levelQs = [
+    `${levelName} to score in extra time?`,
+    `Can ${levelName} score in ET?`,
+    `Goal for ${levelName} in extra time?`,
+    `${levelName} to break the deadlock in ET?`,
+  ];
   return {
     gameId: game.gameId,
-    question: pickPeriodQuestion(ET_LEVEL_QUESTIONS, `${game.gameId}:et_level`),
+    question: pickPeriodQuestion(levelQs, `${game.gameId}:et_level`),
     kind: 'goal_in_extra_time',
     slot: 'period',
+    team: levelTeam,
     windowMs: PERIOD_MARKET.betWindowMs,
     trueProb: 0.45,
   };

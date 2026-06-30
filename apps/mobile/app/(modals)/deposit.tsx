@@ -217,8 +217,19 @@ function RealChainDeposit({
   // Auto-swap whatever non-USX landed → USX. Returns silently while nothing has
   // arrived yet (swapAllToUsx no longer throws on empty), so the poll can keep
   // waiting; only a real swap failure surfaces an error.
-  const autoConvert = useCallback(async () => {
+  const autoConvert = useCallback(async (opts: { manual?: boolean } = {}) => {
     if (convertingRef.current || doneRef.current) return;
+    const available = await chainRef.current.peekSwappable().catch(() => []);
+    if (available.length === 0) {
+      if (opts.manual) {
+        setStatus("idle");
+        setMsg("No SOL or USDC detected yet.");
+      } else {
+        setStatus("waiting");
+        setMsg("Waiting for funds…");
+      }
+      return;
+    }
     convertingRef.current = true;
     setStatus("converting");
     setMsg("Converting…");
@@ -237,7 +248,7 @@ function RealChainDeposit({
       } else {
         // Nothing has landed yet — stay armed and keep waiting for the deposit.
         setStatus("waiting");
-        setMsg("Waiting…");
+        setMsg("Waiting for funds…");
       }
     } catch (e) {
       setStatus("error");
@@ -266,7 +277,11 @@ function RealChainDeposit({
       if (usdcBaselineRef.current !== null && usdc > usdcBaselineRef.current) {
         armedRef.current = true;
       }
-      if (armedRef.current && !convertingRef.current) await autoConvert();
+      if (armedRef.current && candidates.length > 0 && !convertingRef.current) await autoConvert();
+      else if (armedRef.current && status !== "waiting") {
+        setStatus("waiting");
+        setMsg("Waiting for funds…");
+      }
     };
     const ms = status === "waiting" || status === "converting" ? 3000 : 6000;
     const id = setInterval(() => void tick(), ms);
@@ -294,7 +309,7 @@ function RealChainDeposit({
             armedRef.current = true;
             doneRef.current = false;
             setStatus("waiting");
-            setMsg("Waiting…");
+            setMsg("Waiting for funds…");
           },
         });
       } catch (e) {
@@ -346,9 +361,8 @@ function RealChainDeposit({
           <Text
             style={[type.caption, styles.convertLink]}
             onPress={() => {
-              armedRef.current = true;
               doneRef.current = false;
-              void autoConvert();
+              void autoConvert({ manual: true });
             }}
           >
             Convert to USX

@@ -1,6 +1,6 @@
 {
   "name": "@golazo/mobile",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "main": "expo-router/entry",
   "description": "GOLAZO mobile — the live 'bet the play' app (Expo / React Native / TypeScript).",

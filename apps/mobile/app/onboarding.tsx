@@ -97,7 +97,7 @@ export default function Onboarding() {
 
   const skip = () => {
     if (hx) haptics.selection();
-    goTo(SLIDES.length - 1);
+    finish();
   };
 
   return (

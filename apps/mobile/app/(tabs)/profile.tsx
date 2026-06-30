@@ -29,6 +29,7 @@ import { Entrance } from "@/features/_shared/primitives";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
 import { useChain } from "@/features/chain/useChain";
+import { useProfileChainClaims } from "@/features/chain/useProfileChainClaims";
 import { ChainWalletHero } from "@/features/wallet";
 import { useWalletFund } from "@/features/wallet/useWalletFund";
 import { PointsLeaderboard } from "@/features/points/PointsLeaderboard";
@@ -71,6 +72,8 @@ export default function ProfileHub() {
     canFund,
   } = useWalletFund();
   const { ready: chainReady, refreshBalance } = chain;
+  const realMoney = store.session.moneyMode === "real";
+  const profileClaims = useProfileChainClaims(chain, realMoney && chainReady);
   useFocusEffect(
     React.useCallback(() => {
       if (chainReady) void refreshBalance();
@@ -201,6 +204,27 @@ export default function ProfileHub() {
             />
           </View>
         )}
+        {realWallet && profileClaims.claimableCount > 0 ? (
+          <View style={styles.claimAllWrap}>
+            <Button
+              label={
+                profileClaims.claiming
+                  ? `Claiming ${profileClaims.claimableCount}…`
+                  : `Claim ${profileClaims.claimableCount} pending payout${profileClaims.claimableCount === 1 ? "" : "s"}`
+              }
+              onPress={() => void profileClaims.claimAll()}
+              variant="primary"
+              fullWidth
+              disabled={profileClaims.claiming}
+              glow
+            />
+            {profileClaims.error ? (
+              <Text preset="caption" style={styles.claimError}>
+                {profileClaims.error}
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
       </View>
 
       {/* Rank — your standing + the one global leaderboard. */}
@@ -405,6 +429,8 @@ const styles = StyleSheet.create({
   // Wallet (play mode) — a clean two-button action row.
   walletActions: { flexDirection: "row", gap: spacing.md },
   walletBtn: { flex: 1 },
+  claimAllWrap: { marginTop: spacing.md, gap: spacing.xs },
+  claimError: { color: colors.no, textAlign: "center" },
   // Rank — flat "your standing" card: stat cells + an optional LEADING lane chip.
   standing: {
     flexDirection: "row",

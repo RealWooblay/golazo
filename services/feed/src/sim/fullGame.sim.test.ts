@@ -96,16 +96,18 @@ describe('full-game market simulation (Paraguay vs Türkiye replay)', () => {
     expect(resolvedShare).toBeGreaterThanOrEqual(0.95);
 
     // 7. NO NO-before-late-YES regression. Paraguay (the AWAY side) actually SCORE
-    //    (an open-play goal, final 0–1); their momentum/open-play markets live at
-    //    goal time must settle YES, never NO/VOID. Assert: the scoring side has ≥1
-    //    YES and NONE of its markets voided (a void there would be the old bug).
-    //    (Which-side contests are excluded — they legitimately refund when neither team
-    //    acts; this check is about the scoring side's momentum/open-play markets.)
+    //    (an open-play goal, final 0-1). With the newer director/floor palette, the
+    //    live market at that goal may be teamless ("a shot/goal this spell?") rather
+    //    than an away-bound card. The invariant is: at least one relevant open-play /
+    //    goal-window market settles YES, and any away-bound scoring-side markets never void.
+    const goalWindowKinds = ['shot_in_window', 'shot_or_corner_in_window', 'score_in_window', 'goal_in_window'];
+    const goalWindowMarkets = report.markets.filter(
+      (m) => goalWindowKinds.includes(m.kind) && (m.team === 'away' || m.team === undefined),
+    );
+    expect(goalWindowMarkets.some((m) => m.outcome === 'YES')).toBe(true);
     const scorerMarkets = report.markets.filter(
       (m) => m.team === 'away' && !whichSide.includes(m.kind),
     );
-    const scorerYes = scorerMarkets.filter((m) => m.outcome === 'YES');
-    expect(scorerYes.length).toBeGreaterThanOrEqual(1);
     expect(scorerMarkets.every((m) => m.status !== 'void')).toBe(true);
 
     // 8. Both YES and NO outcomes occur — no degenerate all-NO board.

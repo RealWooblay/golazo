@@ -20,10 +20,10 @@
  *     on-chain question_hash always matches the displayed text.
  */
 import Anthropic from '@anthropic-ai/sdk';
-import type { GameState, MarketSlot, Team } from '@golazo/core';
+import type { GameState, MarketSlot, Team, FeedEvent } from '@golazo/core';
 import type { MomentumRead } from './momentum';
 import type { CommentaryBuffer } from './commentaryBuffer';
-import { marketSlot, resolveDeadlineMs, parseGameContext, inWhistleZone } from './marketTuning';
+import { marketSlot, resolveDeadlineMs, parseGameContext } from './marketTuning';
 
 /**
  * The ONLY kinds the director may open — the open-ended play/window/count/versus families.
@@ -69,6 +69,8 @@ const LINE_BANK: Record<string, readonly string[]> = {
     'A shot coming here?',
     'An effort on goal soon?',
     'A chance worked this spell?',
+    'A shot attempt from here?',
+    'Another effort coming?',
   ],
   score_in_window: [
     '{team} to score in the next few minutes?',
@@ -77,38 +79,48 @@ const LINE_BANK: Record<string, readonly string[]> = {
     '{team} to make this pressure pay?',
     '{team} to grab one in this spell?',
     'A goal coming for {team}?',
+    '{team} to convert this spell?',
+    'Will {team} punish this pressure?',
   ],
   shot_or_corner_in_window: [
     'A shot or a corner this spell?',
     'A corner or an effort soon?',
     'A shot or corner from this attack?',
+    'A corner or a strike coming?',
+    'Pressure to yield a shot or corner?',
   ],
   next_shot: [
     'Next shot: {team} or {opp}?',
     'Who shoots next: {team} or {opp}?',
     'Next effort on goal: {team} or {opp}?',
     'Next team to shoot: {team} or {opp}?',
+    'Who takes the next attempt: {team} or {opp}?',
   ],
   next_corner: [
     'Next corner: {team} or {opp}?',
     'Who wins the next corner: {team} or {opp}?',
     'Next one at the flag: {team} or {opp}?',
+    'Who earns the next corner: {team} or {opp}?',
   ],
   next_goal: [
     'Who scores next: {team} or {opp}?',
     'Next goal: {team} or {opp}?',
+    'Who finds the next goal: {team} or {opp}?',
+    'Next name on the scoresheet: {team} or {opp}?',
   ],
   next_card: [
     'Who is booked next: {team} or {opp}?',
     'Next card: {team} or {opp}?',
     'Next into the book: {team} or {opp}?',
+    'Who gets the next card: {team} or {opp}?',
   ],
   card_in_window: [
     'A booking in the next few minutes?',
     'A card coming as this heats up?',
     'Ref to reach for a card soon?',
-    'A yellow in this spell?',
+    'A card in this spell?',
     'A booking on the cards soon?',
+    'Tempers fraying - a card coming?',
   ],
   goal_in_window: [
     'A goal for either side in the next few minutes?',
@@ -116,16 +128,22 @@ const LINE_BANK: Record<string, readonly string[]> = {
     'A goal coming in this spell?',
     'Either side to break through soon?',
     'A goal for either team shortly?',
+    'Another breakthrough soon?',
   ],
+  // Count kinds — wording MUST state the threshold (settlement is fixed in code).
+  // over_corners: YES = two or more corners before the deadline.
+  // over_shots: YES = three or more shots (incl misses/goals) before the deadline.
   over_corners: [
-    'A flurry of corners coming soon?',
-    'Plenty more corners in this spell?',
-    'Corners to pile up from here?',
+    'Two or more corners this spell?',
+    'At least two corners in the next few minutes?',
+    'Two corners before time runs out?',
+    'Two corners before this spell fades?',
   ],
   over_shots: [
-    'Shots coming thick and fast soon?',
-    'A burst of shots in this spell?',
-    'Plenty more efforts on goal soon?',
+    'Three or more shots this spell?',
+    'At least three efforts on goal this spell?',
+    'Three shot attempts in the next few minutes?',
+    'Three efforts before this spell fades?',
   ],
 };
 
@@ -163,7 +181,17 @@ export interface MarketProposal {
 }
 
 /** Proposals older than this are never served — the match situation has moved on. */
-const STALE_MS = 45_000;
+const STALE_MS = 25_000;
+/** High-relevance proposals open faster (orchestrator pacing). */
+export const DIRECTOR_HIGH_RELEVANCE = 0.82;
+/** Below this relevance the orchestrator will not open — weak game-fit proposals wait. */
+export const DIRECTOR_MIN_RELEVANCE = 0.58;
+/** Goal-followup kinds that must never be offered in the immediate post-goal lull. */
+const POST_GOAL_BLOCKED_KINDS: ReadonlySet<string> = new Set([
+  'next_goal',
+  'goal_in_window',
+  'score_in_window',
+]);
 /** Question length sanity bounds. */
 const MIN_LEN = 8;
 const MAX_LEN = 90;
@@ -172,7 +200,7 @@ const MIN_WINDOW_MS = 6_000;
 const MAX_WINDOW_MS = 20_000;
 const MIN_PROB = 0.05;
 const MAX_PROB = 0.95;
-const MAX_POOL = 6;
+const MAX_POOL = 12;
 
 export interface DirectorOptions {
   apiKey?: string;
@@ -189,9 +217,19 @@ export interface DirectorOptions {
     /** Seconds since the last goal (any team), or undefined if none yet — drives the
      *  post-goal lull rule (don't propose a goal/score market right after a goal). */
     secondsSinceGoal?: number;
+    /** Inferred live phase — buildup, shooting, set_piece, dead_ball, calm. */
+    playPhase?: string;
+    /** Last structured feed events (shots, corners, attacks…) — what actually happened. */
+    recentEvents?: readonly FeedEvent[];
+    /** Kinds the board opened recently — avoid repeating unless the game shifted. */
+    recentKinds?: readonly string[];
   };
   /** Audit sink for rejected proposals (the validation wall firing). */
   onReject?: (reason: string, raw: unknown) => void;
+}
+
+export function isPostGoalBlockedDirectorKind(kind: string): boolean {
+  return POST_GOAL_BLOCKED_KINDS.has(kind);
 }
 
 export class MarketDirector {
@@ -201,6 +239,7 @@ export class MarketDirector {
   private tokensUsed = 0;
   private _lastOk = false;
   private inFlight = false;
+  private lastRefreshAt = 0;
 
   constructor(opts: DirectorOptions) {
     this.opts = opts;
@@ -224,25 +263,42 @@ export class MarketDirector {
 
   /**
    * SYNCHRONOUS, hot-path-safe. Return the freshest, most-relevant valid proposal whose slot
-   * the caller hasn't already filled, else undefined → the rule openers run. Consumes it so a
-   * spell drips proposals (one per opener opportunity) rather than dumping them at once.
+   * is free and passes optional gates. Does NOT remove from the pool — call `consume()` only
+   * after the market actually opens (so a blocked/cooling pick is never thrown away).
    */
-  proposeNext(now: number, slotIsFree: (slot: MarketSlot) => boolean): MarketProposal | undefined {
+  proposeNext(
+    now: number,
+    slotIsFree: (slot: MarketSlot) => boolean,
+    canOpen?: (p: MarketProposal) => boolean,
+  ): MarketProposal | undefined {
     if (!this.active) return undefined;
     this.pool = this.pool.filter((p) => now - p.bornAt < STALE_MS);
-    // Highest relevance first; only a proposal whose slot is actually open.
     const ordered = [...this.pool].sort((a, b) => b.relevance - a.relevance);
-    const pick = ordered.find((p) => slotIsFree(p.slot));
-    if (!pick) return undefined;
-    this.pool = this.pool.filter((p) => p !== pick);
-    return pick;
+    return ordered.find((p) => slotIsFree(p.slot) && (!canOpen || canOpen(p)));
+  }
+
+  /** Drop a proposal from the pool after a successful open. */
+  consume(proposal: MarketProposal): void {
+    this.pool = this.pool.filter((p) => p !== proposal);
+  }
+
+  /** Highest relevance among fresh proposals — drives hot-open pacing. */
+  peekTopRelevance(now: number): number {
+    return this.pool
+      .filter((p) => now - p.bornAt < STALE_MS)
+      .reduce((max, p) => Math.max(max, p.relevance), 0);
+  }
+
+  /** Drop queued proposals (half-time, status transition, stale moment). */
+  clearPool(): void {
+    this.pool = [];
+    this._lastOk = false;
   }
 
   /** Clear all state on a match switch so a prior fixture's proposals never leak across. */
   resetForMatch(): void {
-    this.pool = [];
+    this.clearPool();
     this.tokensUsed = 0;
-    this._lastOk = false;
   }
 
   /**
@@ -250,24 +306,42 @@ export class MarketDirector {
    * given the live mood + clock, ask for a small SET of market proposals that fit the moment.
    * Any failure/timeout/budget-stop leaves the pool untouched → fail-open to rules.
    */
-  async refresh(now: number): Promise<void> {
+  /** Refill the proposal pool. `eager` bypasses the min interval; `replace` swaps the whole pool. */
+  async refresh(now: number, opts?: { eager?: boolean; replace?: boolean }): Promise<void> {
     if (!this.client || this.inFlight) return;
     if (this.tokensUsed >= this.opts.matchTokenBudget) return;
+    const minGap = opts?.eager ? 2_000 : 4_000;
+    if (now - this.lastRefreshAt < minGap) return;
 
-    const { game, momentum, secondsSinceGoal } = this.opts.getContext();
+    const { game, momentum, secondsSinceGoal, playPhase, recentEvents, recentKinds } =
+      this.opts.getContext();
     if (game.status !== 'live') return;
-    // In stoppage the deterministic whistle guard suppresses these markets anyway — don't
-    // spend tokens proposing what the orchestrator will refuse to open.
-    if (inWhistleZone(game)) return;
+    if (!recentEvents?.length) {
+      this.clearPool();
+      return;
+    }
 
     this.inFlight = true;
+    this.lastRefreshAt = now;
     try {
       const res = await this.client.messages.create(
         {
           model: this.opts.model,
-          max_tokens: 500,
+          max_tokens: 650,
           system: DIRECTOR_SYSTEM_FULL,
-          messages: [{ role: 'user', content: this.situationPrompt(game, momentum, secondsSinceGoal) }],
+          messages: [
+            {
+              role: 'user',
+              content: this.situationPrompt(
+                game,
+                momentum,
+                secondsSinceGoal,
+                playPhase,
+                recentEvents,
+                recentKinds,
+              ),
+            },
+          ],
         },
         { timeout: this.opts.timeoutMs },
       );
@@ -283,7 +357,14 @@ export class MarketDirector {
         if (p) valid.push(p);
         else this.opts.onReject?.('invalid_proposal', raw);
       }
-      if (valid.length) this.pool = [...valid, ...this.pool].slice(0, MAX_POOL);
+      if (valid.length) {
+        const replace = opts?.replace !== false;
+        this.pool = replace ? valid : [...valid, ...this.pool].slice(0, MAX_POOL);
+        console.log(
+          `[golazo/feed] director_refresh_ok added=${valid.length} queued=${this.pool.length} ` +
+            `replace=${replace} kinds=${valid.map((p) => p.kind).join(',')}`,
+        );
+      }
       this._lastOk = valid.length > 0;
     } catch (err) {
       console.log(
@@ -295,41 +376,86 @@ export class MarketDirector {
   }
 
   /** Compact situation brief for the model — phase, clock, score, momentum, recent play. */
-  private situationPrompt(game: GameState, momentum: MomentumRead, secondsSinceGoal?: number): string {
+  private situationPrompt(
+    game: GameState,
+    momentum: MomentumRead,
+    secondsSinceGoal?: number,
+    playPhase?: string,
+    recentEvents?: readonly FeedEvent[],
+    recentKinds?: readonly string[],
+  ): string {
     const ctx = parseGameContext(game);
     const leadName =
       momentum.leader === 'home' ? game.home.name : momentum.leader === 'away' ? game.away.name : '(even)';
-    const commentary = this.opts.commentary.formatForAi(8) || '(quiet)';
+    const commentary = this.opts.commentary.formatForAi(12) || '(quiet — no recent lines)';
+    const events = formatRecentEvents(recentEvents);
+    const phase = playPhase ?? 'unknown';
+    const boardHistory =
+      recentKinds && recentKinds.length > 0
+        ? `Recently on the board: ${recentKinds.join(', ')} — pick a DIFFERENT kind unless the game clearly changed.`
+        : '';
     const justScored =
       secondsSinceGoal !== undefined && secondsSinceGoal < 60
-        ? `\nA GOAL was just scored ~${Math.round(secondsSinceGoal)}s ago — the game has restarted from the centre. Do NOT propose a goal_in_window or score_in_window now; prefer a card, an over/under, or who-threatens-next.`
+        ? `\nA GOAL was just scored ~${Math.round(secondsSinceGoal)}s ago — the game has restarted from the centre. Do NOT propose next_goal, goal_in_window, or score_in_window now; prefer a card, an over/under, or who-threatens-next after play restarts.`
         : '';
+    const stoppageNote = ctx.isStoppage
+      ? '\nSTOPPAGE TIME — the whistle is near. Prefer broad either-team markets (goal_in_window, card_in_window) or who-next contests; avoid tight siege markets that die at the half.'
+      : '';
     return [
       `Home: ${game.home.name}  Away: ${game.away.name}`,
       `Score: ${game.scoreHome}-${game.scoreAway} (margin ${ctx.scoreMargin}, ${ctx.isClose ? 'close' : 'not close'})`,
       `Clock: ${game.clock}  Period: ${ctx.period}  ~${ctx.minutesLeft} min to the half-end${ctx.isStoppage ? ' (STOPPAGE)' : ''}`,
+      `Play phase: ${phase}`,
       `Momentum: ${leadName} pressing (intensity ${momentum.intensity.toFixed(1)})`,
-      `Recent commentary:\n${commentary}${justScored}`,
+      `What just happened on the pitch (structured events — trust this + commentary):`,
+      events,
+      `Recent commentary (read literally — markets must match THIS spell):`,
+      commentary,
+      boardHistory,
+      `${justScored}${stoppageNote}`,
     ].join('\n');
   }
 }
 
+/** Compact log of recent structured events for the model. */
+export function formatRecentEvents(events: readonly FeedEvent[] | undefined): string {
+  if (!events?.length) return '(no structured events yet)';
+  return events
+    .slice(-8)
+    .map((e) => {
+      const side = e.team ? ` [${e.team}]` : '';
+      const clip = e.text.replace(/\s+/g, ' ').slice(0, 72);
+      return `• ${e.type}${side} — ${clip}`;
+    })
+    .join('\n');
+}
+
 const DIRECTOR_SYSTEM = [
-  'You are the market DIRECTOR for a live soccer in-play betting board. From the situation,',
-  'choose 2-4 markets that fit THIS moment. You do NOT write any text — you SELECT a market',
-  'KIND and the INDEX of a ready-made wording line for it. Return ONLY JSON: an array of',
-  '{"kind","team","line","trueProb","windowMs","relevance"}.',
+  'You are the live-match DIRECTOR. Every proposal must be BASED ON THE GAME — what the',
+  'structured events + commentary + momentum say is happening RIGHT NOW. You are NOT filling',
+  'a template schedule. If the game is quiet, propose fewer / lower-relevance markets; if a',
+  'siege is on, propose siege markets for the pressing team. Never generic filler.',
   '',
-  'RULES: team kinds MUST set "team" to "home" or "away" (the side you back, or who acts first',
-  'on a "who next" contest); teamless kinds MUST omit "team". "line" is the 0-based index of the',
-  'wording you pick from that kind\'s options below. trueProb in 0.05..0.95 (your honest YES',
-  'chance); windowMs is the BET window in 6000..20000; relevance in 0..1 (fit to the moment).',
+  'You SELECT a market KIND + wording LINE index from the bank below. Return ONLY JSON:',
+  '[{"kind","team","line","trueProb","windowMs","relevance"}, ...] with 3-5 items.',
   '',
-  'VARIETY IS THE JOB. Across your 2-4 proposals use DIFFERENT kinds — never two of the same kind.',
-  'Fit the moment: a siege -> score_in_window for the pressing team; end-to-end -> next_shot; a',
-  'scrappy, niggly game -> next_card or card_in_window; a quiet, even game -> a broad over-under',
-  'or goal_in_window. Pick the LINE that best matches the recent commentary, and vary the line',
-  'index across proposals + over time so the board never loops.',
+  'relevance = honest fit to THIS moment (0.9+ = obvious from what we just saw; below 0.55 =',
+  'do not bother — the board will skip weak picks). Use DIFFERENT kinds in each batch.',
+  '',
+  'RULES: team kinds need "team":"home"|"away"; teamless kinds omit "team". "line" is the bank',
+  'index. trueProb 0.05..0.95; windowMs 6000..20000.',
+  '',
+  'READ THE GAME -> PICK THE MARKET:',
+  '  siege / dangerous attack / saves -> score_in_window (pressing team) or shot_in_window',
+  '  end-to-end / counter -> next_shot or next_goal',
+  '  corner won / flag pressure -> next_corner or shot_or_corner_in_window',
+  '  corner volume building -> over_corners (two+ corners — bank line states threshold)',
+  '  shot flurry -> over_shots (three+ shots) or shot_in_window',
+  '  fouls / cards in commentary -> card_in_window or next_card',
+  '  even / cagey -> goal_in_window only if commentary is actually quiet',
+  '  immediately after a goal -> no next_goal / goal_in_window / score_in_window; wait for restart evidence',
+  'NEVER propose a kind+team (or the same question) already listed under "Recently on the board"',
+  'or still resolving — pick a DIFFERENT moment or wait for the spell to change.',
   '',
   'KINDS + WORDING OPTIONS (choose "kind" + the "line" index):',
 ].join('\n');

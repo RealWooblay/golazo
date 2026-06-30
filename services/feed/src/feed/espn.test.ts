@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { FeedEvent, GameState } from '@golazo/core';
-import { classifyCommentary, mapKeyEventType, parseClockKey, parseAwardedTeamFromCommentary, momentKey, EspnFeed } from './espn';
+import { classifyCommentary, detectPenaltyShootout, mapKeyEventType, parseClockKey, parseAwardedTeamFromCommentary, attributeShooterTeamFromText, momentKey, EspnFeed } from './espn';
 
 describe('classifyCommentary — opportunity detection from prose', () => {
   it('detects AWARDED set-pieces (clean pre-outcome signals)', () => {
@@ -102,6 +102,37 @@ describe('classifyCommentary — opportunity detection from prose', () => {
       ),
     ).toBeUndefined();
     expect(classifyCommentary('Brasil presión ofensiva en zona ofensiva.')).toBe('attack');
+  });
+});
+
+describe('attributeShooterTeamFromText — shooter not keeper when both sides named', () => {
+  const home = 'Netherlands';
+  const away = 'Morocco';
+
+  it('reads parenthetical scorer on ESPN saved-shot lines', () => {
+    expect(
+      attributeShooterTeamFromText(
+        'Attempt saved. Hakimi (Morocco) right footed shot from the left side of the box.',
+        home,
+        away,
+      ),
+    ).toBe('away');
+  });
+
+  it('does NOT pick home when both teams appear but Morocco took the shot', () => {
+    expect(
+      attributeShooterTeamFromText(
+        'Morocco effort on goal saved by Netherlands goalkeeper.',
+        home,
+        away,
+      ),
+    ).toBe('away');
+  });
+
+  it('attributes goal scorer from parenthetical', () => {
+    expect(
+      attributeShooterTeamFromText('Goal! Netherlands 1, Morocco 0. Depay (Netherlands) left footed shot.', home, away),
+    ).toBe('home');
   });
 });
 
@@ -267,6 +298,19 @@ describe('EspnFeed.rotateToNextLive — game-to-game handoff', () => {
     expect(await feed.rotateToNextLive()).toBe(true);
     expect(feed.state().home.name).toBe('England');
     expect(feed.currentEventId()).toBe('new');
+  });
+});
+
+describe('detectPenaltyShootout', () => {
+  it('detects shootout from status text and period', () => {
+    expect(
+      detectPenaltyShootout(
+        { type: { detail: 'Penalty Shootout' }, period: 5, displayClock: "120'" },
+        "120'",
+      ),
+    ).toBe(true);
+    expect(detectPenaltyShootout(undefined, "121'")).toBe(true);
+    expect(detectPenaltyShootout({ type: { detail: "105'" } }, "105'")).toBe(false);
   });
 });
 

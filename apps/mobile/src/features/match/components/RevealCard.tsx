@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { StyleSheet, View, type ViewStyle } from "react-native";
+import { Linking, StyleSheet, View, type ViewStyle } from "react-native";
 import Animated, {
   Easing,
   interpolate,
@@ -22,17 +22,8 @@ import { sideDisplayLabel } from "../marketMeta";
 import { GlowWash } from "./GlowWash";
 
 /**
- * RevealCard — the weighty tap-to-reveal moment. A bet has settled but the user
- * hasn't been spoiled yet: a striped "TAP TO REVEAL" cover sits over the result.
- * Tap → the cover does a weighty Y-flip away and the verdict lands:
- *
- * WIN → gold wordmark, payout counts up, gold glow + success haptic, and the
- * parent fires confetti + the balance count-up.
- * MISS → muted "MISSED", a brief shake, stake shown as lost, error haptic.
- * VOID → cyan "VOIDED", stake refunded, neutral.
- *
- * The parent passes `reveal` and an `onAcknowledge` (called when the cover opens,
- * which is when money is actually credited + the bet is written to history).
+ * RevealCard — tap-to-reveal for a settled bet. On-chain USX bets also claim on tap;
+ * the card stays open showing Claiming… / Claimed until the tx lands.
  */
 export function RevealCard({
   reveal,
@@ -45,11 +36,12 @@ export function RevealCard({
 }) {
   const { format, signedFormat } = useDisplayBalance();
   const [opened, setOpened] = useState(false);
-  const flip = useSharedValue(0); // 0 = cover up, 1 = flipped away
+  const flip = useSharedValue(0);
   const shake = useSharedValue(0);
   const pickLabel = sideDisplayLabel(reveal.side, reveal.kind, reveal.question);
   const isWin = reveal.won;
   const isVoid = reveal.outcome === "VOID";
+  const isChain = reveal.claiming !== undefined || reveal.claimed !== undefined;
 
   const tint = isVoid ? colors.cyan : isWin ? colors.gold : colors.no;
 
@@ -61,7 +53,6 @@ export function RevealCard({
       else if (isWin) haptics.win();
       else haptics.lose();
     }
-    // credit + history happen now (the parent's acknowledgeReveal).
     onAcknowledge();
     flip.value = withTiming(1, {
       duration: 480,
@@ -96,12 +87,31 @@ export function RevealCard({
     ],
   }));
 
+  const statusLine = () => {
+    if (reveal.claiming) {
+      if (isVoid) return `Claiming ${format(reveal.stake)} refund…`;
+      if (isWin) return `Claiming ${format(reveal.payout)}…`;
+      return "Settling on-chain…";
+    }
+    if (reveal.claimed) {
+      if (isVoid) return `${format(reveal.stake)} refunded`;
+      if (isWin) return `${format(reveal.payout)} in your wallet`;
+      return "Settled on-chain";
+    }
+    if (isVoid) {
+      return isChain
+        ? `Void · ${format(reveal.stake)} refund ready`
+        : `Void · ${format(reveal.stake)} refunded`;
+    }
+    if (isWin) {
+      return `${multiple(reveal.payoutMult)} on ${format(reveal.stake)}`;
+    }
+    return `${signedFormat(-reveal.stake)} · ${pickLabel} didn't land`;
+  };
+
   return (
     <Surface
       radius={radius.xl}
-      // SPOILER-SAFE: stay a neutral surface until the user taps. The outcome
-      // colour (gold/red/cyan glow + border) only appears once `opened`, so the
-      // card edge can't give the result away while the cover is still up.
       glow={opened ? (isWin ? "gold" : isVoid ? "cyan" : "no") : undefined}
       borderColor={opened ? tint : undefined}
       style={styles.card}
@@ -116,38 +126,42 @@ export function RevealCard({
         />
       ) : null}
 
-      {/* the verdict (revealed under the cover) */}
       <Animated.View style={[styles.result, resultStyle]}>
         <Text
           style={[styles.verdict, { color: tint }]}
           allowFontScaling={false}
         >
-          {isVoid ? "VOIDED" : isWin ? "YOU WON" : "MISSED"}
+          {reveal.claiming
+            ? "CLAIMING"
+            : reveal.claimed
+              ? "CLAIMED"
+              : isVoid
+                ? "VOIDED"
+                : isWin
+                  ? "YOU WON"
+                  : "MISSED"}
         </Text>
-        {isWin ? (
+        {isWin && !reveal.claiming ? (
           <View style={styles.payRow}>
             <AnimatedNumber
               value={reveal.payout}
               format={(n) => signedFormat(n)}
               style={[styles.payBig, { color: colors.gold }]}
             />
-            <Text style={styles.payMeta}>
-              {multiple(reveal.payoutMult)} final on {format(reveal.stake)}
-            </Text>
           </View>
-        ) : isVoid ? (
-          <Text style={styles.payMeta}>
-            Unfair timing — {format(reveal.stake)} refunded in full.
+        ) : null}
+        <Text style={styles.payMeta}>{statusLine()}</Text>
+        {reveal.claimed && reveal.claimUrl ? (
+          <Text
+            style={styles.claimLink}
+            onPress={() => Linking.openURL(reveal.claimUrl!).catch(() => {})}
+          >
+            view claim tx ↗
           </Text>
-        ) : (
-          <Text style={styles.payMeta}>
-            {signedFormat(-reveal.stake)} · {pickLabel} didn't land
-          </Text>
-        )}
+        ) : null}
       </Animated.View>
 
-      {/* the cover */}
-      {opened ? null : <RevealCover style={coverStyle} onPress={open} />}
+      {opened ? null : <RevealCover style={coverStyle} onPress={open} isChain={isChain} />}
     </Surface>
   );
 }
@@ -155,11 +169,12 @@ export function RevealCard({
 function RevealCover({
   style,
   onPress,
+  isChain,
 }: {
   style: ReturnType<typeof useAnimatedStyle>;
   onPress: () => void;
+  isChain: boolean;
 }) {
-  // gentle breathing on the prompt so it begs to be tapped
   const breathe = useSharedValue(0);
   useEffect(() => {
     breathe.value = withRepeat(
@@ -172,9 +187,6 @@ function RevealCover({
     opacity: interpolate(breathe.value, [0, 1], [0.7, 1]),
   }));
 
-  // reanimated 3.16 (SDK 52) tightened AnimatedStyle so mixing static styles with
-  // a useAnimatedStyle result in one array no longer unifies at the type level;
-  // the runtime composition is unchanged, so cast the array.
   const coverWrapStyle = [
     StyleSheet.absoluteFill,
     styles.coverWrap,
@@ -195,15 +207,15 @@ function RevealCover({
           <Animated.View style={promptStyle}>
             <Text style={styles.coverTitle}>TAP TO REVEAL</Text>
           </Animated.View>
-          {/* neutral on purpose — must not hint win/loss/void before the tap */}
-          <Text style={styles.coverSub}>see how it played out</Text>
+          <Text style={styles.coverSub}>
+            {isChain ? "tap to reveal + claim payout" : "see how it played out"}
+          </Text>
         </View>
       </Pressable>
     </Animated.View>
   );
 }
 
-/** The 45° striped texture of the cover (matches the prototype's barber pole). */
 function Stripes() {
   return (
     <View style={[StyleSheet.absoluteFill, styles.stripesBg]}>
@@ -244,7 +256,8 @@ const styles = StyleSheet.create({
   verdict: { ...type.display, fontSize: 26, letterSpacing: 1 },
   payRow: { alignItems: "center", gap: 2 },
   payBig: { ...type.mono, fontSize: 24 },
-  payMeta: { ...type.caption, fontSize: 12.5, color: colors.textMuted },
+  payMeta: { ...type.caption, fontSize: 12.5, color: colors.textMuted, textAlign: "center" },
+  claimLink: { ...type.caption, fontSize: 11, color: colors.cyan, marginTop: 4 },
   coverWrap: { borderRadius: radius.xl, overflow: "hidden" },
   stripesBg: { borderRadius: radius.xl, overflow: "hidden" },
   coverInner: {

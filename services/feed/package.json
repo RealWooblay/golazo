@@ -1,6 +1,6 @@
 {
   "name": "@golazo/feed",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "description": "GOLAZO live-feed + AI watcher service: watches a (real or simulated) match feed, lets Claude decide which moments are bettable, opens short parimutuel markets via @golazo/core, fills them with bots, and broadcasts everything to the app over WebSocket.",
   "type": "module",

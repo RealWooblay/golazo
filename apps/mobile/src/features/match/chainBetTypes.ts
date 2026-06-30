@@ -32,3 +32,10 @@ export interface ChainOdds {
   /** total pooled stake in USX (human units). */
   poolUsd: number;
 }
+
+/** Cached on-chain pool — odds are derived synchronously from this + stake. */
+export interface ChainPoolCache {
+  poolYesLamports: bigint;
+  poolNoLamports: bigint;
+  rakeBps: number;
+}

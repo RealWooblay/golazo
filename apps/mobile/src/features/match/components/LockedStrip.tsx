@@ -33,21 +33,21 @@ export function LockedStrip({
   // Hydration/cooling break: the server freezes the deadline; show a paused indicator instead
   // of a draining/hanging countdown so it's clear the market is held, not stuck.
   const countdown = breakActive
-    ? `⏸ ${breakLabel ?? "Break"}`
+    ? `paused: ${breakLabel ?? "break"}`
     : whistle
-    ? whistleLabel(market.kind, market.question)
+    ? `waiting: ${whistleLabel(market.kind, market.question).replace(/^until /, "")}`
     : eventDecided
       ? // Event-decided markets (next-side / set-piece / VAR) settle on the event itself and
         // only VOID at the whistle — so they read "until the next corner", never a countdown.
-        eventDecidedLabel(market.kind)
+        `waiting: ${eventDecidedLabel(market.kind).replace(/^until /, "")}`
       : mins > 0
-        ? `${mins}:${String(secs).padStart(2, "0")}`
-        : `${Math.ceil(left / 1000)}s`;
+        ? `settles in ${mins}:${String(secs).padStart(2, "0")}`
+        : `settles in ${Math.ceil(left / 1000)}s`;
 
   return (
     <View style={[styles.strip, { borderLeftColor: lane.color }]}>
       <Text style={[styles.tag, { color: lane.color }]} numberOfLines={1}>
-        {lane.label}
+        {lane.label.toUpperCase()}
       </Text>
       <Text style={styles.q} numberOfLines={1}>
         {market.question}

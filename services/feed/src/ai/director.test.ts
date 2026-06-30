@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import type { GameState } from '@golazo/core';
-import { validateProposal, DIRECTOR_PALETTE, MarketDirector } from './director';
+import {
+  validateProposal,
+  DIRECTOR_PALETTE,
+  MarketDirector,
+  isPostGoalBlockedDirectorKind,
+} from './director';
 import type { CommentaryBuffer } from './commentaryBuffer';
 
 const game = (): GameState => ({
@@ -103,6 +108,14 @@ describe('MarketDirector.validateProposal — the palette + selection wall', () 
     expect(
       validateProposal({ kind: 'shot_in_window', line: 0, trueProb: 0.5, windowMs: 10_000 }, game(), NOW),
     ).not.toBeNull();
+    // Count kinds use explicit threshold wording from the bank.
+    const corners = validateProposal(
+      { kind: 'over_corners', line: 0, trueProb: 0.45, windowMs: 10_000, relevance: 0.7 },
+      game(),
+      NOW,
+    );
+    expect(corners).not.toBeNull();
+    expect(corners!.question).toContain('Two or more corners');
   });
 
   it('CLAMPS trueProb, windowMs and relevance into safe bounds', () => {
@@ -115,6 +128,17 @@ describe('MarketDirector.validateProposal — the palette + selection wall', () 
     expect(p.windowMs).toBeLessThanOrEqual(20_000);
     expect(p.windowMs).toBeGreaterThanOrEqual(6_000);
     expect(p.relevance).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('MarketDirector post-goal safety', () => {
+  it('marks goal-followup director kinds as blocked after a goal', () => {
+    expect(isPostGoalBlockedDirectorKind('next_goal')).toBe(true);
+    expect(isPostGoalBlockedDirectorKind('goal_in_window')).toBe(true);
+    expect(isPostGoalBlockedDirectorKind('score_in_window')).toBe(true);
+    expect(isPostGoalBlockedDirectorKind('next_shot')).toBe(false);
+    expect(isPostGoalBlockedDirectorKind('over_corners')).toBe(false);
+    expect(isPostGoalBlockedDirectorKind('card_in_window')).toBe(false);
   });
 });
 
@@ -148,5 +172,27 @@ describe('MarketDirector fail-open', () => {
       getContext: () => ({ game: game(), momentum: { home: 0, away: 0, intensity: 0, bar: null } }),
     });
     expect(d.active).toBe(false);
+  });
+
+  it('clearPool drops queued proposals and peekTopRelevance reads the freshest', () => {
+    const d = new MarketDirector({
+      enabled: true,
+      apiKey: undefined,
+      model: 'm',
+      timeoutMs: 1000,
+      refreshMs: 1000,
+      matchTokenBudget: 1000,
+      commentary: stubCommentary,
+      getContext: () => ({ game: game(), momentum: { home: 0, away: 0, intensity: 0, bar: null } }),
+    });
+    (d as unknown as { pool: { relevance: number; bornAt: number }[] }).pool = [
+      { relevance: 0.9, bornAt: NOW },
+      { relevance: 0.4, bornAt: NOW },
+    ];
+    expect(d.peekTopRelevance(NOW)).toBe(0.9);
+    expect(d.queued).toBe(2);
+    d.clearPool();
+    expect(d.queued).toBe(0);
+    expect(d.peekTopRelevance(NOW)).toBe(0);
   });
 });

@@ -43,6 +43,7 @@ import {
 } from "./config";
 import { deriveAta, deriveBetPda, deriveMarketPda, deriveVaultPda } from "./pdas";
 import { explorerTxUrl, type ChainContext } from "./provider";
+import { privyErrorMessage } from "./privyError";
 import type {
   BetAccount,
   BetQuote,
@@ -66,6 +67,17 @@ const DISC = {
   void_market: [243, 175, 46, 124, 95, 101, 39, 69],
   claim: [62, 198, 214, 193, 213, 159, 108, 210],
 } as const;
+
+const SIGNATURE_POLL_MS = 400;
+const SIGNATURE_CONFIRM_TIMEOUT_MS = 30_000;
+
+/** Serialize on-chain sends — Privy sponsored txs race if fired in parallel. */
+let chainTxTail: Promise<unknown> = Promise.resolve();
+function enqueueChainTx<T>(fn: () => Promise<T>): Promise<T> {
+  const run = chainTxTail.then(fn, fn);
+  chainTxTail = run.catch(() => {});
+  return run;
+}
 
 // Side {Yes=0, No=1}; Outcome {None=0, Yes=1, No=2} — borsh enum variant indices.
 const sideByte = (s: OnChainSide): number => (s === "Yes" ? 0 : 1);
@@ -136,34 +148,103 @@ async function send(
   ]);
 }
 
+/** True when a signature is confirmed/finalized on-chain (confirm RPC can lie). */
+async function signatureLanded(
+  connection: ChainContext["connection"],
+  signature: string,
+): Promise<boolean> {
+  for (let i = 0; i < 15; i++) {
+    const statuses = await connection.getSignatureStatuses([signature], {
+      searchTransactionHistory: true,
+    });
+    const st = statuses.value[0];
+    if (st?.err) return false;
+    const status = st?.confirmationStatus;
+    if (status === "confirmed" || status === "finalized") return true;
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return false;
+}
+
+async function confirmSignature(
+  connection: ChainContext["connection"],
+  signature: string,
+  blockhash: string,
+  lastValidBlockHeight: number,
+): Promise<void> {
+  const deadline = Date.now() + SIGNATURE_CONFIRM_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    const statuses = await connection.getSignatureStatuses([signature], {
+      searchTransactionHistory: true,
+    });
+    const st = statuses.value[0];
+    if (st?.err) {
+      throw new Error(`Transaction failed: ${JSON.stringify(st.err)}`);
+    }
+    const status = st?.confirmationStatus;
+    if (status === "confirmed" || status === "finalized") return;
+
+    const height = await connection.getBlockHeight("confirmed").catch(() => null);
+    if (height !== null && height > lastValidBlockHeight + 5) break;
+    await new Promise((r) => setTimeout(r, SIGNATURE_POLL_MS));
+  }
+  // Some RPCs are slow to surface the status before blockhash expiry. One last history-backed
+  // poll avoids double-submitting a transaction that landed but was reported late.
+  if (!(await signatureLanded(connection, signature))) {
+    throw new Error(`Transaction not confirmed for blockhash ${blockhash.slice(0, 6)}…`);
+  }
+}
+
 /** Build + sign + send a multi-instruction tx with the embedded wallet. */
 async function sendIxs(
   ctx: ChainContext,
   ixs: TransactionInstruction[],
 ): Promise<TxResult> {
+  return enqueueChainTx(async () => {
   const tx = new Transaction().add(...ixs);
   // GASLESS path: when the wallet supports sponsored sends (Privy web + native gas
   // sponsorship), Privy pays the Solana fee so the bettor needs NO SOL. We set feePayer +
   // blockhash so the message serializes, hand it to Privy, then confirm.
   if (ctx.wallet.sendSponsored) {
+    let sponsoredSig: string | undefined;
     try {
       const { blockhash, lastValidBlockHeight } =
         await ctx.connection.getLatestBlockhash("confirmed");
       tx.feePayer = ctx.wallet.publicKey;
       tx.recentBlockhash = blockhash;
       const bytes = tx.serialize({ requireAllSignatures: false, verifySignatures: false });
-      const signature = await ctx.wallet.sendSponsored(Uint8Array.from(bytes));
-      await ctx.connection.confirmTransaction(
-        { signature, blockhash, lastValidBlockHeight },
-        "confirmed",
+      let lastSponsorErr: unknown;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          sponsoredSig = await ctx.wallet.sendSponsored(Uint8Array.from(bytes));
+          break;
+        } catch (e) {
+          lastSponsorErr = e;
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+        }
+      }
+      if (!sponsoredSig) throw lastSponsorErr ?? new Error("Gas sponsorship failed");
+      await confirmSignature(
+        ctx.connection,
+        sponsoredSig,
+        blockhash,
+        lastValidBlockHeight,
       );
-      return { signature, explorerUrl: explorerTxUrl(signature, ctx.config.cluster) };
+      return {
+        signature: sponsoredSig,
+        explorerUrl: explorerTxUrl(sponsoredSig, ctx.config.cluster),
+      };
     } catch (e) {
-      // Gas sponsorship can fail (dashboard policy off / paymaster unfunded / transient).
-      // Privy validates sponsorship BEFORE broadcast, so the tx never reached the chain —
-      // safe to retry as a normal self-paid send (works for anyone holding a little SOL). A
-      // bet is never lost to a flaky sponsor; we only surface an error if the retry ALSO fails.
-      console.warn("[chain] sponsored send failed, falling back to self-paid:", e);
+      // Sponsored tx may have landed even when confirm/sponsor UI errored — never double-submit.
+      if (sponsoredSig && (await signatureLanded(ctx.connection, sponsoredSig))) {
+        return {
+          signature: sponsoredSig,
+          explorerUrl: explorerTxUrl(sponsoredSig, ctx.config.cluster),
+        };
+      }
+      // Gas sponsorship can fail before broadcast — safe to retry self-paid if user has SOL.
+      const sponsorDetail = privyErrorMessage(e);
+      console.warn("[chain] sponsored send failed, falling back to self-paid:", sponsorDetail, e);
       try {
         const fresh = new Transaction().add(...ixs);
         const signature = await ctx.provider.sendAndConfirm(fresh, []);
@@ -171,13 +252,17 @@ async function sendIxs(
       } catch (e2) {
         console.warn("[chain] self-paid fallback failed:", e2);
         throw new Error(
-          "Bet didn't go through. Try again. If your wallet has no SOL for fees, gas sponsorship needs to be on.",
+          sponsorDetail.toLowerCase().includes("sponsor") ||
+            sponsorDetail.toLowerCase().includes("gas")
+            ? `Gas sponsorship failed: ${sponsorDetail}. Add SOL for fees or enable Privy sponsorship in the dashboard.`
+            : "Bet didn't go through. Try again. If your wallet has no SOL for fees, gas sponsorship needs to be on.",
         );
       }
     }
   }
   const signature = await ctx.provider.sendAndConfirm(tx, []);
   return { signature, explorerUrl: explorerTxUrl(signature, ctx.config.cluster) };
+  });
 }
 
 /** 32-byte question hash buffer → hex string (for the decoded account). */

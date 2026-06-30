@@ -69,6 +69,26 @@ export function indicativeMultipleBps(
     stakeLamports;
 }
 
+/**
+ * Live multiple for a bet ALREADY in the pool (do not add stake again).
+ * Used on the receipt bar after place_bet while the market is still open.
+ */
+export function heldBetMultiple(
+  poolYes: bigint,
+  poolNo: bigint,
+  rakeBps: number,
+  side: OnChainSide,
+  stakeLamports: bigint,
+): number {
+  if (stakeLamports <= 0n) return 0;
+  const winPool = side === "Yes" ? poolYes : poolNo;
+  const losePool = side === "Yes" ? poolNo : poolYes;
+  if (winPool <= 0n) return 0;
+  if (losePool <= 0n) return 1;
+  const payout = (stakeLamports * net(poolYes, poolNo, rakeBps)) / winPool;
+  return Number(payout) / Number(stakeLamports);
+}
+
 /** bps → a human decimal multiple (e.g. 19400n → 1.94). Display only. */
 export function bpsToMultiple(bps: bigint): number {
   return Number(bps) / Number(BPS_DENOMINATOR);

@@ -1,6 +1,6 @@
 import React from "react";
 import { Linking, StyleSheet, View } from "react-native";
-import { Banner, Button, Pressable, Surface, Text } from "@/ui";
+import { Banner, Pressable, Surface, Text } from "@/ui";
 import { colors, radius, spacing, type } from "@/theme";
 import { money, multiple } from "@/lib/format";
 import type { ChainBetVM } from "@/features/match/chainBetTypes";
@@ -68,15 +68,15 @@ function Receipt({
           <Text style={styles.txView}>view tx ↗</Text>
         </Pressable>
       ) : bet.claimable ? (
-        <Button
-          label={bet.won ? "Claim payout" : "Claim settlement"}
-          variant="primary"
-          size="md"
-          fullWidth
-          loading={bet.claiming}
+        <Pressable
           onPress={() => onClaim(bet.offChainMarketId)}
-          style={styles.claimBtn}
-        />
+          haptic="tap"
+          style={styles.claimAction}
+        >
+          <Text style={styles.claimText}>
+            {bet.claiming ? "claiming..." : "tap receipt to reveal + claim"}
+          </Text>
+        </Pressable>
       ) : (
         <Text style={styles.wait}>Waiting for market to resolve…</Text>
       )}
@@ -100,5 +100,13 @@ const styles = StyleSheet.create({
   txView: { ...type.caption, color: colors.textFaint, fontSize: 11 },
   wait: { ...type.caption, color: colors.textFaint, fontSize: 11 },
   result: { ...type.caption, color: colors.textSecondary, fontSize: 11 },
-  claimBtn: { marginTop: spacing.xs },
+  claimAction: {
+    marginTop: spacing.xs,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    paddingVertical: spacing.sm,
+    alignItems: "center",
+  },
+  claimText: { ...type.caption, color: colors.yes, fontSize: 11 },
 });

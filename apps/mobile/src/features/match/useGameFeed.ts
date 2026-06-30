@@ -104,6 +104,7 @@ export interface GameFeedApi extends GameFeedVM {
   /** A short "Bet YES · est. 3.48x"-style toast string, or null. */
   toast: string | null;
   clearToast: () => void;
+  showToast: (msg: string) => void;
 }
 
 /**
@@ -139,6 +140,7 @@ export function useGameFeed(): GameFeedApi {
   const store = useStore();
   const { mode, liveUrl, session, pointsBalance, pointsRank } = store;
   const pointsMode = session.moneyMode === "points";
+  const realMoneyLive = session.moneyMode === "real";
   // Account-stable identity: signed-in users key off Privy, wallet users key off
   // their wallet, and anonymous paper users keep a local points id. Real-money
   // bets use the same id so referrals, settlement payouts, and points all line up.
@@ -190,6 +192,16 @@ export function useGameFeed(): GameFeedApi {
   pointsPoolsRef.current = pointsPools;
   const pointsModeRef = useRef(pointsMode);
   pointsModeRef.current = pointsMode;
+  const realMoneyLiveRef = useRef(realMoneyLive);
+  realMoneyLiveRef.current = realMoneyLive;
+
+  // Real USX is on-chain only — never keep paper-engine pending rows on the board.
+  useEffect(() => {
+    if (realMoneyLive && mode === "live") {
+      setPendingByMarket({});
+      pendingByMarketRef.current = {};
+    }
+  }, [realMoneyLive, mode]);
   // OFFLINE: the live engine + the id of the market currently on screen. Held in
   // refs so placeBet can route the human's bet through the SAME engine the loop
   // is driving, without re-running the (heavy) setup effect.
@@ -200,6 +212,7 @@ export function useGameFeed(): GameFeedApi {
   /** False once we see a live open market after connect — historic replay is catch-up. */
   const catchingUpRef = useRef(true);
   const clearToast = useCallback(() => setToast(null), []);
+  const showToast = useCallback((msg: string) => setToast(msg), []);
   const market = markets[0] ?? null;
   const pending = market ? (pendingByMarket[market.id] ?? null) : null;
 
@@ -717,14 +730,17 @@ export function useGameFeed(): GameFeedApi {
         (p): p is PendingBet => !!p,
       );
       if (pendingBets.length > 0) {
-        if (pointsMode) {
+        if (realMoneyLiveRef.current) {
+          setPendingByMarket({});
+          pendingByMarketRef.current = {};
+        } else if (pointsMode) {
           setPendingByMarket({});
         } else {
           const refund = pendingBets.reduce((sum, p) => sum + p.stake, 0);
           store.credit(refund);
           setPendingByMarket({});
+          setToast("Connection lost — bet refunded");
         }
-        setToast("Connection lost — bet refunded");
       }
       // Stay in LIVE and RETRY the real feed (the user chose live) — do NOT drop
       // to the mock sim. Back off, capped, so it recovers when the feed returns.
@@ -1013,6 +1029,9 @@ export function useGameFeed(): GameFeedApi {
   // ================================================================
   const placeBet = useCallback(
     (side: Side, stake: number, marketId?: string): number | null => {
+      // USX / real-money live bets are on-chain only — never mirror into the paper engine.
+      if (realMoneyLive && effectiveMode === "live") return null;
+
       const m = marketId
         ? markets.find((item) => item.id === marketId)
         : market;
@@ -1095,6 +1114,7 @@ export function useGameFeed(): GameFeedApi {
       market,
       markets,
       effectiveMode,
+      realMoneyLive,
       store,
       pointsMode,
       pointsUserId,
@@ -1181,5 +1201,6 @@ export function useGameFeed(): GameFeedApi {
     acknowledgeReveal,
     toast,
     clearToast,
+    showToast,
   };
 }

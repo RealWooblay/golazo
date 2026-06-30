@@ -37,6 +37,7 @@ export function laneOf(kind?: string, slot?: MarketSlot, question?: string): Lan
   if (k === "goal_in_stoppage")
     return { label: isFullTimeStoppage(question) ? "Before FT" : "Before half", color: VIOLET };
   if (k === "goal_in_extra_time") return { label: "Extra time", color: VIOLET };
+  if (k === "goes_to_penalties") return { label: "Penalties?", color: VIOLET };
   if (k === "penalty_scored") return { label: "Penalty", color: colors.cyan };
   if (k === "penalty_awarded" || k === "red_card_given")
     return { label: "VAR", color: colors.cyan };
@@ -126,7 +127,7 @@ export function betLabels(kind?: string, question?: string): { yes: string; no: 
 
 /** Period markets resolve on the whistle, not a numeric timer — the card says so. */
 export function isWhistleBound(kind?: string): boolean {
-  return kind === "goal_in_stoppage" || kind === "goal_in_extra_time";
+  return kind === "goal_in_stoppage" || kind === "goal_in_extra_time" || kind === "goes_to_penalties";
 }
 
 /**
@@ -156,7 +157,8 @@ function isFullTimeStoppage(question?: string): boolean {
 }
 
 export function whistleLabel(kind?: string, question?: string): string {
-  if (kind === "goal_in_extra_time") return "until full-time";
+  if (kind === "goal_in_extra_time") return "until ET ends";
+  if (kind === "goes_to_penalties") return "until ET ends";
   // goal_in_stoppage covers BOTH halves — the boundary is in the question, not the kind.
   if (isFullTimeStoppage(question)) return "until full-time";
   return "until half-time";

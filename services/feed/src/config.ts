@@ -215,7 +215,7 @@ function parseFeedMode(raw: string | undefined): FeedMode {
   return raw === 'sim' || raw === 'espn' || raw === 'auto' || raw === 'replay' ? raw : 'auto';
 }
 
-/** Default dual-lang for FIFA (Spanish commentary is denser); single EN elsewhere. */
+/** Default dual-lang for FIFA because Spanish ESPN commentary is denser; single EN elsewhere. */
 function parseEspnCommentaryLang(
   raw: string | undefined,
   league: string,
@@ -233,7 +233,7 @@ export const config: Config = {
   aiTimeoutMs: num('AI_TIMEOUT_MS', 4000),
   aiResolveTimeoutMs: num('AI_RESOLVE_TIMEOUT_MS', 6000),
   aiDirectorEnabled: (process.env.AI_DIRECTOR?.trim() || '') === '1',
-  aiRefreshMs: num('AI_REFRESH_MS', 15000),
+  aiRefreshMs: num('AI_REFRESH_MS', 5000),
   aiMatchTokenBudget: num('AI_MATCH_TOKEN_BUDGET', 120000),
   minConfidence: num('MIN_CONFIDENCE', 0.6),
   feedMode: parseFeedMode(process.env.FEED_MODE?.trim()),

@@ -1,7 +1,7 @@
 {
   "name": "golazo",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "GOLAZO — bet the play. Live, in-the-moment parimutuel betting on discrete game events.",
   "workspaces": [
     "packages/*",

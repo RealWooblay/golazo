@@ -7,6 +7,9 @@ import {
 } from "@privy-io/react-auth/solana";
 import type { ConnectedStandardSolanaWallet } from "@privy-io/react-auth/solana";
 import type { PrivySignerState } from "./provider";
+import { chainConfig } from "./config";
+import { privyChainForCluster } from "@/features/auth/privySolanaConfig";
+import { sponsoredSendErrorMessage } from "./privyError";
 
 /** Privy embedded wallet — never the external sign-in wallet. */
 function embeddedWallet(
@@ -34,6 +37,7 @@ export function usePrivyChainSigner(): PrivySignerState {
   const { signAndSendTransaction } = useSignAndSendTransaction();
   const wallet = embeddedWallet(wallets);
   const address = wallet?.address;
+  const privyChain = privyChainForCluster(chainConfig.cluster);
 
   return useMemo<PrivySignerState>(() => {
     if (!privyReady || !authenticated || !walletsReady || !wallet || !address) {
@@ -51,12 +55,18 @@ export function usePrivyChainSigner(): PrivySignerState {
           return signedTransaction;
         },
         sendSponsored: async (txBytes) => {
-          const { signature } = await signAndSendTransaction({
-            transaction: txBytes,
-            wallet,
-            options: { sponsor: true },
-          });
-          return signature;
+          try {
+            const { signature } = await signAndSendTransaction({
+              transaction: txBytes,
+              wallet,
+              chain: privyChain,
+              options: { sponsor: true },
+            });
+            return signature;
+          } catch (e) {
+            console.error("[privy] signAndSendTransaction(sponsor:true) failed:", e);
+            throw new Error(sponsoredSendErrorMessage(e));
+          }
         },
       },
     };
@@ -68,5 +78,6 @@ export function usePrivyChainSigner(): PrivySignerState {
     address,
     signTransaction,
     signAndSendTransaction,
+    privyChain,
   ]);
 }

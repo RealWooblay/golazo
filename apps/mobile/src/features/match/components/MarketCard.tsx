@@ -55,6 +55,7 @@ export function MarketCard({
   fixedOdds = false,
   betDisabled = false,
   breakActive = false,
+  heldMultiple,
 }: {
   market: MarketVM;
   now: number;
@@ -66,6 +67,8 @@ export function MarketCard({
   fixedOdds?: boolean;
   betDisabled?: boolean;
   breakActive?: boolean;
+  /** Live multiple for a bet already in the pool (chain mode). */
+  heldMultiple?: number;
 }) {
   const lane = laneOf(market.kind, market.slot, market.question);
   const labels = betLabels(market.kind, market.question);
@@ -128,10 +131,14 @@ export function MarketCard({
 
   const liveMult =
     betPlaced && pending
-      ? (() => {
-          const sidePool = pending.side === "YES" ? yesPool : noPool;
-          return sidePool > 0 ? (market.pool * (1 - RAKE)) / sidePool : pending.estimatedMult;
-        })()
+      ? heldMultiple && heldMultiple > 0
+        ? heldMultiple
+        : (() => {
+            const sidePool = pending.side === "YES" ? yesPool : noPool;
+            return sidePool > 0
+              ? (market.pool * (1 - RAKE)) / sidePool
+              : pending.estimatedMult;
+          })()
       : 0;
 
   // The divider seat = the crowd's lean (floored so a lopsided pool never crushes a half).
@@ -249,10 +256,14 @@ function PriceHalf({
       <Text style={[styles.verdict, { color }]} numberOfLines={1}>
         {verdict}
       </Text>
-      <Text style={[styles.odds, { color }]} allowFontScaling={false}>
-        {odds.toFixed(2)}
+      <View style={styles.oddsRow}>
+        <AnimatedNumber
+          value={odds}
+          format={(n) => n.toFixed(2)}
+          style={[styles.odds, { color }]}
+        />
         <Text style={[styles.oddsX, { color }]}>x</Text>
-      </Text>
+      </View>
     </Pressable>
   );
 }
@@ -275,6 +286,7 @@ function ReceiptBar({
   const fill = isYes ? colors.alpha.yes : colors.alpha.no;
   const pick = sideDisplayLabel(pending.side, kind, question);
   const m = mult > 0 ? mult : pending.estimatedMult;
+  const payout = pending.stake > 0 && m > 0 ? pending.stake * m : 0;
 
   const scale = useSharedValue(0.96);
   const shimmer = useSharedValue(0);
@@ -299,12 +311,21 @@ function ReceiptBar({
     >
       <Animated.View pointerEvents="none" style={[styles.shimmer, shimStyle]} />
       <View style={[styles.receiptDot, { backgroundColor: tint }]} />
-      <Text style={[styles.receiptPick, { color: tint }]} numberOfLines={1}>
-        {pick}
-      </Text>
-      <View style={{ flex: 1 }} />
-      <Text style={[styles.receiptMult, { color: tint }]}>{multiple(m)}</Text>
-      <Text style={styles.receiptStake}>· {format(pending.stake)} in</Text>
+      <View style={styles.receiptBody}>
+        <Text style={[styles.receiptPick, { color: tint }]} numberOfLines={1}>
+          {pick} · {format(pending.stake)}
+        </Text>
+        <View style={styles.receiptPayoutRow}>
+          <AnimatedNumber
+            value={m}
+            format={(n) => multiple(n)}
+            style={[styles.receiptMult, { color: tint }]}
+          />
+          <Text style={[styles.receiptPayout, { color: tint }]}>
+            {payout > 0 ? `→ win ${format(payout)}` : "→ payout updates live"}
+          </Text>
+        </View>
+      </View>
     </Animated.View>
   );
 }
@@ -338,8 +359,9 @@ const styles = StyleSheet.create({
   seam: { width: 2, backgroundColor: colors.bg },
   half: { justifyContent: "center", alignItems: "center", paddingHorizontal: 6, gap: 1 },
   verdict: { ...type.overline, fontSize: 10.5, letterSpacing: 0.8 },
+  oddsRow: { flexDirection: "row", alignItems: "baseline" },
   odds: { ...type.display, fontSize: 27, lineHeight: 30 },
-  oddsX: { fontSize: 16 },
+  oddsX: { fontSize: 16, marginLeft: 1 },
 
   fuse: { flexDirection: "row", gap: 3, marginTop: spacing.xs },
   pip: { flex: 1, height: 4, borderRadius: 2 },
@@ -349,7 +371,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: spacing.sm,
     paddingHorizontal: spacing.md,
-    height: 54,
+    paddingVertical: spacing.sm,
+    minHeight: 54,
     borderRadius: radius.md,
     borderWidth: 1,
     marginTop: 2,
@@ -363,7 +386,10 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.05)",
   },
   receiptDot: { width: 8, height: 8, borderRadius: 4 },
+  receiptBody: { flex: 1, gap: 2 },
   receiptPick: { ...type.subtitle, fontSize: 15 },
+  receiptPayoutRow: { flexDirection: "row", alignItems: "baseline", gap: spacing.xs },
   receiptMult: { ...type.display, fontSize: 17 },
+  receiptPayout: { ...type.subtitle, fontSize: 14, fontWeight: "600" },
   receiptStake: { ...type.mono, fontSize: 12, color: colors.textSecondary },
 });

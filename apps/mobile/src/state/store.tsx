@@ -15,6 +15,7 @@ import type {
   FeedMode,
   HistoryItem,
   MoneyMode,
+  OpenChainBetRecord,
   TransactionRow,
   WithdrawDestination,
 } from "./types";
@@ -82,6 +83,8 @@ export interface StoreState {
   pointsBalance: number;
   pointsRank: number;
   pointsLeaderboard: PointsPlayer[];
+  /** Unclaimed on-chain bets — survives leaving the match screen. */
+  openChainBets: OpenChainBetRecord[];
   /** Internal: true once AsyncStorage has been read. UI can show a splash until. */
   hydrated: boolean;
 }
@@ -106,6 +109,8 @@ type Action =
   | { type: "setWallet"; wallet: Partial<Wallet> }
   | { type: "setSession"; session: Partial<Session> }
   | { type: "setLiveUrl"; url: string }
+  | { type: "upsertOpenChainBet"; bet: OpenChainBetRecord }
+  | { type: "removeOpenChainBet"; marketId: string }
   | { type: "completeFirstRun" }
   | { type: "reset" };
 
@@ -177,6 +182,19 @@ function reducer(state: StoreState, action: Action): StoreState {
       return { ...state, wallet: { ...state.wallet, ...action.wallet } };
     case "setLiveUrl":
       return { ...state, liveUrl: action.url };
+    case "upsertOpenChainBet": {
+      const rest = state.openChainBets.filter(
+        (b) => b.marketId !== action.bet.marketId,
+      );
+      return { ...state, openChainBets: [action.bet, ...rest] };
+    }
+    case "removeOpenChainBet":
+      return {
+        ...state,
+        openChainBets: state.openChainBets.filter(
+          (b) => b.marketId !== action.marketId,
+        ),
+      };
     case "completeFirstRun":
       return { ...state, session: { ...state.session, firstRun: false } };
     case "reset":
@@ -227,6 +245,7 @@ function initialState(): StoreState {
     pointsBalance: POINTS_START_BALANCE,
     pointsRank: 0,
     pointsLeaderboard: [],
+    openChainBets: [],
     hydrated: false,
   };
 }
@@ -241,6 +260,7 @@ const PERSIST_KEYS: (keyof StoreState)[] = [
   "liveUrl",
   "pointsBalance",
   "pointsRank",
+  "openChainBets",
 ];
 
 function pickPersistable(state: StoreState): Partial<StoreState> {
@@ -284,6 +304,8 @@ export interface Store extends StoreState {
   setSession: (session: Partial<Session>) => void;
   setWallet: (wallet: Partial<Wallet>) => void;
   setLiveUrl: (url: string) => void;
+  upsertOpenChainBet: (bet: OpenChainBetRecord) => void;
+  removeOpenChainBet: (marketId: string) => void;
   completeFirstRun: () => void;
   reset: () => void;
   // selectors / derived
@@ -323,6 +345,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
               moneyMode: parsed.session.moneyMode ?? "points",
             });
           }
+          parsed.openChainBets = parsed.openChainBets ?? [];
           dispatch({ type: "hydrate", state: parsed });
         } else if (alive) {
           dispatch({ type: "hydrate", state: {} });
@@ -448,6 +471,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     (url: string) => dispatch({ type: "setLiveUrl", url }),
     [],
   );
+  const upsertOpenChainBet = useCallback(
+    (bet: OpenChainBetRecord) => dispatch({ type: "upsertOpenChainBet", bet }),
+    [],
+  );
+  const removeOpenChainBet = useCallback(
+    (marketId: string) => dispatch({ type: "removeOpenChainBet", marketId }),
+    [],
+  );
   const completeFirstRun = useCallback(
     () => dispatch({ type: "completeFirstRun" }),
     [],
@@ -486,6 +517,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setSession,
       setWallet,
       setLiveUrl,
+      upsertOpenChainBet,
+      removeOpenChainBet,
       completeFirstRun,
       reset,
       mode: state.session.mode,
@@ -510,6 +543,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setSession,
       setWallet,
       setLiveUrl,
+      upsertOpenChainBet,
+      removeOpenChainBet,
       completeFirstRun,
       reset,
       bets,

@@ -61,7 +61,10 @@ const mk = (type: FeedEvent['type'], team?: Team): FeedEvent => ({
   type,
   ...(team ? { team } : {}),
   text: `${type} ${team ?? ''}`,
-  meta: { clock: "30'" },
+  meta: {
+    clock: "30'",
+    ...(['shot', 'miss', 'goal'].includes(type) ? { source: 'espn.keyEvent' as const } : {}),
+  },
 });
 
 /**
@@ -165,8 +168,6 @@ describe('which-side-next contest — the scoped decisive-event NO', () => {
       await orch.stop();
     });
 
-    // Teamless shots may be attributed to the pressing side for TEAMLESS window markets, but a
-    // "which team acts first?" contest pays a side. Do not settle that on an inferred team.
     it('does NOT settle a which-side contest on an inferred teamless threat', async () => {
       const feed = new StubFeed();
       const orch = new Orchestrator(simConfig(), feed);
@@ -179,6 +180,41 @@ describe('which-side-next contest — the scoped decisive-event NO', () => {
       await orch.simTick();
       const after = orch.simMarkets().find((x) => x.id === m.id)!;
       expect(after.settlement).toBeUndefined();
+      await orch.stop();
+    });
+
+    it('does NOT settle next_shot on commentary-only miss (keyEvent required)', async () => {
+      const feed = new StubFeed();
+      const orch = new Orchestrator(simConfig(), feed);
+      const m = await openAndLockVersus(orch, feed);
+      expect(m.team).toBe('home');
+
+      feed.push([
+        {
+          gameId: 'g1',
+          ts: 0,
+          type: 'miss',
+          team: 'home',
+          text: 'Morocco effort saved by Netherlands keeper',
+          meta: { clock: "30'", source: 'espn.commentary' },
+        },
+      ]);
+      await orch.simTick();
+      const after = orch.simMarkets().find((x) => x.id === m.id)!;
+      expect(after.settlement).toBeUndefined();
+
+      feed.push([
+        {
+          gameId: 'g1',
+          ts: 0,
+          type: 'shot',
+          team: 'away',
+          text: 'shot away',
+          meta: { clock: "30'", source: 'espn.keyEvent' },
+        },
+      ]);
+      await orch.simTick();
+      expect(orch.simMarkets().find((x) => x.id === m.id)!.settlement?.outcome).toBe('NO');
       await orch.stop();
     });
 
@@ -231,6 +267,31 @@ describe('which-side-next contest — the scoped decisive-event NO', () => {
       // Full time (status transition, like a real feed): the contest can never be decided now →
       // VOID + refund, NEVER NO. Without this it would hold the stake forever in single-game mode.
       feed.setStatus('final');
+      await orch.simTick();
+      after = orch.simMarkets().find((x) => x.id === m.id)!;
+      expect(after.status).toBe('void');
+      expect(after.settlement?.outcome).toBe('VOID');
+      await orch.stop();
+    });
+
+    it('voids at end of extra time (penalty shootout) — PK shots do not decide the contest', async () => {
+      const feed = new StubFeed();
+      const orch = new Orchestrator(simConfig(), feed);
+      const m = await openAndLockVersus(orch, feed);
+
+      feed.setClock('Penalty Shootout');
+      await orch.simTick();
+      let after = orch.simMarkets().find((x) => x.id === m.id)!;
+      expect(after.status).toBe('void');
+      expect(after.settlement?.outcome).toBe('VOID');
+
+      // A shootout goal must NOT resurrect or settle a fresh which-side read.
+      feed.push([
+        {
+          ...mk('goal', 'away'),
+          meta: { clock: 'Penalty Shootout', source: 'espn.keyEvent', shootout: true },
+        },
+      ]);
       await orch.simTick();
       after = orch.simMarkets().find((x) => x.id === m.id)!;
       expect(after.status).toBe('void');

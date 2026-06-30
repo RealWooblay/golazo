@@ -7,6 +7,7 @@ const openTx = (url?: string) => {
   if (url) Linking.openURL(url).catch(() => {});
 };
 import { useDisplayBalance } from "@/features/chain/useDisplayBalance";
+import { multiple } from "@/lib/format";
 import type { BetRow, ClosedMarketVM } from "@/state/types";
 import { resultBadgeLabel, sideDisplayLabel } from "../marketMeta";
 
@@ -121,6 +122,9 @@ export function ClosedMarketsList({
                 {sideLabel ? (
                   <Overline size={8.5} style={styles.youLine}>
                     YOU · {sideLabel}
+                    {pending && m.userLiveMult && m.userLiveMult > 0
+                      ? ` · ${multiple(m.userLiveMult)} live`
+                      : ""}
                   </Overline>
                 ) : null}
                 {result === "void" && m.voidReason ? (
@@ -145,7 +149,7 @@ export function ClosedMarketsList({
                         claimed ✓
                       </Text>
                     ) : claimable ? (
-                      <Text style={[styles.claimHint, { color: colors.yes }]}>tap to claim →</Text>
+                      <Text style={[styles.claimHint, { color: colors.yes }]}>tap to claim</Text>
                     ) : null}
                   </View>
                 ) : null}

@@ -9,7 +9,7 @@
  * resolve so the operator never resolves a market that's still Open to bets.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { FeedEvent, GameState, Team } from '@golazo/core';
+import type { FeedEvent, GameState, MarketTrigger, Team } from '@golazo/core';
 import { Orchestrator } from './orchestrator';
 import { simConfig } from './sim/harness';
 import type { FeedChainOperator } from './chain';
@@ -89,6 +89,18 @@ function goal(team: Team): FeedEvent {
   return { gameId: 'g1', ts: 0, type: 'goal', team, text: 'GOAL!', meta: { clock: "32'" } };
 }
 
+function scoreWindow(team: Team): MarketTrigger {
+  return {
+    gameId: 'g1',
+    question: `${team === 'home' ? 'Home' : 'Away'} to score soon?`,
+    kind: 'score_in_window',
+    slot: 'window',
+    team,
+    windowMs: 10_000,
+    trueProb: 0.4,
+  };
+}
+
 describe('on-chain lock grace', () => {
   beforeEach(() => {
     vi.useFakeTimers(); // clock starts at real `now` — the momentum opener cooldown
@@ -101,11 +113,11 @@ describe('on-chain lock grace', () => {
   it('schedules the chain lock CHAIN_LOCK_GRACE_MS after the engine lock', async () => {
     const ops: ChainOp[] = [];
     const cfg = simConfig({ botCount: 0, chainLockGraceMs: 10_000 });
-    const feed = queueFeed([[dangerousAttack('home')]]);
+    const feed = queueFeed([]);
     const orch = new Orchestrator(cfg, feed, fakeChain(ops));
 
-    // Open the market off the build-up event.
-    await orch.simTick();
+    // Open the market directly: this test pins chain lifecycle timing, not opener selection.
+    await orch.simOpenMarket(scoreWindow('home'));
     const market = orch.simMarkets()[0];
     expect(market).toBeDefined();
     expect(market!.status).toBe('open');
@@ -132,11 +144,11 @@ describe('on-chain lock grace', () => {
   it('flushes the deferred chain lock BEFORE settling so resolve never races an open market', async () => {
     const ops: ChainOp[] = [];
     const cfg = simConfig({ botCount: 0, chainLockGraceMs: 10_000 });
-    // Open on the build-up; a goal arrives on the next poll, after the engine lock.
-    const feed = queueFeed([[dangerousAttack('home')], [goal('home')]]);
+    // A goal arrives on the next poll, after the engine lock.
+    const feed = queueFeed([[goal('home')]]);
     const orch = new Orchestrator(cfg, feed, fakeChain(ops));
 
-    await orch.simTick();
+    await orch.simOpenMarket(scoreWindow('home'));
     const { lockAt, windowMs } = orch.simMarkets()[0]!;
 
     // Engine locks; chain lock is now deferred (pending) and not yet fired.

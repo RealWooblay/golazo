@@ -14,7 +14,7 @@ import { colors, spacing, type } from "@/theme";
 import { AnimatedNumber, Banner, Button, Chip, Confetti, MonoStat, Overline, Screen, Text, Toast } from "@/ui";
 import { UnifiedHeader } from "@/features/_shared/UnifiedHeader";
 import { useStore } from "@/state/store";
-import type { BetRow, ClosedMarketVM } from "@/state/types";
+import type { BetRow, ClosedMarketVM, RevealVM } from "@/state/types";
 import { bettingClosesAt, bettingSafetyBufferMs, RAKE } from "@/lib/config";
 import { multiple } from "@/lib/format";
 import { useTick } from "@/hooks";
@@ -64,6 +64,7 @@ export default function MatchScreen() {
     acknowledgeReveal,
     toast,
     clearToast,
+    showToast,
   } = useGameFeed();
 
   // Drive the countdown ring + smooth progress only while a market is on screen
@@ -133,9 +134,10 @@ export default function MatchScreen() {
   // On-chain layer. Each live market can carry its own on-chain twin; bets and
   // claims are tracked per market so new cards never hide old receipts.
   const chain = useChain();
-  const chainMode =
-    chain.ready && store.mode === "live" && store.session.moneyMode === "real";
-  const chainBets = useChainBets(chain, store.stake, chainMode, markets);
+  const realMoneyLive =
+    store.mode === "live" && store.session.moneyMode === "real";
+  const chainMode = chain.ready && realMoneyLive;
+  const chainBets = useChainBets(chain, store.stake, realMoneyLive, markets);
   // Money is real SOL in chain mode, play $ in sandbox — for the header balance
   // AND the stake chips / over-balance check (so nothing reads "$" while you bet SOL).
   const bal = useDisplayBalance();
@@ -222,12 +224,13 @@ export default function MatchScreen() {
         userSide: cb.side,
         userStake: stake,
         userDelta: delta,
-        voidReason: r === "VOID" ? "no one took the other side" : undefined,
+        voidReason: r === "VOID" ? "Full refund" : undefined,
         txUrl: cb.betUrl,
         claimUrl: cb.claimUrl,
         claimable: !!cb.claimable && !cb.claimSignature,
         claiming: !!cb.claiming,
         pending: !r,
+        userLiveMult: !r ? cb.estimatedMultiple : undefined,
         revealedAt: Date.now(),
       });
     }
@@ -235,6 +238,45 @@ export default function MatchScreen() {
       (a, b) => (b.revealedAt ?? b.settledAt) - (a.revealedAt ?? a.settledAt),
     );
   }, [effectiveMode, gameBets, historicMarkets, chainBets.bets]);
+
+  const chainReveals = useMemo<RevealVM[]>(() => {
+    if (!chainMode) return [];
+    const kindByMarket = new Map(
+      historicMarkets.map((m) => [m.marketId, m.kind] as const),
+    );
+    return chainBets.bets
+      .filter(
+        (cb) =>
+          cb.resolvedOutcome &&
+          (cb.claiming || (cb.claimable && !cb.claimSignature)),
+      )
+      .map((cb) => {
+        const outcome = cb.resolvedOutcome!;
+        const won = outcome !== "VOID" && cb.side === outcome;
+        const kind = kindByMarket.get(cb.offChainMarketId);
+        const payout =
+          outcome === "VOID"
+            ? cb.stakeUsd
+            : won
+              ? (cb.realizedUsd ?? cb.stakeUsd * cb.estimatedMultiple)
+              : 0;
+        return {
+          marketId: cb.offChainMarketId,
+          question: cb.question,
+          ...(kind ? { kind } : {}),
+          team: undefined,
+          side: cb.side,
+          stake: cb.stakeUsd,
+          payoutMult: cb.stakeUsd > 0 ? payout / cb.stakeUsd : 0,
+          outcome,
+          won,
+          payout,
+          claiming: cb.claiming,
+          claimed: !!cb.claimSignature,
+          claimUrl: cb.claimUrl,
+        };
+      });
+  }, [chainMode, chainBets.bets, historicMarkets]);
 
   useEffect(() => {
     if (!chainMode) return;
@@ -278,14 +320,16 @@ export default function MatchScreen() {
   const [confettiTrigger, setConfettiTrigger] = useState(0);
 
   const onBet = async (m: typeof markets[number], side: "YES" | "NO") => {
-    // Chain mode → REAL on-chain place_bet with the embedded wallet. Play mode →
-    // the local play-money engine. The market card's bet UI is identical; only the
-    // money rail differs.
-    if (chainMode && m.onChain) {
+    if (realMoneyLive) {
+      if (!chain.ready) {
+        showToast("Wallet still loading — try again in a moment.");
+        return;
+      }
+      if (!m.onChain) return;
       await chainBets.placeBet(m, side, store.stake);
-    } else {
-      placeBet(side, store.stake, m.id);
+      return;
     }
+    placeBet(side, store.stake, m.id);
   };
 
   const onReveal = (marketId: string, won: boolean) => {
@@ -352,7 +396,7 @@ export default function MatchScreen() {
             clock={game?.clock ?? "0'"}
             status={finished ? "final" : halftime ? "halftime" : "live"}
             momentumLean={finished || halftime ? null : momentumLean}
-            note={finished ? ftVerdict : commentary}
+            note={finished ? ftVerdict : halftime ? undefined : commentary}
           />
         </View>
 
@@ -409,7 +453,7 @@ export default function MatchScreen() {
             </View>
 
             {openMarkets.map((m) => {
-              const liveOdds = chainBets.getLiveOdds(m.id);
+              const liveOdds = chainBets.getLiveOdds(m.id, store.stake);
               const displayMarket =
                 chainMode && liveOdds
                   ? {
@@ -421,20 +465,27 @@ export default function MatchScreen() {
                     }
                   : m;
               const chainBet = chainBets.getBet(m.id);
+              const heldMult =
+                chainBet &&
+                (chainBets.getHeldMultiple(m.id, chainBet.side, chainBet.stakeUsd) ??
+                  chainBet.estimatedMultiple);
               const chainPreparing =
                 chainMode && !!m.onChain && !chainBets.isTwinReady(m.id) && !chainBet;
-              const chainLocked = chainMode && (chainBets.placing || !!chainBet);
+              const chainLocked =
+                chainMode && (chainBets.placingMarketId === m.id || !!chainBet);
               const marketClosing =
                 m.phase === "open" && now >= bettingClosesAt(m.lockAt, m.windowMs);
               const cardPending =
-                chainMode && chainBet
+                realMoneyLive && chainBet
                   ? {
                       marketId: m.id,
                       side: chainBet.side,
-                      stake: store.stake,
-                      estimatedMult: chainBet.estimatedMultiple,
+                      stake: chainBet.stakeUsd,
+                      estimatedMult: heldMult ?? chainBet.estimatedMultiple,
                     }
-                  : (pendingByMarket[m.id] ?? null);
+                  : !realMoneyLive
+                    ? (pendingByMarket[m.id] ?? null)
+                    : null;
               return (
                 <View key={m.id} style={styles.gutter}>
                   {chainPreparing ? (
@@ -448,6 +499,7 @@ export default function MatchScreen() {
                     now={now}
                     stake={store.stake}
                     pending={cardPending}
+                    heldMultiple={heldMult ?? undefined}
                     balance={bal.balanceInUnits}
                     formatStake={stakeFormat}
                     onBet={(side) => void onBet(m, side)}
@@ -463,22 +515,31 @@ export default function MatchScreen() {
 
             {lockedMarkets.map((m) => {
               const chainBet = chainBets.getBet(m.id);
-              const pendingBet = pendingByMarket[m.id];
+              const pendingBet = realMoneyLive ? undefined : pendingByMarket[m.id];
               const betSide = chainBet?.side ?? pendingBet?.side;
               const betStakeStr = chainBet
                 ? stakeFormat(chainBet.stakeUsd)
                 : pendingBet
                   ? stakeFormat(pendingBet.stake)
                   : undefined;
-              // Final (locked) multiple from the settled pool — show what you'll actually
-              // receive if your side wins, so the locked card matches the payout.
               let betLabel: string | undefined;
               if (betSide && betStakeStr) {
-                const yesPool = m.pool * (m.yesShare / 100);
-                const sidePool = betSide === "YES" ? yesPool : m.pool - yesPool;
-                const mult = sidePool > 0 ? (m.pool * (1 - RAKE)) / sidePool : 0;
                 const pick = sideDisplayLabel(betSide, m.kind, m.question);
-                betLabel = `You: ${pick} · ${betStakeStr}${mult > 0 ? ` → ${multiple(mult)}` : ""}`;
+                if (chainBet) {
+                  const mult =
+                    chainBets.getHeldMultiple(m.id, chainBet.side, chainBet.stakeUsd) ??
+                    chainBet.estimatedMultiple;
+                  const winUsd = mult > 0 ? chainBet.stakeUsd * mult : 0;
+                  betLabel =
+                    winUsd > 0
+                      ? `You: ${pick} · ${betStakeStr} → win ${stakeFormat(winUsd)} (${multiple(mult)})`
+                      : `You: ${pick} · ${betStakeStr}`;
+                } else {
+                  const yesPool = m.pool * (m.yesShare / 100);
+                  const sidePool = betSide === "YES" ? yesPool : m.pool - yesPool;
+                  const mult = sidePool > 0 ? (m.pool * (1 - RAKE)) / sidePool : 0;
+                  betLabel = `You: ${pick} · ${betStakeStr}${mult > 0 ? ` → ${multiple(mult)}` : ""}`;
+                }
               }
               return (
                 <View key={m.id} style={styles.gutter}>
@@ -508,6 +569,19 @@ export default function MatchScreen() {
             <RevealCard
               reveal={reveal}
               onAcknowledge={() => onReveal(reveal.marketId, reveal.won)}
+              hapticsEnabled={hapticsOn}
+            />
+          </View>
+        ))}
+
+        {chainReveals.map((reveal) => (
+          <View key={`chain_${reveal.marketId}`} style={styles.gutter}>
+            <RevealCard
+              reveal={reveal}
+              onAcknowledge={() => {
+                if (reveal.won) setConfettiTrigger((n) => n + 1);
+                void chainBets.claim(reveal.marketId);
+              }}
               hapticsEnabled={hapticsOn}
             />
           </View>

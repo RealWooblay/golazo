@@ -46,8 +46,9 @@ export function Carousel({
   const { width: winWidth } = useWindowDimensions();
   const pageW = Math.min(winWidth, MAX_WIDTH);
 
-  const onScroll = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const i = Math.round(e.nativeEvent.contentOffset.x / pageW);
+  const syncIndex = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const raw = Math.round(e.nativeEvent.contentOffset.x / pageW);
+    const i = Math.max(0, Math.min(slides.length - 1, raw));
     if (i !== index) onIndexChange(i);
   };
 
@@ -58,9 +59,12 @@ export function Carousel({
         horizontal
         pagingEnabled
         showsHorizontalScrollIndicator={false}
-        onMomentumScrollEnd={onScroll}
+        onScroll={syncIndex}
+        onMomentumScrollEnd={syncIndex}
+        onScrollEndDrag={syncIndex}
         scrollEventThrottle={16}
         decelerationRate="fast"
+        removeClippedSubviews={false}
       >
         {slides.map((s, i) => (
           <Page key={s.key} slide={s} width={pageW} active={i === index} />
