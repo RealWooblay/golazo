@@ -24,8 +24,12 @@ if ! swapon --show 2>/dev/null | grep -q .; then
     && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile || true
 fi
 
-npm install --include=dev
-npm run build --workspace @golazo/core
+# NON-FATAL: the feed runs via tsx (source, no build) on the already-installed node_modules, and
+# the web ships a prebuilt dist — so a hiccup here (e.g. an npm EBADENGINE/peer error on node 18)
+# must NOT abort the deploy before the .env rewrite + feed restart below. That abort is exactly
+# why the feed .env went stale and config changes (counterparty fill) never took effect.
+npm install --include=dev || echo "[deploy] npm install non-fatal — continuing on existing node_modules"
+npm run build --workspace @golazo/core || echo "[deploy] @golazo/core build non-fatal — existing dist kept"
 
 TOKEN="$(curl -sS -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' || true)"
 if [ -n "$TOKEN" ]; then
@@ -63,6 +67,7 @@ BASE_SEED=0
 BOT_COUNT=24
 CHAIN_SEED_LAMPORTS=0
 CHAIN_LOCK_GRACE_MS=0
+COUNTERPARTY_FILL_BASE_UNITS=20000000
 AI_TIMEOUT_MS=4000
 AI_RESOLVE_TIMEOUT_MS=6000
 MIN_CONFIDENCE=0.6
