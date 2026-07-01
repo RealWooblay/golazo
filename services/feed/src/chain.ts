@@ -571,9 +571,16 @@ export class FeedChainOperator {
       return false;
     }
     const pools = await this.readMarketPools(marketSeed);
-    if (!pools || pools.status !== MARKET_STATUS_OPEN) return false; // place_bet needs Open
+    if (!pools) {
+      console.log(`[chain] fill-skip seed=${marketSeed} reason=no-pool-read`);
+      return false;
+    }
     const realYes = pools.poolYes > pools.seedYes ? pools.poolYes - pools.seedYes : 0n;
     const realNo = pools.poolNo > pools.seedNo ? pools.poolNo - pools.seedNo : 0n;
+    console.log(
+      `[chain] fill-check seed=${marketSeed} status=${pools.status} realYes=${realYes} realNo=${realNo} cap=${cap}`,
+    );
+    if (pools.status !== MARKET_STATUS_OPEN) return false; // place_bet needs Open
     const dust = ONE_SIDED_DUST_BASE_UNITS;
     // side: 0 = Yes, 1 = No (state.rs Side order). Fill the EMPTY side; skip if BOTH empty (no
     // user to counter — an empty market voids harmlessly) or already two-sided (no fill needed).
