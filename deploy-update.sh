@@ -93,6 +93,12 @@ sed -i '/^AI_DIRECTOR=/d' /opt/golazo/services/feed/.env
 echo 'AI_ENHANCER=0' >>/opt/golazo/services/feed/.env
 echo 'AI_DIRECTOR=1' >>/opt/golazo/services/feed/.env
 
+# RESTART THE FEED NOW — the .env is complete and the feed runs via tsx (source already extracted,
+# no build needed). Do it HERE, before the fragile web build, so a web-build failure can never
+# again leave the feed on stale code/env (which is why the counterparty config never took). The
+# restart at the end of the script stays as a backstop; systemctl restart is idempotent.
+systemctl restart golazo-feed || true
+
 # Log AI layer state (never print the key).
 HAS_KEY=0
 grep -q '^ANTHROPIC_API_KEY=.' /opt/golazo/services/feed/.env 2>/dev/null && HAS_KEY=1
