@@ -159,6 +159,14 @@ const SET_PIECE_HARD_TIMEOUT_MS = 120_000;
 const WHICH_SIDE_REARM_MS = 120_000;
 
 /**
+ * HARD CAP on a which-side race's total lifetime (from open). Re-arming until full-time made these
+ * markets HANG the whole match when the deciding shot/corner happened but couldn't be team-attributed
+ * (ESPN prose → inferred team → resolver skips it). Past this, VOID + refund rather than hold stake
+ * indefinitely: a "next shot/corner" that hasn't been decided in ~5 min is stale anyway.
+ */
+const WHICH_SIDE_MAX_LIFETIME_MS = 300_000;
+
+/**
  * SET-PIECE FRESHNESS — a "goal from this corner/free kick?" market must open RIGHT AFTER the
  * kick is awarded, never a beat later (by then the set piece has already been taken/cleared, so
  * betting on it is stale + unfair). We allow the kick's true time to trail "now" by the feed's
@@ -2078,6 +2086,16 @@ export class Orchestrator {
             t,
             isPenaltyShootoutPhase(this.feed.state()) ? 'extra_time_end' : 'full_time',
           );
+          continue;
+        }
+        // HARD CAP: don't re-arm forever. If the race hasn't been decided within its max lifetime
+        // (the deciding shot/corner never came, or its team couldn't be attributed off ESPN prose),
+        // VOID + refund instead of hanging the stake for the rest of the match.
+        if (now - m.openedAt > WHICH_SIDE_MAX_LIFETIME_MS) {
+          console.log(
+            `[golazo/feed] which_side_stale id=${m.id} kind=${m.kind} age=${Math.round((now - m.openedAt) / 1000)}s — VOID refund (no attributable result)`,
+          );
+          this.voidMarket(t, 'no_result');
           continue;
         }
         this.extendMarketResolve(t, now + WHICH_SIDE_REARM_MS);
