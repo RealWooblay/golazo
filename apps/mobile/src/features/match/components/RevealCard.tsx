@@ -99,9 +99,11 @@ export function RevealCard({
       return "Settled on-chain";
     }
     if (isVoid) {
+      // A void = nobody took the other side, so the stake comes straight back. Frame it as the
+      // money being safe (tap to claim on chain), never as a loss.
       return isChain
-        ? `Void · ${format(reveal.stake)} refund ready`
-        : `Void · ${format(reveal.stake)} refunded`;
+        ? `No taker on the other side · ${format(reveal.stake)} back — tap to claim`
+        : `No taker on the other side · ${format(reveal.stake)} back`;
     }
     if (isWin) {
       return `${multiple(reveal.payoutMult)} on ${format(reveal.stake)}`;
@@ -136,7 +138,7 @@ export function RevealCard({
             : reveal.claimed
               ? "CLAIMED"
               : isVoid
-                ? "VOIDED"
+                ? "REFUNDED"
                 : isWin
                   ? "YOU WON"
                   : "MISSED"}
