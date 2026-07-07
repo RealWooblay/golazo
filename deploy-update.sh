@@ -76,7 +76,7 @@ CHAIN_SEED_LAMPORTS=0
 # that already has the user's bet. 0 broke both (late bets rejected; fill saw an empty pool and
 # skipped -> one-sided void). Anti-snipe is enforced by the wallclock resolve gate, not this.
 CHAIN_LOCK_GRACE_MS=8000
-COUNTERPARTY_FILL_BASE_UNITS=20000000
+COUNTERPARTY_FILL_BASE_UNITS=0
 AI_TIMEOUT_MS=12000
 AI_RESOLVE_TIMEOUT_MS=6000
 MIN_CONFIDENCE=0.6
