@@ -138,4 +138,13 @@ pub mod golazo_parimutuel {
     pub fn claim(ctx: Context<Claim>) -> Result<()> {
         instructions::claim::handler(ctx)
     }
+
+    /// Authority-only. Reclaim rent from a SETTLED (Resolved/Void) market whose
+    /// vault is fully drained (every bet claimed/refunded): closes the vault token
+    /// account and the Market account, returning both SOL rents to the operator.
+    /// Rejects active (Open/Locked) or still-funded markets, so it can never touch
+    /// user funds. This is the wind-down / rent-recovery path.
+    pub fn close_market(ctx: Context<CloseMarket>) -> Result<()> {
+        instructions::close_market::handler(ctx)
+    }
 }

@@ -11,6 +11,7 @@ pub mod resolve_market;
 pub mod void_market;
 pub mod claim;
 pub mod sweep_rake;
+pub mod close_market;
 
 pub use initialize_market::*;
 pub use place_bet::*;
@@ -19,6 +20,7 @@ pub use resolve_market::*;
 pub use void_market::*;
 pub use claim::*;
 pub use sweep_rake::*;
+pub use close_market::*;
 
 /// Canonical PDA seed prefixes. Centralized so every `seeds = [...]` constraint
 /// and every client-side `findProgramAddress` agree byte-for-byte.

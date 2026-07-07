@@ -50,6 +50,13 @@ pub struct RakeSwept {
 }
 
 #[event]
+pub struct MarketClosed {
+    pub market: Pubkey,
+    pub authority: Pubkey,
+    pub market_seed: u64,
+}
+
+#[event]
 pub struct Claimed {
     pub market: Pubkey,
     pub bet: Pubkey,

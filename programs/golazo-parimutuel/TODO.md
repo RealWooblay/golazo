@@ -15,12 +15,23 @@ on an un-settled market — flipping it to Void so everyone can refund without
 trusting the operator to return. Keeps the no-trust guarantee for bettor
 principal.
 
-## 2. `close_market` (reclaim operator rent)
-After a market is fully settled (vault USX drained to 0 via claims + sweep),
-let the operator close the Market + vault accounts to reclaim their ~0.0038 SOL
-of rent per market. Without this, per-market SOL rent is stranded and the
-operator must keep topping up SOL as it creates markets. Pairs well with the
-existing `close = bettor` on claim (which already refunds per-bet rent).
+## 2. `close_market` (reclaim operator rent) — DONE
+Implemented: `close_market` (authority-signed) closes the vault + Market accounts
+and returns both SOL rents to the operator. Gated on `status ∈ {Resolved, Void}`
+AND `vault.amount == 0`, so it can never touch user funds. Scripts:
+`scripts/close-market.mjs` (single) and `scripts/close-all.mjs` (batch; dry-run by
+default, writes `close-skiplist.json`). **Needs: program upgrade to mainnet + tests
+before running.**
+
+Two known limitations this surfaced, worth follow-up:
+  * **Rounding dust strands a few markets.** The strict `vault.amount == 0` gate
+    means a resolved two-sided market that retains parimutuel rounding dust (a few
+    base units, sub-cent) can never be closed. Options: a dust-sweep path, or let
+    close_market forward a sub-threshold residual to the authority before closing.
+  * **Empty-but-Locked markets need a void first.** ~51 markets are stuck Locked
+    with empty vaults (abandoned mid-lifecycle); they must be `void_market`'d
+    (Open|Locked → Void) before close_market will accept them. The permissionless
+    deadline-void in #1 would also clear these.
 
 ## 3. `settle_bet` push-crank (optional UX)
 A permissionless `settle_bet(bet)` so the operator (or a bot) can push payouts +

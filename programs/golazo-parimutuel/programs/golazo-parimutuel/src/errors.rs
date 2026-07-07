@@ -52,4 +52,7 @@ pub enum GolazoError {
 
     #[msg("Rake has already been swept for this market.")]
     RakeAlreadySwept,
+
+    #[msg("Vault still holds USX; all bets must be claimed/refunded before the market can be closed.")]
+    VaultNotEmpty,
 }
