@@ -240,10 +240,15 @@ export const config: Config = {
   // Haiku 4.5 — fast + cheap, ideal for the "is this bettable?" decision on the
   // critical path of opening a market. (Sonnet id for reference: claude-sonnet-4-6.)
   aiModel: process.env.AI_MODEL?.trim() || 'claude-haiku-4-5-20251001',
-  aiTimeoutMs: num('AI_TIMEOUT_MS', 4000),
+  // 12s (was 4s): the director's background proposal call generates up to 650 tokens on Haiku —
+  // 4s was too tight and timed out on normal latency even with quota to spare. This runs off-timer
+  // and never blocks a market open, so a generous budget just means it actually completes.
+  aiTimeoutMs: num('AI_TIMEOUT_MS', 12000),
   aiResolveTimeoutMs: num('AI_RESOLVE_TIMEOUT_MS', 6000),
   aiDirectorEnabled: (process.env.AI_DIRECTOR?.trim() || '') === '1',
-  aiRefreshMs: num('AI_REFRESH_MS', 5000),
+  // 45s (was 5s): refresh the proposal pool ~9x less often. Massively fewer API calls (cost) and
+  // far fewer timeout opportunities; the pool holds ~12 proposals so it never starves at ~1 open/min.
+  aiRefreshMs: num('AI_REFRESH_MS', 45000),
   aiMatchTokenBudget: num('AI_MATCH_TOKEN_BUDGET', 120000),
   minConfidence: num('MIN_CONFIDENCE', 0.6),
   feedMode: parseFeedMode(process.env.FEED_MODE?.trim()),

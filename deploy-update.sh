@@ -8,10 +8,15 @@ tar -xzf /opt/golazo.tgz -C /opt/golazo
 
 # Secrets ship inside the tarball's gitignored services/feed/.env (from the build
 # machine). Extract them BEFORE we overwrite .env with production defaults.
+# GOTCHA: dotenv 16.x is LAST-wins on duplicate keys, and this preserved block is appended
+# AFTER the heredoc below — so ANY key kept here OVERRIDES the heredoc's value. Preserve ONLY
+# things not authoritatively set in the heredoc (true secrets + AI_MODEL). AI_TIMEOUT_MS was
+# here before and silently pinned the box's stale 4000 over the heredoc — removed so the heredoc
+# (12000) actually applies. Do NOT re-add heredoc-managed knobs to this list.
 BUNDLE_ENV=/opt/golazo/services/feed/.env
 SECRETS_TMP=$(mktemp)
 if [ -f "$BUNDLE_ENV" ]; then
-  grep -E '^(ANTHROPIC_API_KEY|SOLANA_RPC_URL|AI_MODEL|AI_TIMEOUT_MS|AI_RESOLVE_TIMEOUT_MS|MIN_CONFIDENCE|REFERRAL_ADMIN_TOKEN)=' "$BUNDLE_ENV" \
+  grep -E '^(ANTHROPIC_API_KEY|SOLANA_RPC_URL|AI_MODEL|REFERRAL_ADMIN_TOKEN)=' "$BUNDLE_ENV" \
     >>"$SECRETS_TMP" 2>/dev/null || true
 fi
 
@@ -72,7 +77,7 @@ CHAIN_SEED_LAMPORTS=0
 # skipped -> one-sided void). Anti-snipe is enforced by the wallclock resolve gate, not this.
 CHAIN_LOCK_GRACE_MS=8000
 COUNTERPARTY_FILL_BASE_UNITS=20000000
-AI_TIMEOUT_MS=4000
+AI_TIMEOUT_MS=12000
 AI_RESOLVE_TIMEOUT_MS=6000
 MIN_CONFIDENCE=0.6
 BET_DELAY_MS=5000
@@ -84,7 +89,7 @@ POINTS_STORE_PATH=/var/lib/golazo/points.json
 # anti-spam is enforced server-side (kind cooldown, spacing, slot caps), not by disabling AI.
 AI_ENHANCER=0
 AI_DIRECTOR=1
-AI_REFRESH_MS=5000
+AI_REFRESH_MS=45000
 ENV
 if [ -s "$SECRETS_TMP" ]; then cat "$SECRETS_TMP" >>/opt/golazo/services/feed/.env; fi
 rm -f "$SECRETS_TMP"

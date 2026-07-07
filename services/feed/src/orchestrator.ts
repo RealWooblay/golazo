@@ -159,14 +159,6 @@ const SET_PIECE_HARD_TIMEOUT_MS = 120_000;
 const WHICH_SIDE_REARM_MS = 120_000;
 
 /**
- * HARD CAP on a which-side race's total lifetime (from open). Re-arming until full-time made these
- * markets HANG the whole match when the deciding shot/corner happened but couldn't be team-attributed
- * (ESPN prose → inferred team → resolver skips it). Past this, VOID + refund rather than hold stake
- * indefinitely: a "next shot/corner" that hasn't been decided in ~5 min is stale anyway.
- */
-const WHICH_SIDE_MAX_LIFETIME_MS = 300_000;
-
-/**
  * SET-PIECE FRESHNESS — a "goal from this corner/free kick?" market must open RIGHT AFTER the
  * kick is awarded, never a beat later (by then the set piece has already been taken/cleared, so
  * betting on it is stale + unfair). We allow the kick's true time to trail "now" by the feed's
@@ -182,15 +174,17 @@ const SET_PIECE_FRESHNESS_MS = 15_000;
  * volume is unchanged (the slot/cooldown guards already cap concurrency); this only
  * staggers WHEN opens surface, which is most of the "feels clean" perception win.
  */
-const MIN_OPEN_SPACING_MS = 30_000;
+// Board cadence — deliberately SPARSE (~1 market/min). Liquidity is thin, so fewer, deeper
+// markets beat a firehose of shallow ones (which dilute pools and over-spend the AI director).
+const MIN_OPEN_SPACING_MS = 60_000;
 /** If no new market has reached the board by this age, ask the director/floor for one. */
-const FRESH_BOARD_TARGET_MS = 45_000;
-/** When the AI director owns the board, drip faster between quiet spells. */
-const FRESH_BOARD_TARGET_DIRECTOR_MS = 25_000;
-/** Director-only pacing — faster than the global 30s guard so AI is the live volume engine. */
-const DIRECTOR_OPEN_SPACING_MS = 10_000;
-/** Hot moment — open the highest-relevance proposal faster. */
-const DIRECTOR_OPEN_SPACING_HOT_MS = 4_000;
+const FRESH_BOARD_TARGET_MS = 75_000;
+/** When the AI director owns the board, drip between quiet spells (still ~1/min, not a firehose). */
+const FRESH_BOARD_TARGET_DIRECTOR_MS = 55_000;
+/** Director-only pacing — the live volume engine, but paced to keep the board sparse. */
+const DIRECTOR_OPEN_SPACING_MS = 45_000;
+/** Hot moment — open the highest-relevance proposal a little faster (still bounded). */
+const DIRECTOR_OPEN_SPACING_HOT_MS = 30_000;
 /** Debounce event-driven director refreshes so a burst of attacks doesn't spam the model. */
 const DIRECTOR_MOMENT_NUDGE_MS = 1_500;
 /** Re-open the same kind only when the new moment is a slam-dunk (game shifted). */
@@ -1408,9 +1402,17 @@ export class Orchestrator {
       if (!m || (m.status !== 'open' && m.status !== 'locked')) continue;
       if (!isWhichSideNextKind(m.kind)) continue;
       if (!decisiveEventTypes(m.kind).has(ev.type)) continue;
-      // "Next shot" pays on ESPN keyEvents only — commentary can name keeper + shooter and
-      // mis-attribute with naive substring matching; never settle real money on that.
-      if (m.kind === 'next_shot' && ev.meta?.source !== 'espn.keyEvent') continue;
+      // "Next shot" pays on ESPN's OWN attribution only — either a keyEvent, or a commentary line
+      // carrying ESPN's structured team (`play.team.displayName`, flagged teamStructured). Prose
+      // team-guessing on commentary (naive substring: keeper + shooter both named) is NEVER trusted
+      // for real money. Accepting the structured commentary shot is the fix for "next shot never
+      // resolves" — shots live in commentary, not keyEvents, so the keyEvent-only rule hung forever.
+      if (
+        m.kind === 'next_shot' &&
+        ev.meta?.source !== 'espn.keyEvent' &&
+        ev.meta?.teamStructured !== true
+      )
+        continue;
       // Open-boundary: the event that OPENED the contest can't be its own decider.
       if (t.openSeq !== undefined && t.openSeq >= this.eventCounter) continue;
       // Anti-arb: a decisive event that happened during betting is tainted — skip it.
@@ -2088,16 +2090,9 @@ export class Orchestrator {
           );
           continue;
         }
-        // HARD CAP: don't re-arm forever. If the race hasn't been decided within its max lifetime
-        // (the deciding shot/corner never came, or its team couldn't be attributed off ESPN prose),
-        // VOID + refund instead of hanging the stake for the rest of the match.
-        if (now - m.openedAt > WHICH_SIDE_MAX_LIFETIME_MS) {
-          console.log(
-            `[golazo/feed] which_side_stale id=${m.id} kind=${m.kind} age=${Math.round((now - m.openedAt) / 1000)}s — VOID refund (no attributable result)`,
-          );
-          this.voidMarket(t, 'no_result');
-          continue;
-        }
+        // No content-timer void: "next shot" is decided by the next actual shot (now resolved off
+        // ESPN's structured commentary team the instant it lands), or it VOIDs/refunds at the FULL-
+        // TIME whistle above — never a premature "5-minute" void. Keep the race live until then.
         this.extendMarketResolve(t, now + WHICH_SIDE_REARM_MS);
         continue;
       }

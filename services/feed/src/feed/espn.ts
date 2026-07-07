@@ -115,6 +115,15 @@ export interface EspnCommentary {
   sequence?: number | string;
   time?: { displayValue?: string };
   text?: string;
+  /**
+   * Structured play object ESPN mirrors onto most commentary items — machine-readable
+   * type ("Shot On Target", "Corner Awarded") + team (team.displayName). Far more reliable
+   * than prose regex; team.id is usually ABSENT so we map by displayName/abbreviation.
+   */
+  play?: {
+    type?: { id?: string | number; text?: string };
+    team?: { id?: string; displayName?: string; abbreviation?: string };
+  };
 }
 export interface EspnKeyEvent {
   id?: string | number;
@@ -454,6 +463,12 @@ export class EspnFeed implements FeedSource {
     this.seen.add(seqId); // always mark seen; classification is deterministic
     if (!type) return undefined;
 
+    // STRUCTURED attribution first — ESPN mirrors a machine-readable team onto the commentary
+    // item (`play.team.displayName`). Mapped by name to home/away, this is ESPN's OWN attribution
+    // (not a prose guess), so it is trustworthy enough to settle a which-side money market — the
+    // fix for "next shot never resolves". Prose remains the fallback when the item has no play.team.
+    const structTeam = this.teamFromName(c.play?.team?.displayName);
+
     const awarded = parseAwardedTeamFromCommentary(
       text,
       this.game!.state.home.name,
@@ -461,7 +476,7 @@ export class EspnFeed implements FeedSource {
       this.game!.state.home.abbr,
       this.game!.state.away.abbr,
     );
-    const team =
+    const proseTeam =
       awarded ??
       (type === 'goal' || type === 'miss' || type === 'shot'
         ? attributeShooterTeamFromText(
@@ -472,6 +487,7 @@ export class EspnFeed implements FeedSource {
             this.game!.state.away.abbr,
           )
         : this.teamFromText(text));
+    const team = structTeam ?? proseTeam;
     return {
       gameId: this.game!.eventId,
       ts: Date.now(),
@@ -483,6 +499,9 @@ export class EspnFeed implements FeedSource {
         source: 'espn.commentary',
         clock: c.time?.displayValue,
         lang,
+        // Only ESPN's structured team is trusted by the which-side resolver; a prose-derived team
+        // is not (naive substring matching can name the keeper's side, etc.).
+        ...(structTeam ? { teamStructured: true } : {}),
       },
     };
   }
@@ -492,6 +511,26 @@ export class EspnFeed implements FeedSource {
     if (!teamId || !this.game) return undefined;
     if (teamId === this.game.homeTeamId) return 'home';
     if (teamId === this.game.awayTeamId) return 'away';
+    return undefined;
+  }
+
+  /**
+   * Map a structured team name/abbr (ESPN commentary `play.team.displayName`) to home/away by
+   * matching the locked game's identities. Commentary items carry `play.team.displayName` but
+   * usually NOT `team.id`, so this name match is how we get RELIABLE (non-prose) attribution —
+   * the signal that unlocks accurate which-side (next_shot) resolution off commentary.
+   */
+  private teamFromName(name: string | undefined): Team | undefined {
+    if (!name || !this.game) return undefined;
+    const n = name.trim().toLowerCase();
+    if (!n) return undefined;
+    const s = this.game.state;
+    if (n === s.home.name.toLowerCase() || (s.home.abbr && n === s.home.abbr.toLowerCase())) {
+      return 'home';
+    }
+    if (n === s.away.name.toLowerCase() || (s.away.abbr && n === s.away.abbr.toLowerCase())) {
+      return 'away';
+    }
     return undefined;
   }
 
