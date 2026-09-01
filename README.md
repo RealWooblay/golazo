@@ -1,12 +1,13 @@
-# ⚡ GOLAZO — bet the play
+# Golazo - real-time event markets
 
 Live, in-the-moment betting on **discrete game events**. While a match is on, the
 feed/AI spots a "set" moment (a penalty, a corner, an attack launching) and opens a
 short **YES/NO** market — *"Argentina on the attack — GOAL?"*. You tap a side, the
 play happens, you get paid. Markets resolve in seconds, not weeks.
 
-This repo is the working build of that idea: a real engine, a real-ish feed with an
-AI watcher, a mobile app, and an on-chain settlement program.
+This repository is a working engineering prototype: a tested market engine, a
+simulated or live event feed with an AI watcher, a mobile client, and an on-chain
+settlement program.
 
 ---
 
@@ -100,12 +101,13 @@ cd programs/golazo-parimutuel && npm install && anchor build && anchor test
 
 ---
 
-## Status & honest notes
+## Status and boundaries
 
 - **Built & verified:** the core engine (12 passing tests, strict typecheck), the
   service in sim mode, the app code & monorepo wiring.
 - **Needs your toolchain:** the iOS simulator (Xcode) and the Anchor build (Solana CLI).
-- **Deliberately out of scope for now:** the legal/licensing layer. The design assumes
-  an offshore + crypto-rails route; that's a "later" problem we chose to defer.
 - The "AI watching the game" is honest about what it does: it watches the structured
   **event/commentary stream**, not raw video — that's the fair, affordable version.
+- This is an engineering prototype, not a production wagering service. A commercial
+  release would require jurisdiction-specific legal review, licensed data feeds,
+  integrity controls, payments compliance, and responsible-product safeguards.
